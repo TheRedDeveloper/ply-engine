@@ -11,6 +11,22 @@ const PIXELS_PER_POINT: f32 = 2.0;
 #[cfg(feature = "macroquad-text-styling")]
 static ANIMATION_TRACKER: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (usize, f64)>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
+/// Represents an asset that can be loaded as a texture. This can be either a file path or embedded bytes.
+#[cfg(feature = "macroquad-texture-manager")]
+pub enum Asset {
+    Path(&'static str), // For external assets
+    Bytes{file_name: &'static str, data: &'static [u8]}, // For embedded assets
+}
+#[cfg(feature = "macroquad-texture-manager")]
+impl Asset {
+    fn get_name(&self) -> &str {
+        match self {
+            Asset::Path(path) => path,
+            Asset::Bytes { file_name, .. } => file_name,
+        }
+    }
+}
+
 /// Global TextureManager. Can also be used outside the renderer to manage your own macroquad textures.
 #[cfg(feature = "macroquad-texture-manager")]
 pub static TEXTURE_MANAGER: std::sync::LazyLock<std::sync::Mutex<TextureManager>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(TextureManager::new()));
@@ -72,6 +88,19 @@ impl TextureManager {
         &entry.texture
     }
 
+    pub async fn get_or_create_async<F, Fut>(&mut self, key: String, create_fn: F) -> &Texture2D 
+    where F: FnOnce() -> Fut,
+          Fut: std::future::Future<Output = Texture2D>
+    {
+        if !self.textures.contains_key(&key) {
+            let texture = create_fn().await;
+            self.textures.insert(key.clone(), TextureData { frames_not_used: 0, texture });
+        }
+        let entry = self.textures.get_mut(&key).unwrap();
+        entry.frames_not_used = 0;
+        &entry.texture
+    }
+
     /// Cache a texture with the given key.
     pub fn cache(&mut self, key: String, texture: Texture2D) -> &Texture2D {
         self.textures.insert(key.clone(), TextureData { frames_not_used: 0, texture: texture });
@@ -126,7 +155,7 @@ impl RenderState {
 }
 
 fn rounded_rectangle_texture(cr: &CornerRadii, bb: &BoundingBox, clip: &Option<(i32, i32, i32, i32)>) -> Texture2D {
-    let render_target = render_target(bb.width as u32, bb.height as u32);
+    let render_target = render_target_msaa(bb.width as u32, bb.height as u32);
     render_target.texture.set_filter(FilterMode::Linear);
     let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, bb.width, bb.height));
     cam.render_target = Some(render_target.clone());
@@ -251,7 +280,7 @@ fn render_tinyvg_texture(
     let scale_x = dest_width / tvg_width;
     let scale_y = dest_height / tvg_height;
     
-    let render_target = render_target(dest_width as u32, dest_height as u32);
+    let render_target = render_target_msaa(dest_width as u32, dest_height as u32);
     render_target.texture.set_filter(FilterMode::Linear);
     let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, dest_width, dest_height));
     cam.render_target = Some(render_target.clone());
@@ -823,7 +852,7 @@ fn render_tinyvg_texture(
 }
 
 fn resize(texture: &Texture2D, height: f32, width: f32, clip: &Option<(i32, i32, i32, i32)>) -> Texture2D {
-    let render_target = render_target(width as u32, height as u32);
+    let render_target = render_target_msaa(width as u32, height as u32);
     render_target.texture.set_filter(FilterMode::Linear);
     let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, width, height));
     cam.render_target = Some(render_target.clone());
@@ -1429,9 +1458,9 @@ pub fn clay_macroquad_render<'a, CustomElementData: 'a>(
 
 #[cfg(feature = "macroquad-texture-manager")]
 pub async fn clay_macroquad_render<'a, CustomElementData: 'a>(
-    commands: impl Iterator<Item = RenderCommand<'a, &'static str, CustomElementData>>,
+    commands: impl Iterator<Item = RenderCommand<'a, &'static Asset, CustomElementData>>,
     fonts: &[Font],
-    handle_custom_command: impl Fn(&RenderCommand<'a, &'static str, CustomElementData>),
+    handle_custom_command: impl Fn(&RenderCommand<'a, &'static Asset, CustomElementData>),
 ) {
     let mut state = RenderState::new();
     for command in commands {
@@ -1447,91 +1476,138 @@ pub async fn clay_macroquad_render<'a, CustomElementData: 'a>(
                 let mut manager = TEXTURE_MANAGER.lock().unwrap();
 
                 #[cfg(feature = "macroquad-tinyvg")]
-                let is_tvg = image.data.to_lowercase().ends_with(".tvg");
+                let is_tvg = image.data.get_name().to_lowercase().ends_with(".tvg");
                 #[cfg(not(feature = "macroquad-tinyvg"))]
                 let is_tvg = false;
 
                 #[cfg(feature = "macroquad-tinyvg")]
                 if is_tvg {
-                    let tvg_data = load_file(image.data).await;
-                    
-                    if let Ok(tvg_bytes) = tvg_data {
-                        let key = format!(
+                    let key = format!(
+                        "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
+                        image.data.get_name(),
+                        bb.width,
+                        bb.height,
+                        cr.top_left,
+                        cr.top_right,
+                        cr.bottom_left,
+                        cr.bottom_right,
+                        state.clip
+                    );
+                    let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
+                    let texture = if !has_corner_radii {
+                        match image.data {
+                            Asset::Path(path) => {
+                                manager.get_or_create_async(key, async || {
+                                    match load_file(path).await {
+                                        Ok(tvg_bytes) => {
+                                            if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                tvg_texture
+                                            } else {
+                                                warn!("Failed to load TinyVG image: {}", path);
+                                                Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                            }
+                                        }
+                                        Err(error) => {
+                                            warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
+                                            Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                        }
+                                    }
+                                }).await
+                            }
+                            Asset::Bytes { file_name, data: tvg_bytes } => {
+                                manager.get_or_create(key, || {
+                                    if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                        tvg_texture
+                                    } else {
+                                        warn!("Failed to load TinyVG image: {}", file_name);
+                                        Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                    }
+                                })
+                            }
+                        }
+                        
+                    } else {
+                        let zerocr_key = format!(
                             "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                            image.data,
+                            image.data.get_name(),
                             bb.width,
                             bb.height,
-                            cr.top_left,
-                            cr.top_right,
-                            cr.bottom_left,
-                            cr.bottom_right,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
                             state.clip
                         );
-                        let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
-                        let texture = if !has_corner_radii {
-                            manager.get_or_create(key, || {
-                                if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
-                                    tvg_texture
-                                } else {
-                                    warn!("Failed to load TinyVG image: {}", image.data);
-                                    Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
-                                }
-                            })
-                        } else {
-                            let zerocr_key = format!(
-                                "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                                image.data,
-                                bb.width,
-                                bb.height,
-                                0.0,
-                                0.0,
-                                0.0,
-                                0.0,
-                                state.clip
-                            );
-                            
-                            let base_texture = if let Some(cached) = manager.get(&zerocr_key) {
-                                cached
-                            } else {
-                                let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
-                                    tvg_texture
-                                } else {
-                                    warn!("Failed to load TinyVG image: {}", image.data);
-                                    Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
-                                };
-                                manager.cache(zerocr_key.clone(), texture)
-                            }.clone();
-                            
-                            manager.get_or_create(key, || {
-                                let mut tvg_image: Image = base_texture.get_texture_data();
-                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
-                                
-                                for i in 0..tvg_image.bytes.len()/4 {
-                                    let this_alpha = tvg_image.bytes[i * 4 + 3] as f32 / 255.0;
-                                    let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
-                                    tvg_image.bytes[i * 4 + 3] = (this_alpha * mask_alpha * 255.0) as u8;
-                                }
-                                Texture2D::from_image(&tvg_image)
-                            })
-                        };
                         
-                        draw_texture_ex(
-                            texture,
-                            bb.x,
-                            bb.y,
-                            tint,
-                            DrawTextureParams {
-                                dest_size: Some(Vec2::new(bb.width, bb.height)),
-                                flip_y: true,
-                                ..Default::default()
-                            },
-                        );
-                    }
+                        let base_texture = if let Some(cached) = manager.get(&zerocr_key) {
+                            cached
+                        } else {
+                            match image.data {
+                                Asset::Path(path) => {
+                                    match load_file(path).await {
+                                        Ok(tvg_bytes) => {
+                                            let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                tvg_texture
+                                            } else {
+                                                warn!("Failed to load TinyVG image: {}", path);
+                                                Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                            };
+                                            manager.cache(zerocr_key.clone(), texture)
+                                        }
+                                        Err(error) => {
+                                            warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
+                                            manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
+                                        }
+                                    }
+                                }
+                                Asset::Bytes { file_name, data: tvg_bytes } => {
+                                    let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                        tvg_texture
+                                    } else {
+                                        warn!("Failed to load TinyVG image: {}", file_name);
+                                        Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                    };
+                                    manager.cache(zerocr_key.clone(), texture)
+                                }
+                            }
+                        }.clone();
+                        
+                        manager.get_or_create(key, || {
+                            let mut tvg_image: Image = base_texture.get_texture_data();
+                            let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                            
+                            for i in 0..tvg_image.bytes.len()/4 {
+                                let this_alpha = tvg_image.bytes[i * 4 + 3] as f32 / 255.0;
+                                let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
+                                tvg_image.bytes[i * 4 + 3] = (this_alpha * mask_alpha * 255.0) as u8;
+                            }
+                            Texture2D::from_image(&tvg_image)
+                        })
+                    };
+                    
+                    draw_texture_ex(
+                        texture,
+                        bb.x,
+                        bb.y,
+                        tint,
+                        DrawTextureParams {
+                            dest_size: Some(Vec2::new(bb.width, bb.height)),
+                            flip_y: true,
+                            ..Default::default()
+                        },
+                    );
                     continue;
                 }
 
                 if !is_tvg && cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
-                    let texture = manager.get_or_load(image.data).await;
+                    let texture = match image.data {
+                        Asset::Path(path) => manager.get_or_load(path).await,
+                        Asset::Bytes { file_name, data } => {
+                            manager.get_or_create(file_name.to_string(), || {
+                                Texture2D::from_file_with_format(data, None)
+                            })
+                        }
+                    };
                     draw_texture_ex(
                         texture,
                         bb.x,
@@ -1543,11 +1619,18 @@ pub async fn clay_macroquad_render<'a, CustomElementData: 'a>(
                         },
                     );
                 } else {
-                    let source_texture = manager.get_or_load(image.data).await.clone();
+                    let source_texture = match image.data {
+                        Asset::Path(path) => manager.get_or_load(path).await.clone(),
+                        Asset::Bytes { file_name, data } => {
+                            manager.get_or_create(file_name.to_string(), || {
+                                Texture2D::from_file_with_format(data, None)
+                            }).clone()
+                        }
+                    };
                     
                     let key = format!(
                         "image:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                        image.data,
+                        image.data.get_name(),
                         bb.width,
                         bb.height,
                         cr.top_left,
