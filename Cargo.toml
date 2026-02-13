@@ -16,6 +16,10 @@ cc = "1.0"
 default = ["std"]
 raylib-renderer = ["raylib"]
 skia-renderer = ["skia-safe"]
+macroquad-renderer = ["macroquad"]
+macroquad-text-styling = ["macroquad-renderer"]
+macroquad-texture-manager = ["macroquad-renderer"]
+macroquad-tinyvg = ["macroquad-texture-manager", "tinyvg", "kurbo", "lyon"]
 
 std = []
 wasm = []
@@ -24,6 +28,10 @@ debug = []
 [dependencies]
 skia-safe = { version = "0.86.0", features = ["gl"], optional = true }
 raylib = { version = "5.5.0", optional = true }
+macroquad = { version = "0.4", optional = true }
+tinyvg = { version = "0.2", default-features = false, optional = true }
+kurbo = { version = "0.13.0", optional = true }
+lyon = { version = "1.0", optional = true }
 
 [dev-dependencies]
 winit = "0.30"
