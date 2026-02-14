@@ -1205,8 +1205,6 @@ pub async fn render<'a, CustomElementData: 'a>(
             }
             #[cfg(feature = "text-styling")]
             RenderCommandConfig::Text(config) => {
-                use crate::renderers::macroquad_text_styling::StyledSegment;
-
                 let bb = command.bounding_box;
                 let font_size = config.font_size as f32;
                 let font = Some(&fonts[config.font_id as usize]);

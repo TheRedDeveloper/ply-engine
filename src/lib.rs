@@ -26,6 +26,11 @@ pub use color::Color;
 
 #[cfg(feature = "std")]
 use text::TextConfig;
+#[cfg(feature = "std")]
+use std::{
+    cell::Cell,
+    sync::{Mutex, MutexGuard, OnceLock},
+};
 
 use text::TextElementConfig;
 #[derive(Copy, Clone)]
@@ -167,6 +172,61 @@ unsafe extern "C" fn error_handler(error_data: Clay_ErrorData) {
     panic!("Clay Error: (type: {:?}) {}", error.type_, error.text);
 }
 
+#[cfg(feature = "std")]
+thread_local! {
+    static CLAY_FFI_GUARD_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+#[cfg(feature = "std")]
+fn clay_ffi_mutex() -> &'static Mutex<()> {
+    static CLAY_FFI_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    CLAY_FFI_MUTEX.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(feature = "std")]
+struct ClayFfiGuard {
+    _guard: Option<MutexGuard<'static, ()>>,
+}
+
+#[cfg(feature = "std")]
+impl ClayFfiGuard {
+    fn acquire() -> Self {
+        let already_locked = CLAY_FFI_GUARD_DEPTH.with(|depth| {
+            let current = depth.get();
+            depth.set(current + 1);
+            current > 0
+        });
+
+        if already_locked {
+            Self { _guard: None }
+        } else {
+            let guard = clay_ffi_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            Self {
+                _guard: Some(guard),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl Drop for ClayFfiGuard {
+    fn drop(&mut self) {
+        CLAY_FFI_GUARD_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+    }
+}
+
+#[cfg(not(feature = "std"))]
+struct ClayFfiGuard;
+
+#[cfg(not(feature = "std"))]
+impl ClayFfiGuard {
+    fn acquire() -> Self {
+        Self
+    }
+}
+
 #[allow(dead_code)]
 pub struct Clay {
     /// Memory used internally by clay
@@ -200,6 +260,7 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
         declaration: &Declaration<'render, ImageElementData, CustomElementData>,
         f: F,
     ) {
+        let _ffi_guard = ClayFfiGuard::acquire();
         unsafe {
             Clay_SetCurrentContext(self.clay.context);
             if let Some(id) = declaration.id {
@@ -227,6 +288,7 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
         g: G,
         f: F,
     ) {
+        let _ffi_guard = ClayFfiGuard::acquire();
         unsafe {
             Clay_SetCurrentContext(self.clay.context);
         }
@@ -252,7 +314,11 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
     pub fn end(
         &mut self,
     ) -> impl Iterator<Item = RenderCommand<'render, ImageElementData, CustomElementData>> {
-        let array = unsafe { Clay_EndLayout() };
+        let _ffi_guard = ClayFfiGuard::acquire();
+        let array = unsafe {
+            Clay_SetCurrentContext(self.clay.context);
+            Clay_EndLayout()
+        };
         self.dropped = true;
         let slice = unsafe { core::slice::from_raw_parts(array.internalArray, array.length as _) };
         slice
@@ -274,22 +340,31 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
     /// Only available in no_std - you must ensure the string lives long enough.
     #[cfg(not(feature = "std"))]
     pub fn text(&self, text: &'render str, config: TextElementConfig) {
-        unsafe { Clay__OpenTextElement(text.into(), config.into()) };
+        let _ffi_guard = ClayFfiGuard::acquire();
+        unsafe {
+            Clay_SetCurrentContext(self.clay.context);
+            Clay__OpenTextElement(text.into(), config.into())
+        };
     }
 
     /// Adds a text element from a static string literal without copying.
     pub fn text_literal(&self, text: &'static str, config: TextElementConfig) {
+        let _ffi_guard = ClayFfiGuard::acquire();
         let clay_string = Clay_String {
             isStaticallyAllocated: true,
             length: text.len() as _,
             chars: text.as_ptr() as _,
         };
-        unsafe { Clay__OpenTextElement(clay_string, config.into()) };
+        unsafe {
+            Clay_SetCurrentContext(self.clay.context);
+            Clay__OpenTextElement(clay_string, config.into())
+        };
     }
 
     /// Adds a text element from an owned string that will be stored.
     #[cfg(feature = "std")]
     pub fn text_string(&self, text: std::string::String, config: TextElementConfig) {
+        let _ffi_guard = ClayFfiGuard::acquire();
         let mut owned_strings = self.owned_strings.borrow_mut();
         owned_strings.push(text);
         let text_ref = owned_strings.last().unwrap();
@@ -299,17 +374,25 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
             length: text_ref.len() as _,
             chars: text_ref.as_ptr() as _,
         };
-        unsafe { Clay__OpenTextElement(clay_string, config.into()) };
+        unsafe {
+            Clay_SetCurrentContext(self.clay.context);
+            Clay__OpenTextElement(clay_string, config.into())
+        };
     }
 
     pub fn hovered(&self) -> bool {
-        unsafe { Clay_Hovered() }
+        let _ffi_guard = ClayFfiGuard::acquire();
+        unsafe {
+            Clay_SetCurrentContext(self.clay.context);
+            Clay_Hovered()
+        }
     }
 
     pub fn on_hover<F, T>(&self, callback: F, user_data: T)
     where
         F: Fn(Id, Clay_PointerData, &mut T) + 'static
     {
+        let _ffi_guard = ClayFfiGuard::acquire();
         let boxed = Box::new((callback, user_data));
         let user_data_ptr = Box::into_raw(boxed) as *mut core::ffi::c_void;
 
@@ -327,6 +410,7 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
         }
 
         unsafe {
+            Clay_SetCurrentContext(self.clay.context);
             Clay_OnHover(
                 Some(trampoline::<F, T>),
                 user_data_ptr,
@@ -335,7 +419,11 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
     }
 
     pub fn scroll_offset(&self) -> Vector2 {
-        unsafe { Clay_GetScrollOffset().into() }
+        let _ffi_guard = ClayFfiGuard::acquire();
+        unsafe {
+            Clay_SetCurrentContext(self.clay.context);
+            Clay_GetScrollOffset().into()
+        }
     }
 }
 
@@ -362,7 +450,9 @@ impl<ImageElementData, CustomElementData> Drop
 {
     fn drop(&mut self) {
         if !self.dropped {
+            let _ffi_guard = ClayFfiGuard::acquire();
             unsafe {
+                Clay_SetCurrentContext(self.clay.context);
                 Clay_EndLayout();
             }
         }
@@ -373,7 +463,11 @@ impl Clay {
     pub fn begin<'render, ImageElementData: 'render, CustomElementData: 'render>(
         &mut self,
     ) -> ClayLayoutScope<'_, 'render, ImageElementData, CustomElementData> {
-        unsafe { Clay_BeginLayout() };
+        let _ffi_guard = ClayFfiGuard::acquire();
+        unsafe {
+            Clay_SetCurrentContext(self.context);
+            Clay_BeginLayout()
+        };
         ClayLayoutScope {
             clay: self,
             _phantom: core::marker::PhantomData,
@@ -385,6 +479,7 @@ impl Clay {
 
     #[cfg(feature = "std")]
     pub fn new(dimensions: Dimensions) -> Self {
+        let _ffi_guard = ClayFfiGuard::acquire();
         let memory_size = Self::required_memory_size();
         let memory = vec![0; memory_size];
         let context;
@@ -624,6 +719,7 @@ impl Clay {
         }
     }
     pub fn scroll_container_data(&self, id: Id) -> Option<Clay_ScrollContainerData> {
+        let _ffi_guard = ClayFfiGuard::acquire();
         unsafe {
             Clay_SetCurrentContext(self.context);
             let scroll_container_data = Clay_GetScrollContainerData(id.id);
@@ -640,12 +736,15 @@ impl Clay {
 #[cfg(feature = "std")]
 impl Drop for Clay {
     fn drop(&mut self) {
+        let _ffi_guard = ClayFfiGuard::acquire();
         unsafe {
             if let Some(ptr) = self.text_measure_callback {
                 let _ = Box::from_raw(ptr as *mut (usize, usize));
             }
 
-            Clay_SetCurrentContext(core::ptr::null_mut() as _);
+            if Clay_GetCurrentContext() == self.context {
+                Clay_SetCurrentContext(core::ptr::null_mut() as _);
+            }
         }
     }
 }
@@ -687,6 +786,171 @@ mod tests {
     use super::*;
     use color::Color;
     use layout::{Padding, Sizing};
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_begin() {
+        let mut clay = Clay::new(Dimensions::new(800.0, 600.0));
+
+        clay.set_measure_text_function(|_, _| {
+            Dimensions::new(100.0, 24.0)
+        });
+
+        let mut clay = clay.begin::<(), ()>();
+
+        clay.with(&Declaration::new()
+            .layout()
+                .width(Sizing::Fixed(100.0))
+                .height(Sizing::Fixed(100.0))
+                .end()
+            .background_color(Color::rgb(255., 255., 255.)), |clay|
+        {
+            clay.with(&Declaration::new()
+                .layout()
+                    .width(Sizing::Fixed(100.0))
+                    .height(Sizing::Fixed(100.0))
+                    .end()
+                .background_color(Color::rgb(255., 255., 255.)), |clay|
+            {
+                clay.with(&Declaration::new()
+                    .layout()
+                        .width(Sizing::Fixed(100.0))
+                        .height(Sizing::Fixed(100.0))
+                        .end()
+                    .background_color(Color::rgb(255., 255., 255.)), |clay|
+                    {
+                        clay.text_literal("test", TextConfig::new()
+                            .color(Color::rgb(255., 255., 255.))
+                            .font_size(24)
+                            .end());
+                    },
+                );
+            });
+        });
+
+        clay.with(&Declaration::new()
+            .layout()
+                .end()
+            .border()
+                .color(Color::rgb(255., 255., 0.))
+                .all_directions(2)
+                .end()
+            .corner_radius().all(10.0).end(), |clay|
+        {
+            clay.with(&Declaration::new()
+                .layout()
+                    .width(Sizing::Fixed(50.0))
+                    .height(Sizing::Fixed(50.0))
+                    .end()
+                .background_color(Color::rgb(0., 255., 255.)), |_clay| {},
+            );
+        });
+
+        let items = clay.end().collect::<Vec<_>>();
+
+        for item in &items {
+            println!(
+                "id: {}\nbbox: {:?}\nconfig: {:?}",
+                item.id, item.bounding_box, item.config,
+            );
+        }
+
+        assert_eq!(items.len(), 6);
+        
+        assert_eq!(items[0].bounding_box.x, 0.0);
+        assert_eq!(items[0].bounding_box.y, 0.0);
+        assert_eq!(items[0].bounding_box.width, 100.0);
+        assert_eq!(items[0].bounding_box.height, 100.0);
+        match &items[0].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 255.0);
+                assert_eq!(rect.color.g, 255.0);
+                assert_eq!(rect.color.b, 255.0);
+                assert_eq!(rect.color.a, 255.0);
+            }
+            _ => panic!("Expected Rectangle config for item 0"),
+        }
+        
+        assert_eq!(items[1].bounding_box.x, 0.0);
+        assert_eq!(items[1].bounding_box.y, 0.0);
+        assert_eq!(items[1].bounding_box.width, 100.0);
+        assert_eq!(items[1].bounding_box.height, 100.0);
+        match &items[1].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 255.0);
+                assert_eq!(rect.color.g, 255.0);
+                assert_eq!(rect.color.b, 255.0);
+                assert_eq!(rect.color.a, 255.0);
+            }
+            _ => panic!("Expected Rectangle config for item 1"),
+        }
+        
+        assert_eq!(items[2].bounding_box.x, 0.0);
+        assert_eq!(items[2].bounding_box.y, 0.0);
+        assert_eq!(items[2].bounding_box.width, 100.0);
+        assert_eq!(items[2].bounding_box.height, 100.0);
+        match &items[2].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 255.0);
+                assert_eq!(rect.color.g, 255.0);
+                assert_eq!(rect.color.b, 255.0);
+                assert_eq!(rect.color.a, 255.0);
+            }
+            _ => panic!("Expected Rectangle config for item 2"),
+        }
+        
+        assert_eq!(items[3].bounding_box.x, 0.0);
+        assert_eq!(items[3].bounding_box.y, 0.0);
+        assert_eq!(items[3].bounding_box.width, 100.0);
+        assert_eq!(items[3].bounding_box.height, 24.0);
+        match &items[3].config {
+            render_commands::RenderCommandConfig::Text(text) => {
+                assert_eq!(text.text, "test");
+                assert_eq!(text.color.r, 255.0);
+                assert_eq!(text.color.g, 255.0);
+                assert_eq!(text.color.b, 255.0);
+                assert_eq!(text.color.a, 255.0);
+                assert_eq!(text.font_size, 24);
+            }
+            _ => panic!("Expected Text config for item 3"),
+        }
+        
+        assert_eq!(items[4].bounding_box.x, 100.0);
+        assert_eq!(items[4].bounding_box.y, 0.0);
+        assert_eq!(items[4].bounding_box.width, 50.0);
+        assert_eq!(items[4].bounding_box.height, 50.0);
+        match &items[4].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 0.0);
+                assert_eq!(rect.color.g, 255.0);
+                assert_eq!(rect.color.b, 255.0);
+                assert_eq!(rect.color.a, 255.0);
+            }
+            _ => panic!("Expected Rectangle config for item 4"),
+        }
+        
+        assert_eq!(items[5].bounding_box.x, 100.0);
+        assert_eq!(items[5].bounding_box.y, 0.0);
+        assert_eq!(items[5].bounding_box.width, 50.0);
+        assert_eq!(items[5].bounding_box.height, 50.0);
+        match &items[5].config {
+            render_commands::RenderCommandConfig::Border(border) => {
+                assert_eq!(border.color.r, 255.0);
+                assert_eq!(border.color.g, 255.0);
+                assert_eq!(border.color.b, 0.0);
+                assert_eq!(border.color.a, 255.0);
+                assert_eq!(border.corner_radii.top_left, 10.0);
+                assert_eq!(border.corner_radii.top_right, 10.0);
+                assert_eq!(border.corner_radii.bottom_left, 10.0);
+                assert_eq!(border.corner_radii.bottom_right, 10.0);
+                assert_eq!(border.width.left, 2);
+                assert_eq!(border.width.right, 2);
+                assert_eq!(border.width.top, 2);
+                assert_eq!(border.width.bottom, 2);
+            }
+            _ => panic!("Expected Border config for item 5"),
+        }
+    }
 
     #[rustfmt::skip]
     #[test]

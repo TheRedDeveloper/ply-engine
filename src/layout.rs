@@ -276,7 +276,6 @@ macro_rules! percent {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{fit, fixed, grow, percent};
 
     #[test]
     fn fit_macro() {
