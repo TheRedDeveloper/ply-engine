@@ -1,4 +1,4 @@
 /target
 /out/
 Cargo.lock
-.idea
+.*

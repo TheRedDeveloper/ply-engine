@@ -1,6 +1,6 @@
 # Text Styling Documentation
 
-The macroquad renderer provides the `macroquad-text-styling` feature flag, which enables the use of a custom styling sytax.
+The macroquad renderer provides the `text-styling` feature flag, which enables the use of a custom styling sytax.
 
 ## Syntax & Formatting
 Styles are applied using tags enclosed in `{` and `|` and closed with `}`.

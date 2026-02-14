@@ -9,10 +9,11 @@ pub mod layout;
 pub mod math;
 pub mod render_commands;
 pub mod text;
+pub mod renderer;
+#[cfg(feature = "text-styling")]
+pub mod text_styling;
 
 mod mem;
-pub mod renderers;
-
 use core::marker::PhantomData;
 
 pub use crate::bindings::*;
@@ -689,85 +690,317 @@ mod tests {
 
     #[rustfmt::skip]
     #[test]
-    fn test_begin() {
-        let mut callback_data = 0u32;
-
-        let mut clay = Clay::new(Dimensions::new(800.0, 600.0));
-
-        clay.set_measure_text_function_user_data(&mut callback_data, |text, _config, data| {
-            println!(
-                "set_measure_text_function_user_data {:?} count {:?}",
-                text, data
-            );
-            **data += 1;
-            Dimensions::default()
-        });
+    fn test_example() {
+        let mut clay = Clay::new(Dimensions::new(1000.0, 1000.0));
 
         let mut clay = clay.begin::<(), ()>();
 
-        clay.with(&Declaration::new()
-            .id(clay.id("parent_rect"))
-            .layout()
-                .width(Sizing::Fixed(100.0))
-                .height(Sizing::Fixed(100.0))
-                .padding(Padding::all(10))
-                .end()
-            .background_color(Color::rgb(255., 255., 255.)), |clay|
-        {
-            clay.with(&Declaration::new()
-                .layout()
-                    .width(Sizing::Fixed(100.0))
-                    .height(Sizing::Fixed(100.0))
-                    .padding(Padding::all(10))
-                    .end()
-                .background_color(Color::rgb(255., 255., 255.)), |clay|
-            {
-                clay.with(&Declaration::new()
-                    .id(clay.id("rect_under_rect"))
+        clay.set_measure_text_function(|_, _| {
+            Dimensions::new(100.0, 24.0)
+        });
+
+        for &(label, level) in &[("Road", 1), ("Wall", 2), ("Tower", 3)] {
+            clay.with(
+                &Declaration::new()
                     .layout()
-                        .width(Sizing::Fixed(100.0))
-                        .height(Sizing::Fixed(100.0))
-                        .padding(Padding::all(10))
-                        .end()
-                    .background_color(Color::rgb(255., 255., 255.)), |clay|
-                    {
-                        clay.text_literal("test", TextConfig::new()
-                            .color(Color::rgb(255., 255., 255.))
-                            .font_size(24)
-                            .end());
-                    },
-                );
-            });
-        });
-
-        clay.with(&Declaration::new()
-            .id(clay.id_index("border_container", 1))
-            .layout()
-                .padding(Padding::all(16))
-                .end()
-            .border()
-                .color(Color::rgb(255., 255., 0.))
-                .all_directions(2)
-                .end()
-            .corner_radius().all(10.0).end(), |clay|
-        {
-            clay.with(&Declaration::new()
-                .id(clay.id("rect_under_border"))
-                .layout()
-                    .width(Sizing::Fixed(50.0))
-                    .height(Sizing::Fixed(50.0))
-                    .end()
-                .background_color(Color::rgb(0., 255., 255.)), |_clay| {},
+                        .width(grow!())
+                        .height(fixed!(36.0))
+                        .direction(crate::layout::LayoutDirection::LeftToRight)
+                        .child_gap(12)
+                        .child_alignment(crate::layout::Alignment::new(
+                            crate::layout::LayoutAlignmentX::Left,
+                            crate::layout::LayoutAlignmentY::Center,
+                        ))
+                        .end(),
+                |clay| {
+                    clay.text_literal(label,
+                        TextConfig::new().font_size(18).color(Color::u_rgb(0xFF, 0xFF, 0xFF)).end());
+                    clay.with(
+                        &Declaration::new()
+                            .layout().width(grow!()).height(fixed!(18.0)).end()
+                            .corner_radius().all(9.0).end()
+                            .background_color(Color::u_rgb(0x55, 0x55, 0x55)),
+                        |clay| {
+                            clay.with(
+                                &Declaration::new()
+                                    .layout()
+                                        .width(fixed!(300.0 * level as f32 / 3.0))
+                                        .height(grow!())
+                                    .end()
+                                    .corner_radius().all(9.0).end()
+                                    .background_color(Color::u_rgb(0x45, 0xA8, 0x5A)),
+                                |_| {},
+                            );
+                        },
+                    );
+                },
             );
-        });
+        }
 
-        let items = clay.end();
+        let items = clay.end().collect::<Vec<_>>();
 
-        for item in items {
+        for item in &items {
             println!(
                 "id: {}\nbbox: {:?}\nconfig: {:?}",
                 item.id, item.bounding_box, item.config,
             );
+        }
+
+        assert_eq!(items.len(), 9);
+
+        // Road label
+        assert_eq!(items[0].bounding_box.x, 0.0);
+        assert_eq!(items[0].bounding_box.y, 6.0);
+        assert_eq!(items[0].bounding_box.width, 100.0);
+        assert_eq!(items[0].bounding_box.height, 24.0);
+        match &items[0].config {
+            render_commands::RenderCommandConfig::Text(text) => {
+                assert_eq!(text.text, "Road");
+                assert_eq!(text.color.r, 255.0);
+                assert_eq!(text.color.g, 255.0);
+                assert_eq!(text.color.b, 255.0);
+                assert_eq!(text.color.a, 255.0);
+                assert_eq!(text.font_size, 18);
+            }
+            _ => panic!("Expected Text config for item 0"),
+        }
+
+        // Road background box
+        assert_eq!(items[1].bounding_box.x, 112.0);
+        assert_eq!(items[1].bounding_box.y, 9.0);
+        assert_eq!(items[1].bounding_box.width, 163.99142);
+        assert_eq!(items[1].bounding_box.height, 18.0);
+        match &items[1].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 85.0);
+                assert_eq!(rect.color.g, 85.0);
+                assert_eq!(rect.color.b, 85.0);
+                assert_eq!(rect.color.a, 255.0);
+                assert_eq!(rect.corner_radii.top_left, 9.0);
+                assert_eq!(rect.corner_radii.top_right, 9.0);
+                assert_eq!(rect.corner_radii.bottom_left, 9.0);
+                assert_eq!(rect.corner_radii.bottom_right, 9.0);
+            }
+            _ => panic!("Expected Rectangle config for item 1"),
+        }
+
+        // Road progress bar
+        assert_eq!(items[2].bounding_box.x, 112.0);
+        assert_eq!(items[2].bounding_box.y, 9.0);
+        assert_eq!(items[2].bounding_box.width, 100.0);
+        assert_eq!(items[2].bounding_box.height, 18.0);
+        match &items[2].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 69.0);
+                assert_eq!(rect.color.g, 168.0);
+                assert_eq!(rect.color.b, 90.0);
+                assert_eq!(rect.color.a, 255.0);
+                assert_eq!(rect.corner_radii.top_left, 9.0);
+                assert_eq!(rect.corner_radii.top_right, 9.0);
+                assert_eq!(rect.corner_radii.bottom_left, 9.0);
+                assert_eq!(rect.corner_radii.bottom_right, 9.0);
+            }
+            _ => panic!("Expected Rectangle config for item 2"),
+        }
+
+        // Wall label
+        assert_eq!(items[3].bounding_box.x, 275.99142);
+        assert_eq!(items[3].bounding_box.y, 6.0);
+        assert_eq!(items[3].bounding_box.width, 100.0);
+        assert_eq!(items[3].bounding_box.height, 24.0);
+        match &items[3].config {
+            render_commands::RenderCommandConfig::Text(text) => {
+                assert_eq!(text.text, "Wall");
+                assert_eq!(text.color.r, 255.0);
+                assert_eq!(text.color.g, 255.0);
+                assert_eq!(text.color.b, 255.0);
+                assert_eq!(text.color.a, 255.0);
+                assert_eq!(text.font_size, 18);
+            }
+            _ => panic!("Expected Text config for item 3"),
+        }
+
+        // Wall background box
+        assert_eq!(items[4].bounding_box.x, 387.99142);
+        assert_eq!(items[4].bounding_box.y, 9.0);
+        assert_eq!(items[4].bounding_box.width, 200.0);
+        assert_eq!(items[4].bounding_box.height, 18.0);
+        match &items[4].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 85.0);
+                assert_eq!(rect.color.g, 85.0);
+                assert_eq!(rect.color.b, 85.0);
+                assert_eq!(rect.color.a, 255.0);
+                assert_eq!(rect.corner_radii.top_left, 9.0);
+                assert_eq!(rect.corner_radii.top_right, 9.0);
+                assert_eq!(rect.corner_radii.bottom_left, 9.0);
+                assert_eq!(rect.corner_radii.bottom_right, 9.0);
+            }
+            _ => panic!("Expected Rectangle config for item 4"),
+        }
+
+        // Wall progress bar
+        assert_eq!(items[5].bounding_box.x, 387.99142);
+        assert_eq!(items[5].bounding_box.y, 9.0);
+        assert_eq!(items[5].bounding_box.width, 200.0);
+        assert_eq!(items[5].bounding_box.height, 18.0);
+        match &items[5].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 69.0);
+                assert_eq!(rect.color.g, 168.0);
+                assert_eq!(rect.color.b, 90.0);
+                assert_eq!(rect.color.a, 255.0);
+                assert_eq!(rect.corner_radii.top_left, 9.0);
+                assert_eq!(rect.corner_radii.top_right, 9.0);
+                assert_eq!(rect.corner_radii.bottom_left, 9.0);
+                assert_eq!(rect.corner_radii.bottom_right, 9.0);
+            }
+            _ => panic!("Expected Rectangle config for item 5"),
+        }
+
+        // Tower label
+        assert_eq!(items[6].bounding_box.x, 587.99146);
+        assert_eq!(items[6].bounding_box.y, 6.0);
+        assert_eq!(items[6].bounding_box.width, 100.0);
+        assert_eq!(items[6].bounding_box.height, 24.0);
+        match &items[6].config {
+            render_commands::RenderCommandConfig::Text(text) => {
+                assert_eq!(text.text, "Tower");
+                assert_eq!(text.color.r, 255.0);
+                assert_eq!(text.color.g, 255.0);
+                assert_eq!(text.color.b, 255.0);
+                assert_eq!(text.color.a, 255.0);
+                assert_eq!(text.font_size, 18);
+            }
+            _ => panic!("Expected Text config for item 6"),
+        }
+
+        // Tower background box
+        assert_eq!(items[7].bounding_box.x, 699.99146);
+        assert_eq!(items[7].bounding_box.y, 9.0);
+        assert_eq!(items[7].bounding_box.width, 300.0);
+        assert_eq!(items[7].bounding_box.height, 18.0);
+        match &items[7].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 85.0);
+                assert_eq!(rect.color.g, 85.0);
+                assert_eq!(rect.color.b, 85.0);
+                assert_eq!(rect.color.a, 255.0);
+                assert_eq!(rect.corner_radii.top_left, 9.0);
+                assert_eq!(rect.corner_radii.top_right, 9.0);
+                assert_eq!(rect.corner_radii.bottom_left, 9.0);
+                assert_eq!(rect.corner_radii.bottom_right, 9.0);
+            }
+            _ => panic!("Expected Rectangle config for item 7"),
+        }
+
+        // Tower progress bar
+        assert_eq!(items[8].bounding_box.x, 699.99146);
+        assert_eq!(items[8].bounding_box.y, 9.0);
+        assert_eq!(items[8].bounding_box.width, 300.0);
+        assert_eq!(items[8].bounding_box.height, 18.0);
+        match &items[8].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 69.0);
+                assert_eq!(rect.color.g, 168.0);
+                assert_eq!(rect.color.b, 90.0);
+                assert_eq!(rect.color.a, 255.0);
+                assert_eq!(rect.corner_radii.top_left, 9.0);
+                assert_eq!(rect.corner_radii.top_right, 9.0);
+                assert_eq!(rect.corner_radii.bottom_left, 9.0);
+                assert_eq!(rect.corner_radii.bottom_right, 9.0);
+            }
+            _ => panic!("Expected Rectangle config for item 8"),
+        }
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_floating() {
+        let mut clay = Clay::new(Dimensions::new(1000.0, 1000.0));
+
+        let mut clay = clay.begin::<(), ()>();
+
+        clay.set_measure_text_function(|_, _| {
+            Dimensions::new(100.0, 24.0)
+        });
+
+        clay.with(
+            &Declaration::new()
+                .layout()
+                    .width(fixed!(20.0))
+                    .height(fixed!(20.0))
+                    .child_alignment(crate::layout::Alignment::new(
+                        crate::layout::LayoutAlignmentX::Center,
+                        crate::layout::LayoutAlignmentY::Center,
+                    ))
+                .end()
+                .floating()
+                    .attach_to(crate::elements::FloatingAttachToElement::Root)
+                    .attach_points(
+                        crate::elements::FloatingAttachPointType::CenterCenter,
+                        crate::elements::FloatingAttachPointType::LeftTop,
+                    )
+                    .offset(Vector2::new(100.0, 150.0))
+                    .pointer_capture_mode(crate::elements::PointerCaptureMode::Passthrough)
+                    .z_index(110)
+                .end()
+                .corner_radius().all(10.0).end()
+                .background_color(Color::u_rgb(0x44, 0x88, 0xDD)),
+            |clay| {
+                clay.text_literal(
+                    "Re",
+                    TextConfig::new()
+                        .font_size(6)
+                        .color(Color::u_rgb(0xFF, 0xFF, 0xFF))
+                        .end(),
+                );
+            },
+        );
+
+        let items = clay.end().collect::<Vec<_>>();
+
+        for item in &items {
+            println!(
+                "id: {}\nbbox: {:?}\nconfig: {:?}",
+                item.id, item.bounding_box, item.config,
+            );
+        }
+
+        assert_eq!(items.len(), 2);
+
+        assert_eq!(items[0].bounding_box.x, 90.0);
+        assert_eq!(items[0].bounding_box.y, 140.0);
+        assert_eq!(items[0].bounding_box.width, 20.0);
+        assert_eq!(items[0].bounding_box.height, 20.0);
+        match &items[0].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 68.0);
+                assert_eq!(rect.color.g, 136.0);
+                assert_eq!(rect.color.b, 221.0);
+                assert_eq!(rect.color.a, 255.0);
+                assert_eq!(rect.corner_radii.top_left, 10.0);
+                assert_eq!(rect.corner_radii.top_right, 10.0);
+                assert_eq!(rect.corner_radii.bottom_left, 10.0);
+                assert_eq!(rect.corner_radii.bottom_right, 10.0);
+            }
+            _ => panic!("Expected Rectangle config for item 0"),
+        }
+
+        assert_eq!(items[1].bounding_box.x, 50.0);
+        assert_eq!(items[1].bounding_box.y, 138.0);
+        assert_eq!(items[1].bounding_box.width, 100.0);
+        assert_eq!(items[1].bounding_box.height, 24.0);
+        match &items[1].config {
+            render_commands::RenderCommandConfig::Text(text) => {
+                assert_eq!(text.text, "Re");
+                assert_eq!(text.color.r, 255.0);
+                assert_eq!(text.color.g, 255.0);
+                assert_eq!(text.color.b, 255.0);
+                assert_eq!(text.color.a, 255.0);
+                assert_eq!(text.font_size, 6);
+            }
+            _ => panic!("Expected Text config for item 1"),
         }
     }
 
