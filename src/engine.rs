@@ -3308,14 +3308,65 @@ impl PlyContext {
     const DEBUG_COLOR_SELECTED_ROW: Color = Color::rgba(102.0, 80.0, 78.0, 255.0);
     const DEBUG_HIGHLIGHT_COLOR: Color = Color::rgba(168.0, 66.0, 28.0, 100.0);
 
+    /// Escape text-styling special characters (`{`, `}`, `|`, `\`) so that
+    /// debug view strings are never interpreted as styling markup.
+    #[cfg(feature = "text-styling")]
+    fn debug_escape_str(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '{' | '}' | '|' | '\\' => {
+                    result.push('\\');
+                    result.push(c);
+                }
+                _ => result.push(c),
+            }
+        }
+        result
+    }
+
     /// Helper: emit a text element with a static string.
+    /// When `text-styling` is enabled the string is escaped first so that
+    /// braces and pipes are rendered literally.
     fn debug_text(&mut self, text: &'static str, config_index: usize) {
-        self.open_text_element(
-            text.as_ptr() as usize,
-            text.len() as i32,
-            true,
-            config_index,
-        );
+        #[cfg(feature = "text-styling")]
+        {
+            let escaped = Self::debug_escape_str(text);
+            let ptr = escaped.as_ptr() as usize;
+            let len = escaped.len() as i32;
+            self.debug_strings.push(escaped);
+            self.open_text_element(ptr, len, false, config_index);
+        }
+        #[cfg(not(feature = "text-styling"))]
+        {
+            self.open_text_element(
+                text.as_ptr() as usize,
+                text.len() as i32,
+                true,
+                config_index,
+            );
+        }
+    }
+
+    /// Helper: emit a text element from a raw pointer/length (e.g. element IDs
+    /// or text previews). Escapes text-styling characters when that feature is
+    /// active.
+    fn debug_raw_text(&mut self, ptr: usize, len: i32, is_static: bool, config_index: usize) {
+        #[cfg(feature = "text-styling")]
+        {
+            let _ = is_static;
+            let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) };
+            let text = core::str::from_utf8(slice).unwrap_or("");
+            let escaped = Self::debug_escape_str(text);
+            let eptr = escaped.as_ptr() as usize;
+            let elen = escaped.len() as i32;
+            self.debug_strings.push(escaped);
+            self.open_text_element(eptr, elen, false, config_index);
+        }
+        #[cfg(not(feature = "text-styling"))]
+        {
+            self.open_text_element(ptr, len, is_static, config_index);
+        }
     }
 
     /// Helper: format a number as a string, keep it alive for the frame, and emit a text element.
@@ -3461,7 +3512,7 @@ impl PlyContext {
             if _element_id_string.length > 0 {
                 let id_str_ptr = _element_id_string.ptr;
                 let id_str_len = _element_id_string.length;
-                self.open_text_element(id_str_ptr, id_str_len, _element_id_string.is_static, tc);
+                self.debug_raw_text(id_str_ptr, id_str_len, _element_id_string.is_static, tc);
             }
         }
         self.close_element();
@@ -3818,7 +3869,7 @@ impl PlyContext {
                         } else {
                             self.store_text_element_config(name_text_config)
                         };
-                        self.open_text_element(id_string.ptr, id_string.length, id_string.is_static, tc);
+                        self.debug_raw_text(id_string.ptr, id_string.length, id_string.is_static, tc);
                     }
 
                     // Config type badges
@@ -3965,10 +4016,10 @@ impl PlyContext {
                         self.close_element();
                         self.debug_text("\"", raw_tc_idx);
                         if text_len > 40 {
-                            self.open_text_element(text_ptr, 40, false, raw_tc_idx);
+                            self.debug_raw_text(text_ptr, 40, false, raw_tc_idx);
                             self.debug_text("...", raw_tc_idx);
                         } else if text_len > 0 {
-                            self.open_text_element(text_ptr, text_len, false, raw_tc_idx);
+                            self.debug_raw_text(text_ptr, text_len, false, raw_tc_idx);
                         }
                         self.debug_text("\"", raw_tc_idx);
                     }
@@ -4476,7 +4527,7 @@ impl PlyContext {
                 // Element ID string
                 let sid = selected_item.element_id.string_id;
                 if sid.length > 0 {
-                    self.open_text_element(sid.ptr, sid.length, sid.is_static, info_title_config);
+                    self.debug_raw_text(sid.ptr, sid.length, sid.is_static, info_title_config);
                     if selected_item.element_id.offset != 0 {
                         self.debug_text(" (", info_title_config);
                         self.debug_int_text(selected_item.element_id.offset as f32, info_title_config);
@@ -4713,7 +4764,7 @@ impl PlyContext {
                                 .map(|item| item.element_id.string_id)
                                 .unwrap_or(StringId::empty());
                             if parent_name.length > 0 {
-                                self.open_text_element(parent_name.ptr, parent_name.length, parent_name.is_static, info_text_config);
+                                self.debug_raw_text(parent_name.ptr, parent_name.length, parent_name.is_static, info_text_config);
                             }
 
                             self.debug_text("Attach Points", info_title_config);
