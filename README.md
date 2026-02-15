@@ -1,16 +1,19 @@
 # Ply Engine
 
+> [!WARNING]  
+> UI breaking updates are literally being made right now, as I make changes to the core architecture. 
+
 A pure Rust UI layout engine built on [macroquad](https://github.com/not-fl3/macroquad), inspired by [Clay](https://github.com/nicbarker/clay). Blazingly fast, safe, and ready for desktop and web.
 
 ## Features
 
-- **Pure Rust** — no C bindings, no FFI, no irremovable `unsafe` code
-- **Macroquad renderer** — antialiased rounded rectangles, borders, clipping, images, and text out of the box
-- **TextureManager** — automatic GPU texture caching with configurable eviction, supports file paths and embedded bytes
-- **TinyVG support** — render resolution-independent vector graphics via the `tinyvg` feature
-- **Text styling** — rich inline markup for color, effects (wave, jitter, gradient, …), and animations (type-in, fade, scale) via the `text-styling` feature
-- **WebAssembly** — ship to the browser, guide below.
-- **Debug view** — detailed layout overlay
+- **Pure Rust**: no C bindings, no FFI, no irremovable `unsafe` code
+- **Macroquad renderer**: antialiased rounded rectangles, borders, clipping, images, and text out of the box
+- **TextureManager**: automatic GPU texture caching with configurable eviction, supports file paths and embedded bytes
+- **TinyVG support**: render resolution-independent vector graphics via the `tinyvg` feature
+- **Text styling**: rich inline markup for color, effects (wave, jitter, gradient, …), and animations (type-in, fade, scale) via the `text-styling` feature
+- **WebAssembly**: ship to the browser, guide below.
+- **Debug view**: inspect the layout tree
 
 ## Installation
 
@@ -62,7 +65,7 @@ async fn main() {
     let fonts = vec![load_ttf_font("assets/lexend.ttf").await.unwrap()];
 
     // Create the engine
-    let mut ply = Ply::new((screen_width(), screen_height()).into(), fonts.clone());
+    let mut ply = Ply::new(fonts.clone());
 
     loop {
         clear_background(BLACK);
@@ -177,7 +180,7 @@ See [text-styling.md](text-styling.md) for the full reference.
 
 ## TinyVG Support
 
-Enable with `features = ["tinyvg"]`. Reference `.tvg` files through the `Asset` enum and they render at any resolution. Convert your svgs into `.tvg`s with the [official tools](https://tinyvg.tech/) and enjoy ultra-compact assets with blazingly fast rendering.
+Enable with `features = ["tinyvg"]`. Reference `.tvg` files through the `Asset` enum and they render at any resolution. Convert your `.svg`s into `.tvg`s with the [official tools](https://tinyvg.tech/) and enjoy ultra-compact assets with blazingly fast rendering.
 
 ```rust
 static ICON: Asset = Asset::Bytes {

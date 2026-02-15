@@ -117,7 +117,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default
 #[allow(dead_code)]
 pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     context: engine::PlyContext<CustomElementData>,
-    auto_resize: bool,
+    headless: bool,
 }
 
 pub struct PlyLayoutScope<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
@@ -250,12 +250,29 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     pub fn begin(
         &mut self,
     ) -> PlyLayoutScope<'_, CustomElementData> {
-        if self.auto_resize {
+        if !self.headless {
             self.context.set_layout_dimensions(Dimensions::new(
                 macroquad::prelude::screen_width(),
                 macroquad::prelude::screen_height(),
             ));
         }
+
+        // Auto-update pointer state from macroquad
+        if !self.headless {
+            let (mx, my) = macroquad::prelude::mouse_position();
+            let is_down = macroquad::prelude::is_mouse_button_down(
+                macroquad::prelude::MouseButton::Left,
+            );
+            self.context.set_pointer_state(Vector2::new(mx, my), is_down);
+
+            let (scroll_x, scroll_y) = macroquad::prelude::mouse_wheel();
+            self.context.update_scroll_containers(
+                true,
+                Vector2::new(scroll_x, scroll_y),
+                macroquad::prelude::get_frame_time(),
+            );
+        }
+
         self.context.begin_layout();
         PlyLayoutScope {
             ply: self,
@@ -263,15 +280,20 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         }
     }
 
-    /// Create a new Ply engine with the given dimensions and fonts.
+    /// Create a new Ply engine with the given fonts.
     ///
+    /// Screen dimensions are obtained automatically from macroquad.
     /// Text measurement is set up automatically from the provided fonts.
     /// For custom text measurement, use [`Ply::new_headless`] and
     /// [`Ply::set_measure_text_function`].
-    pub fn new(dimensions: Dimensions, fonts: Vec<macroquad::prelude::Font>) -> Self {
+    pub fn new(fonts: Vec<macroquad::prelude::Font>) -> Self {
+        let dimensions = Dimensions::new(
+            macroquad::prelude::screen_width(),
+            macroquad::prelude::screen_height(),
+        );
         let mut ply = Self {
             context: engine::PlyContext::new(dimensions),
-            auto_resize: true,
+            headless: false,
         };
         ply.set_measure_text_function(renderer::create_measure_text_function(fonts));
         ply
@@ -284,7 +306,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     pub fn new_headless(dimensions: Dimensions) -> Self {
         Self {
             context: engine::PlyContext::new(dimensions),
-            auto_resize: false,
+            headless: true,
         }
     }
 
