@@ -1,6 +1,4 @@
-use crate::bindings::*;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
 pub struct Color {
     pub r: f32,
@@ -23,7 +21,7 @@ impl Color {
     /// assert_eq!(Color::rgb(255.0, 255.0, 255.0), Color::u_rgb(0xFF, 0xFF, 0xFF));
     /// ```
     pub const fn u_rgb(r: u8, g: u8, b: u8) -> Self {
-        Self::rgb(r as _, g as _, b as _)
+        Self::rgb(r as f32, g as f32, b as f32)
     }
     /// Allows using hex values to build colors
     /// ```
@@ -31,18 +29,7 @@ impl Color {
     /// assert_eq!(Color::rgba(255.0, 255.0, 255.0, 255.0), Color::u_rgba(0xFF, 0xFF, 0xFF, 0xFF));
     /// ```
     pub const fn u_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self::rgba(r as _, g as _, b as _, a as _)
-    }
-}
-
-impl From<Clay_Color> for Color {
-    fn from(value: Clay_Color) -> Self {
-        unsafe { core::mem::transmute(value) }
-    }
-}
-impl From<Color> for Clay_Color {
-    fn from(value: Color) -> Self {
-        unsafe { core::mem::transmute(value) }
+        Self::rgba(r as f32, g as f32, b as f32, a as f32)
     }
 }
 

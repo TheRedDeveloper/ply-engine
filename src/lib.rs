@@ -1,8 +1,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub mod bindings;
 pub mod color;
 pub mod elements;
+pub mod engine;
 pub mod errors;
 pub mod id;
 pub mod layout;
@@ -13,30 +13,22 @@ pub mod renderer;
 #[cfg(feature = "text-styling")]
 pub mod text_styling;
 
-mod mem;
 use core::marker::PhantomData;
 
-pub use crate::bindings::*;
-use errors::Error;
 use id::Id;
-use math::{BoundingBox, Dimensions, Vector2};
+use math::{Dimensions, Vector2};
 use render_commands::RenderCommand;
 
 pub use color::Color;
 
 #[cfg(feature = "std")]
 use text::TextConfig;
-#[cfg(feature = "std")]
-use std::{
-    cell::Cell,
-    sync::{Mutex, MutexGuard, OnceLock},
-};
 
 use text::TextElementConfig;
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct Declaration<'render, ImageElementData: 'render, CustomElementData: 'render> {
     id: Option<Id>,
-    inner: Clay_ElementDeclaration,
+    inner: engine::ElementDeclaration,
     _phantom: PhantomData<(&'render CustomElementData, &'render ImageElementData)>,
 }
 
@@ -45,21 +37,23 @@ impl<'render, ImageElementData: 'render, CustomElementData: 'render>
 {
     #[inline]
     pub fn new() -> Self {
-        let mut zeroed: Self = crate::mem::zeroed_init();
-        zeroed.id = None; // Zeroed doesn't mean None for Option
-        zeroed
+        Self {
+            id: None,
+            inner: engine::ElementDeclaration::default(),
+            _phantom: PhantomData,
+        }
     }
 
     #[inline]
     pub fn background_color(&mut self, color: Color) -> &mut Self {
-        self.inner.backgroundColor = color.into();
+        self.inner.background_color = color;
         self
     }
 
     /// Sets aspect ratio for image elements.
     #[inline]
     pub fn aspect_ratio(&mut self, aspect_ratio: f32) -> &mut Self {
-        self.inner.aspectRatio.aspectRatio = aspect_ratio;
+        self.inner.aspect_ratio = aspect_ratio;
         self
     }
 
@@ -67,7 +61,7 @@ impl<'render, ImageElementData: 'render, CustomElementData: 'render>
     pub fn clip(&mut self, horizontal: bool, vertical: bool, child_offset: Vector2) -> &mut Self {
         self.inner.clip.horizontal = horizontal;
         self.inner.clip.vertical = vertical;
-        self.inner.clip.childOffset = child_offset.into();
+        self.inner.clip.child_offset = child_offset;
         self
     }
 
@@ -79,7 +73,7 @@ impl<'render, ImageElementData: 'render, CustomElementData: 'render>
 
     #[inline]
     pub fn custom_element(&mut self, data: &'render CustomElementData) -> &mut Self {
-        self.inner.custom.customData = data as *const CustomElementData as _;
+        self.inner.custom_data = data as *const CustomElementData as usize;
         self
     }
 
@@ -127,118 +121,9 @@ impl<ImageElementData, CustomElementData> Default
     }
 }
 
-#[cfg(feature = "std")]
-unsafe extern "C" fn measure_text_trampoline_user_data<'a, F, T>(
-    text_slice: Clay_StringSlice,
-    config: *mut Clay_TextElementConfig,
-    user_data: *mut core::ffi::c_void,
-) -> Clay_Dimensions
-where
-    F: Fn(&str, &TextConfig, &'a mut T) -> Dimensions + 'a,
-    T: 'a,
-{
-    let text = core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-        text_slice.chars as *const u8,
-        text_slice.length as _,
-    ));
-
-    let closure_and_data: &mut (F, T) = &mut *(user_data as *mut (F, T));
-    let text_config = TextConfig::from(*config);
-    let (callback, data) = closure_and_data;
-    callback(text, &text_config, data).into()
-}
-
-#[cfg(feature = "std")]
-unsafe extern "C" fn measure_text_trampoline<'a, F>(
-    text_slice: Clay_StringSlice,
-    config: *mut Clay_TextElementConfig,
-    user_data: *mut core::ffi::c_void,
-) -> Clay_Dimensions
-where
-    F: Fn(&str, &TextConfig) -> Dimensions + 'a,
-{
-    let text = core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-        text_slice.chars as *const u8,
-        text_slice.length as _,
-    ));
-
-    let tuple = &*(user_data as *const (F, usize));
-    let text_config = TextConfig::from(*config);
-    (tuple.0)(text, &text_config).into()
-}
-
-unsafe extern "C" fn error_handler(error_data: Clay_ErrorData) {
-    let error: Error = error_data.into();
-    panic!("Clay Error: (type: {:?}) {}", error.type_, error.text);
-}
-
-#[cfg(feature = "std")]
-thread_local! {
-    static CLAY_FFI_GUARD_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-#[cfg(feature = "std")]
-fn clay_ffi_mutex() -> &'static Mutex<()> {
-    static CLAY_FFI_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-    CLAY_FFI_MUTEX.get_or_init(|| Mutex::new(()))
-}
-
-#[cfg(feature = "std")]
-struct ClayFfiGuard {
-    _guard: Option<MutexGuard<'static, ()>>,
-}
-
-#[cfg(feature = "std")]
-impl ClayFfiGuard {
-    fn acquire() -> Self {
-        let already_locked = CLAY_FFI_GUARD_DEPTH.with(|depth| {
-            let current = depth.get();
-            depth.set(current + 1);
-            current > 0
-        });
-
-        if already_locked {
-            Self { _guard: None }
-        } else {
-            let guard = clay_ffi_mutex().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            Self {
-                _guard: Some(guard),
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl Drop for ClayFfiGuard {
-    fn drop(&mut self) {
-        CLAY_FFI_GUARD_DEPTH.with(|depth| {
-            depth.set(depth.get().saturating_sub(1));
-        });
-    }
-}
-
-#[cfg(not(feature = "std"))]
-struct ClayFfiGuard;
-
-#[cfg(not(feature = "std"))]
-impl ClayFfiGuard {
-    fn acquire() -> Self {
-        Self
-    }
-}
-
 #[allow(dead_code)]
 pub struct Clay {
-    /// Memory used internally by clay
-    #[cfg(feature = "std")]
-    _memory: Vec<u8>,
-    context: *mut Clay_Context,
-    /// Memory used internally by clay. The caller is responsible for managing this memory in
-    /// no_std case.
-    #[cfg(not(feature = "std"))]
-    _memory: *const core::ffi::c_void,
-    /// Stores the raw pointer to the callback data for later cleanup
-    text_measure_callback: Option<*const core::ffi::c_void>,
+    context: engine::ClayContext,
 }
 
 pub struct ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData> {
@@ -246,13 +131,13 @@ pub struct ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData> 
     _phantom: core::marker::PhantomData<(&'render ImageElementData, &'render CustomElementData)>,
     dropped: bool,
     #[cfg(feature = "std")]
-    owned_strings: core::cell::RefCell<std::vec::Vec<std::string::String>>,
+    owned_strings: std::vec::Vec<std::string::String>,
 }
 
 impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'render>
     ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>
 {
-    /// Create an element, passing its config and a function to add childrens
+    /// Create an element, passing its config and a function to add children
     pub fn with<
         F: FnOnce(&mut ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>),
     >(
@@ -260,70 +145,52 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
         declaration: &Declaration<'render, ImageElementData, CustomElementData>,
         f: F,
     ) {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-            if let Some(id) = declaration.id {
-                Clay__OpenElementWithId(id.id);
-            } else {
-                Clay__OpenElement();
-            }
-            Clay__ConfigureOpenElement(declaration.inner);
+        if let Some(id) = declaration.id {
+            self.clay.context.open_element_with_id(id.id);
+        } else {
+            self.clay.context.open_element();
         }
+        self.clay.context.configure_open_element(&declaration.inner);
 
         f(self);
 
-        unsafe {
-            Clay__CloseElement();
-        }
+        self.clay.context.close_element();
     }
 
     pub fn with_styling<
         G: FnOnce(
-            &ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>,
+            &mut ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>,
         ) -> Declaration<'render, ImageElementData, CustomElementData>,
-        F: FnOnce(&ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>),
+        F: FnOnce(&mut ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>),
     >(
-        &self,
+        &mut self,
         g: G,
         f: F,
     ) {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-        }
-        
         let declaration = g(self);
-        
-        unsafe {
-            if let Some(id) = declaration.id {
-                Clay__OpenElementWithId(id.id);
-            } else {
-                Clay__OpenElement();
-            }
-            Clay__ConfigureOpenElement(declaration.inner);
+
+        if let Some(id) = declaration.id {
+            self.clay.context.open_element_with_id(id.id);
+        } else {
+            self.clay.context.open_element();
         }
+        self.clay.context.configure_open_element(&declaration.inner);
 
         f(self);
 
-        unsafe {
-            Clay__CloseElement();
-        }
+        self.clay.context.close_element();
     }
 
     pub fn end(
         &mut self,
     ) -> impl Iterator<Item = RenderCommand<'render, ImageElementData, CustomElementData>> {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        let array = unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-            Clay_EndLayout()
-        };
         self.dropped = true;
-        let slice = unsafe { core::slice::from_raw_parts(array.internalArray, array.length as _) };
-        slice
-            .iter()
-            .map(|command| unsafe { RenderCommand::from_clay_render_command(*command) })
+        let commands = self.clay.context.end_layout();
+        let mut result = Vec::new();
+        for cmd in commands {
+            result.push(unsafe { RenderCommand::from_engine_render_command(cmd) });
+        }
+        result.into_iter()
     }
 
     /// Adds a text element to the current open element or to the root layout.
@@ -331,7 +198,7 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
     /// For string literals, use `text_literal()` for better performance (avoids copying).
     /// For dynamic strings, use `text_string()`.
     #[cfg(feature = "std")]
-    pub fn text(&self, text: &str, config: TextElementConfig) {
+    pub fn text(&mut self, text: &str, config: TextElementConfig) {
         let owned = std::string::String::from(text);
         self.text_string(owned, config);
     }
@@ -339,91 +206,50 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
     /// Adds a text element from a string that must live until fully used.
     /// Only available in no_std - you must ensure the string lives long enough.
     #[cfg(not(feature = "std"))]
-    pub fn text(&self, text: &'render str, config: TextElementConfig) {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-            Clay__OpenTextElement(text.into(), config.into())
-        };
+    pub fn text(&mut self, text: &'render str, config: TextElementConfig) {
+        let text_config_index = self.clay.context.store_text_element_config(config.into_internal());
+        self.clay.context.open_text_element(
+            text.as_ptr() as usize,
+            text.len() as i32,
+            false,
+            text_config_index,
+        );
     }
 
     /// Adds a text element from a static string literal without copying.
-    pub fn text_literal(&self, text: &'static str, config: TextElementConfig) {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        let clay_string = Clay_String {
-            isStaticallyAllocated: true,
-            length: text.len() as _,
-            chars: text.as_ptr() as _,
-        };
-        unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-            Clay__OpenTextElement(clay_string, config.into())
-        };
+    pub fn text_literal(&mut self, text: &'static str, config: TextElementConfig) {
+        let text_config_index = self.clay.context.store_text_element_config(config.into_internal());
+        self.clay.context.open_text_element(
+            text.as_ptr() as usize,
+            text.len() as i32,
+            true,
+            text_config_index,
+        );
     }
 
     /// Adds a text element from an owned string that will be stored.
     #[cfg(feature = "std")]
-    pub fn text_string(&self, text: std::string::String, config: TextElementConfig) {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        let mut owned_strings = self.owned_strings.borrow_mut();
-        owned_strings.push(text);
-        let text_ref = owned_strings.last().unwrap();
-
-        let clay_string = Clay_String {
-            isStaticallyAllocated: false,
-            length: text_ref.len() as _,
-            chars: text_ref.as_ptr() as _,
-        };
-        unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-            Clay__OpenTextElement(clay_string, config.into())
-        };
+    pub fn text_string(&mut self, text: std::string::String, config: TextElementConfig) {
+        let ptr = text.as_ptr() as usize;
+        let len = text.len() as i32;
+        self.owned_strings.push(text);
+        let text_config_index = self.clay.context.store_text_element_config(config.into_internal());
+        self.clay.context.open_text_element(ptr, len, false, text_config_index);
     }
 
     pub fn hovered(&self) -> bool {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-            Clay_Hovered()
-        }
+        self.clay.context.hovered()
     }
 
-    pub fn on_hover<F, T>(&self, callback: F, user_data: T)
+    pub fn on_hover<F>(&mut self, callback: F)
     where
-        F: Fn(Id, Clay_PointerData, &mut T) + 'static
+        F: FnMut(engine::ElementId, engine::PointerData) + 'static,
     {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        let boxed = Box::new((callback, user_data));
-        let user_data_ptr = Box::into_raw(boxed) as *mut core::ffi::c_void;
-
-        unsafe extern "C" fn trampoline<F, T>(
-            element_id: Clay_ElementId,
-            pointer_data: Clay_PointerData,
-            user_data: *mut core::ffi::c_void,
-        )
-        where
-            F: Fn(Id, Clay_PointerData, &mut T) + 'static,
-        {
-            let (callback, data) = &mut *(user_data as *mut (F, T));
-            let id = Id { id: element_id };
-            callback(id, pointer_data, data);
-        }
-
-        unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-            Clay_OnHover(
-                Some(trampoline::<F, T>),
-                user_data_ptr,
-            );
-        }
+        self.clay.context.on_hover(Box::new(callback));
     }
 
     pub fn scroll_offset(&self) -> Vector2 {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        unsafe {
-            Clay_SetCurrentContext(self.clay.context);
-            Clay_GetScrollOffset().into()
-        }
+        self.clay.context.get_scroll_offset()
     }
 }
 
@@ -450,11 +276,7 @@ impl<ImageElementData, CustomElementData> Drop
 {
     fn drop(&mut self) {
         if !self.dropped {
-            let _ffi_guard = ClayFfiGuard::acquire();
-            unsafe {
-                Clay_SetCurrentContext(self.clay.context);
-                Clay_EndLayout();
-            }
+            self.clay.context.end_layout();
         }
     }
 }
@@ -463,45 +285,20 @@ impl Clay {
     pub fn begin<'render, ImageElementData: 'render, CustomElementData: 'render>(
         &mut self,
     ) -> ClayLayoutScope<'_, 'render, ImageElementData, CustomElementData> {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        unsafe {
-            Clay_SetCurrentContext(self.context);
-            Clay_BeginLayout()
-        };
+        self.context.begin_layout();
         ClayLayoutScope {
             clay: self,
             _phantom: core::marker::PhantomData,
             dropped: false,
             #[cfg(feature = "std")]
-            owned_strings: core::cell::RefCell::new(std::vec::Vec::new()),
+            owned_strings: std::vec::Vec::new(),
         }
     }
 
     #[cfg(feature = "std")]
     pub fn new(dimensions: Dimensions) -> Self {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        let memory_size = Self::required_memory_size();
-        let memory = vec![0; memory_size];
-        let context;
-
-        unsafe {
-            let arena =
-                Clay_CreateArenaWithCapacityAndMemory(memory_size as _, memory.as_ptr() as _);
-
-            context = Clay_Initialize(
-                arena,
-                dimensions.into(),
-                Clay_ErrorHandler {
-                    errorHandlerFunction: Some(error_handler),
-                    userData: std::ptr::null_mut(),
-                },
-            );
-        }
-
         Self {
-            _memory: memory,
-            context,
-            text_measure_callback: None,
+            context: engine::ClayContext::new(dimensions),
         }
     }
 
@@ -526,7 +323,8 @@ impl Clay {
     /// The ID is unique within a specific local scope but not globally.
     #[inline]
     pub fn id_local(&self, label: &'static str) -> id::Id {
-        id::Id::new_index_local(label, 0)
+        let parent_id = self.context.get_parent_element_id();
+        id::Id::new_index_local_with_parent(label, 0, parent_id)
     }
 
     /// Generates a locally unique indexed ID based on the given `label` and `index`.
@@ -534,75 +332,41 @@ impl Clay {
     /// This is useful for differentiating elements within a local scope while keeping their labels consistent.
     #[inline]
     pub fn id_index_local(&self, label: &'static str, index: u32) -> id::Id {
-        id::Id::new_index_local(label, index)
+        let parent_id = self.context.get_parent_element_id();
+        id::Id::new_index_local_with_parent(label, index, parent_id)
     }
 
     pub fn pointer_over(&self, cfg: Id) -> bool {
-        unsafe { Clay_PointerOver(cfg.id) }
+        self.context.pointer_over(cfg.id)
     }
 
     #[cfg(feature = "std")]
     /// Z-sorted list of element IDs that the cursor is currently over
     pub fn pointer_over_ids(&self) -> Vec<Id> {
-        unsafe {
-            let array = Clay_GetPointerOverIds();
-            let slice = core::slice::from_raw_parts(array.internalArray, array.length as _);
-            slice.iter().map(|&id| Id { id }).collect()
-        }
-    }
-
-    #[cfg(not(feature = "std"))]
-    pub unsafe fn new_with_memory(dimensions: Dimensions, memory: *mut core::ffi::c_void) -> Self {
-        let memory_size = Self::required_memory_size();
-        let arena = Clay_CreateArenaWithCapacityAndMemory(memory_size as _, memory);
-
-        let context = Clay_Initialize(
-            arena,
-            dimensions.into(),
-            Clay_ErrorHandler {
-                errorHandlerFunction: Some(error_handler),
-                userData: core::ptr::null_mut(),
-            },
-        );
-
-        Self {
-            _memory: memory,
-            context,
-            text_measure_callback: None,
-        }
-    }
-
-    /// Wrapper for `Clay_MinMemorySize`, returns the minimum required memory by clay
-    pub fn required_memory_size() -> usize {
-        unsafe { Clay_MinMemorySize() as usize }
+        self.context
+            .get_pointer_over_ids()
+            .iter()
+            .map(|&id| Id { id })
+            .collect()
     }
 
     /// Set the callback for text measurement with user data
     #[cfg(feature = "std")]
-    pub fn set_measure_text_function_user_data<'clay, F, T>(
-        &'clay mut self,
+    pub fn set_measure_text_function_user_data<F, T>(
+        &mut self,
         userdata: T,
         callback: F,
     ) where
-        F: Fn(&str, &TextConfig, &'clay mut T) -> Dimensions + 'static,
-        T: 'clay,
+        F: Fn(&str, &TextConfig, &mut T) -> Dimensions + 'static,
+        T: 'static,
     {
-        // Box the callback and userdata together
-        let boxed = Box::new((callback, userdata));
-
-        // Get a raw pointer to the boxed data
-        let user_data_ptr = Box::into_raw(boxed) as _;
-
-        // Register the callback with the external C function
-        unsafe {
-            Self::set_measure_text_function_unsafe(
-                measure_text_trampoline_user_data::<F, T>,
-                user_data_ptr,
-            );
-        }
-
-        // Store the raw pointer for later cleanup
-        self.text_measure_callback = Some(user_data_ptr as *const core::ffi::c_void);
+        let data = std::cell::RefCell::new(userdata);
+        self.context.set_measure_text_function(Box::new(
+            move |text: &str, config: &engine::InternalTextElementConfig| -> Dimensions {
+                let text_config = TextConfig::from_internal(config);
+                callback(text, &text_config, &mut data.borrow_mut())
+            },
+        ));
     }
 
     /// Set the callback for text measurement
@@ -611,175 +375,82 @@ impl Clay {
     where
         F: Fn(&str, &TextConfig) -> Dimensions + 'static,
     {
-        // Box the callback and userdata together
-        // Tuple here is to prevent Rust ZST optimization from breaking getting a raw pointer
-        let boxed = Box::new((callback, 0usize));
-
-        // Get a raw pointer to the boxed data
-        let user_data_ptr = Box::into_raw(boxed) as *mut core::ffi::c_void;
-
-        // Register the callback with the external C function
-        unsafe {
-            Self::set_measure_text_function_unsafe(measure_text_trampoline::<F>, user_data_ptr);
-        }
-
-        // Store the raw pointer for later cleanup
-        self.text_measure_callback = Some(user_data_ptr as *const core::ffi::c_void);
+        self.context.set_measure_text_function(Box::new(
+            move |text: &str, config: &engine::InternalTextElementConfig| -> Dimensions {
+                let text_config = TextConfig::from_internal(config);
+                callback(text, &text_config)
+            },
+        ));
     }
 
-    /// Set the callback for text measurement with user data.
-    /// # Safety
-    /// This function is unsafe because it sets a callback function without any error checking
-    pub unsafe fn set_measure_text_function_unsafe(
-        callback: unsafe extern "C" fn(
-            Clay_StringSlice,
-            *mut Clay_TextElementConfig,
-            *mut core::ffi::c_void,
-        ) -> Clay_Dimensions,
-        user_data: *mut core::ffi::c_void,
-    ) {
-        Clay_SetMeasureTextFunction(Some(callback), user_data);
-    }
-
-    /// Sets the maximum number of element that clay supports
-    /// **Use only if you know what you are doing or your getting errors from clay**
+    /// Sets the maximum number of elements that clay supports
+    /// **Use only if you know what you are doing or you're getting errors from clay**
     pub fn max_element_count(&mut self, max_element_count: u32) {
-        unsafe {
-            Clay_SetMaxElementCount(max_element_count as _);
-        }
+        self.context.set_max_element_count(max_element_count as i32);
     }
+
     /// Sets the capacity of the cache used for text in the measure text function
-    /// **Use only if you know what you are doing or your getting errors from clay**
-    pub fn max_measure_text_cache_word_count(&self, count: u32) {
-        unsafe {
-            Clay_SetMaxElementCount(count as _);
-        }
+    /// **Use only if you know what you are doing or you're getting errors from clay**
+    pub fn max_measure_text_cache_word_count(&mut self, count: u32) {
+        self.context.set_max_measure_text_cache_word_count(count as i32);
     }
 
     /// Enables or disables the debug mode of clay
-    pub fn set_debug_mode(&self, enable: bool) {
-        unsafe {
-            Clay_SetDebugModeEnabled(enable);
-        }
+    pub fn set_debug_mode(&mut self, enable: bool) {
+        self.context.set_debug_mode_enabled(enable);
     }
 
     /// Returns if debug mode is enabled
     pub fn is_debug_mode(&self) -> bool {
-        unsafe { Clay_IsDebugModeEnabled() }
+        self.context.is_debug_mode_enabled()
     }
 
     /// Enables or disables culling
-    pub fn set_culling(&self, enable: bool) {
-        unsafe {
-            Clay_SetCullingEnabled(enable);
-        }
+    pub fn set_culling(&mut self, enable: bool) {
+        self.context.set_culling_enabled(enable);
     }
 
     /// Sets the dimensions of the global layout, use if, for example the window size you render to
     /// changed
-    pub fn set_layout_dimensions(&self, dimensions: Dimensions) {
-        unsafe {
-            Clay_SetLayoutDimensions(dimensions.into());
-        }
+    pub fn set_layout_dimensions(&mut self, dimensions: Dimensions) {
+        self.context.set_layout_dimensions(dimensions);
     }
+
     /// Updates the state of the pointer for clay. Used to update scroll containers and for
     /// interactions functions
-    pub fn pointer_state(&self, position: Vector2, is_down: bool) {
-        unsafe {
-            Clay_SetPointerState(position.into(), is_down);
-        }
+    pub fn pointer_state(&mut self, position: Vector2, is_down: bool) {
+        self.context.set_pointer_state(position, is_down);
     }
+
     pub fn update_scroll_containers(
-        &self,
+        &mut self,
         drag_scrolling_enabled: bool,
         scroll_delta: Vector2,
         delta_time: f32,
     ) {
-        unsafe {
-            Clay_UpdateScrollContainers(drag_scrolling_enabled, scroll_delta.into(), delta_time);
-        }
+        self.context
+            .update_scroll_containers(drag_scrolling_enabled, scroll_delta, delta_time);
     }
 
     /// Returns if the current element you are creating is hovered
     pub fn hovered(&self) -> bool {
-        unsafe { Clay_Hovered() }
+        self.context.hovered()
     }
 
-    fn element_data(id: Id) -> Clay_ElementData {
-        unsafe { Clay_GetElementData(id.id) }
+    pub fn bounding_box(&self, id: Id) -> Option<math::BoundingBox> {
+        self.context.get_element_data(id.id)
     }
 
-    pub fn bounding_box(&self, id: Id) -> Option<BoundingBox> {
-        let element_data = Self::element_data(id);
-
-        if element_data.found {
-            Some(element_data.boundingBox.into())
+    pub fn scroll_container_data(&self, id: Id) -> Option<engine::ScrollContainerData> {
+        let data = self.context.get_scroll_container_data(id.id);
+        if data.found {
+            Some(data)
         } else {
             None
         }
     }
-    pub fn scroll_container_data(&self, id: Id) -> Option<Clay_ScrollContainerData> {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        unsafe {
-            Clay_SetCurrentContext(self.context);
-            let scroll_container_data = Clay_GetScrollContainerData(id.id);
-
-            if scroll_container_data.found {
-                Some(scroll_container_data)
-            } else {
-                None
-            }
-        }
-    }
 }
 
-#[cfg(feature = "std")]
-impl Drop for Clay {
-    fn drop(&mut self) {
-        let _ffi_guard = ClayFfiGuard::acquire();
-        unsafe {
-            if let Some(ptr) = self.text_measure_callback {
-                let _ = Box::from_raw(ptr as *mut (usize, usize));
-            }
-
-            if Clay_GetCurrentContext() == self.context {
-                Clay_SetCurrentContext(core::ptr::null_mut() as _);
-            }
-        }
-    }
-}
-
-impl From<&str> for Clay_String {
-    fn from(value: &str) -> Self {
-        Self {
-            isStaticallyAllocated: true,
-            length: value.len() as _,
-            chars: value.as_ptr() as _,
-        }
-    }
-}
-
-impl From<Clay_String> for &str {
-    fn from(value: Clay_String) -> Self {
-        unsafe {
-            core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                value.chars as *const u8,
-                value.length as _,
-            ))
-        }
-    }
-}
-
-impl From<Clay_StringSlice> for &str {
-    fn from(value: Clay_StringSlice) -> Self {
-        unsafe {
-            core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                value.chars as *const u8,
-                value.length as _,
-            ))
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

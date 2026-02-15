@@ -1,8 +1,8 @@
-use crate::bindings::*;
+use crate::engine;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Id {
-    pub id: Clay_ElementId,
+    pub(crate) id: engine::ElementId,
 }
 
 impl Id {
@@ -15,18 +15,13 @@ impl Id {
     /// Creates a clay id using the `label` and the `index`
     #[inline]
     pub(crate) fn new_index(label: &'static str, index: u32) -> Id {
-        Self::new_index_internal(label, index)
-    }
-
-    #[inline]
-    pub(crate) fn new_index_internal(label: &'static str, index: u32) -> Id {
-        let id = unsafe { Clay__HashStringWithOffset(label.into(), index, 0) };
+        let id = engine::hash_string_with_offset(label, index, 0);
         Id { id }
     }
 
     #[inline]
-    pub(crate) fn new_index_local(label: &'static str, index: u32) -> Id {
-        let id = unsafe { Clay__HashStringWithOffset(label.into(), index, Clay__GetParentElementId()) };
+    pub(crate) fn new_index_local_with_parent(label: &'static str, index: u32, parent_id: u32) -> Id {
+        let id = engine::hash_string_with_offset(label, index, parent_id);
         Id { id }
     }
 }

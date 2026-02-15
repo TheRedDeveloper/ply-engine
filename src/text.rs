@@ -1,34 +1,38 @@
-use crate::{bindings::*, color::Color};
+use crate::color::Color;
+use crate::engine;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum TextElementConfigWrapMode {
     /// Wraps on whitespaces not breaking words
-    Words = Clay_TextElementConfigWrapMode_CLAY_TEXT_WRAP_WORDS,
+    #[default]
+    Words,
     /// Only wraps on new line characters
-    Newline = Clay_TextElementConfigWrapMode_CLAY_TEXT_WRAP_NEWLINES,
+    Newline,
     /// Never wraps, can overflow of parent layout
-    None = Clay_TextElementConfigWrapMode_CLAY_TEXT_WRAP_NONE,
+    None,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum TextAlignment {
     /// Aligns the text to the left.
-    Left = Clay_TextAlignment_CLAY_TEXT_ALIGN_LEFT,
+    #[default]
+    Left,
     /// Aligns the text to the center.
-    Center = Clay_TextAlignment_CLAY_TEXT_ALIGN_CENTER,
+    Center,
     /// Aligns the text to the right.
-    Right = Clay_TextAlignment_CLAY_TEXT_ALIGN_RIGHT,
+    Right,
 }
 
 pub struct TextElementConfig {
-    inner: *mut Clay_TextElementConfig,
+    pub(crate) inner: engine::InternalTextElementConfig,
 }
 
-impl From<TextElementConfig> for *mut Clay_TextElementConfig {
-    fn from(value: TextElementConfig) -> Self {
-        value.inner
+impl TextElementConfig {
+    /// Converts this config into the engine's internal text config.
+    pub fn into_internal(self) -> engine::InternalTextElementConfig {
+        self.inner
     }
 }
 
@@ -110,8 +114,31 @@ impl TextConfig {
     /// Finalizes the text configuration and stores it in memory.
     #[inline]
     pub fn end(&self) -> TextElementConfig {
-        let memory = unsafe { Clay__StoreTextElementConfig((*self).into()) };
-        TextElementConfig { inner: memory }
+        TextElementConfig {
+            inner: engine::InternalTextElementConfig {
+                user_data: 0,
+                text_color: self.color,
+                font_id: self.font_id,
+                font_size: self.font_size,
+                letter_spacing: self.letter_spacing,
+                line_height: self.line_height,
+                wrap_mode: self.wrap_mode,
+                text_alignment: self.alignment,
+            },
+        }
+    }
+
+    /// Creates a TextConfig from an InternalTextElementConfig
+    pub fn from_internal(config: &engine::InternalTextElementConfig) -> Self {
+        Self {
+            color: config.text_color,
+            font_id: config.font_id,
+            font_size: config.font_size,
+            letter_spacing: config.letter_spacing,
+            line_height: config.line_height,
+            wrap_mode: config.wrap_mode,
+            alignment: config.text_alignment,
+        }
     }
 }
 
@@ -125,37 +152,6 @@ impl Default for TextConfig {
             line_height: 0,
             wrap_mode: TextElementConfigWrapMode::Words,
             alignment: TextAlignment::Left,
-        }
-    }
-}
-
-impl From<TextConfig> for Clay_TextElementConfig {
-    fn from(value: TextConfig) -> Self {
-        Self {
-            userData: core::ptr::null_mut(),
-            textColor: value.color.into(),
-            fontId: value.font_id,
-            fontSize: value.font_size,
-            letterSpacing: value.letter_spacing,
-            lineHeight: value.line_height,
-            wrapMode: value.wrap_mode as _,
-            textAlignment: value.alignment as _,
-        }
-    }
-}
-
-impl From<Clay_TextElementConfig> for TextConfig {
-    fn from(value: Clay_TextElementConfig) -> Self {
-        Self {
-            color: value.textColor.into(),
-            font_id: value.fontId,
-            font_size: value.fontSize,
-            letter_spacing: value.letterSpacing,
-            line_height: value.lineHeight,
-            wrap_mode: unsafe {
-                core::mem::transmute::<u8, TextElementConfigWrapMode>(value.wrapMode)
-            },
-            alignment: unsafe { core::mem::transmute::<u8, TextAlignment>(value.textAlignment) },
         }
     }
 }

@@ -1,17 +1,17 @@
-use crate::{bindings::*, Declaration};
+use crate::{engine, Declaration};
 
 /// Defines different sizing behaviors for an element.
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum SizingType {
     /// The element's size is determined by its content and constrained by min/max values.
-    Fit = Clay__SizingType_CLAY__SIZING_TYPE_FIT,
+    Fit,
     /// The element expands to fill available space within min/max constraints.
-    Grow = Clay__SizingType_CLAY__SIZING_TYPE_GROW,
+    Grow,
     /// The element's size is fixed to a percentage of its parent.
-    Percent = Clay__SizingType_CLAY__SIZING_TYPE_PERCENT,
+    Percent,
     /// The element's size is set to a fixed value.
-    Fixed = Clay__SizingType_CLAY__SIZING_TYPE_FIXED,
+    Fixed,
 }
 
 /// Represents different sizing strategies for layout elements.
@@ -27,34 +27,32 @@ pub enum Sizing {
     Percent(f32),
 }
 
-/// Converts a `Sizing` value into a `Clay_SizingAxis` representation.
-impl From<Sizing> for Clay_SizingAxis {
+/// Converts a `Sizing` value into an engine `SizingAxis`.
+impl From<Sizing> for engine::SizingAxis {
     fn from(value: Sizing) -> Self {
         match value {
             Sizing::Fit(min, max) => Self {
-                type_: SizingType::Fit as _,
-                size: Clay_SizingAxis__bindgen_ty_1 {
-                    minMax: Clay_SizingMinMax { min, max },
-                },
+                type_: engine::SizingType::Fit,
+                min_max: engine::SizingMinMax { min, max },
+                percent: 0.0,
             },
             Sizing::Grow(min, max) => Self {
-                type_: SizingType::Grow as _,
-                size: Clay_SizingAxis__bindgen_ty_1 {
-                    minMax: Clay_SizingMinMax { min, max },
-                },
+                type_: engine::SizingType::Grow,
+                min_max: engine::SizingMinMax { min, max },
+                percent: 0.0,
             },
             Sizing::Fixed(size) => Self {
-                type_: SizingType::Fixed as _,
-                size: Clay_SizingAxis__bindgen_ty_1 {
-                    minMax: Clay_SizingMinMax {
-                        min: size,
-                        max: size,
-                    },
+                type_: engine::SizingType::Fixed,
+                min_max: engine::SizingMinMax {
+                    min: size,
+                    max: size,
                 },
+                percent: 0.0,
             },
             Sizing::Percent(percent) => Self {
-                type_: SizingType::Percent as _,
-                size: Clay_SizingAxis__bindgen_ty_1 { percent },
+                type_: engine::SizingType::Percent,
+                min_max: engine::SizingMinMax { min: 0.0, max: 0.0 },
+                percent,
             },
         }
     }
@@ -103,27 +101,29 @@ impl Padding {
 }
 
 /// Represents horizontal alignment options for layout elements.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum LayoutAlignmentX {
     /// Aligns to the left.
-    Left = Clay_LayoutAlignmentX_CLAY_ALIGN_X_LEFT,
+    #[default]
+    Left,
     /// Centers the element.
-    Center = Clay_LayoutAlignmentX_CLAY_ALIGN_X_CENTER,
+    Center,
     /// Aligns to the right.
-    Right = Clay_LayoutAlignmentX_CLAY_ALIGN_X_RIGHT,
+    Right,
 }
 
 /// Represents vertical alignment options for layout elements.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum LayoutAlignmentY {
     /// Aligns to the top.
-    Top = Clay_LayoutAlignmentY_CLAY_ALIGN_Y_TOP,
+    #[default]
+    Top,
     /// Centers the element.
-    Center = Clay_LayoutAlignmentY_CLAY_ALIGN_Y_CENTER,
+    Center,
     /// Aligns to the bottom.
-    Bottom = Clay_LayoutAlignmentY_CLAY_ALIGN_Y_BOTTOM,
+    Bottom,
 }
 
 /// Controls child alignment within a layout.
@@ -141,13 +141,14 @@ impl Alignment {
 }
 
 /// Defines the layout direction for arranging child elements.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum LayoutDirection {
     /// Arranges elements from left to right.
-    LeftToRight = Clay_LayoutDirection_CLAY_LEFT_TO_RIGHT,
+    #[default]
+    LeftToRight,
     /// Arranges elements from top to bottom.
-    TopToBottom = Clay_LayoutDirection_CLAY_TOP_TO_BOTTOM,
+    TopToBottom,
 }
 
 /// Builder for configuring layout properties in a `Declaration`.
@@ -198,22 +199,22 @@ impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'rende
     /// Sets the spacing between child elements.
     #[inline]
     pub fn child_gap(&mut self, child_gap: u16) -> &mut Self {
-        self.parent.inner.layout.childGap = child_gap;
+        self.parent.inner.layout.child_gap = child_gap;
         self
     }
 
     /// Sets the alignment of child elements.
     #[inline]
     pub fn child_alignment(&mut self, child_alignment: Alignment) -> &mut Self {
-        self.parent.inner.layout.childAlignment.x = child_alignment.x as _;
-        self.parent.inner.layout.childAlignment.y = child_alignment.y as _;
+        self.parent.inner.layout.child_alignment.x = child_alignment.x;
+        self.parent.inner.layout.child_alignment.y = child_alignment.y;
         self
     }
 
     /// Sets the layout direction.
     #[inline]
     pub fn direction(&mut self, direction: LayoutDirection) -> &mut Self {
-        self.parent.inner.layout.layoutDirection = direction as _;
+        self.parent.inner.layout.layout_direction = direction;
         self
     }
 

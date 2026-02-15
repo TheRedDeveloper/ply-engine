@@ -1,4 +1,4 @@
-use crate::{bindings::*, color::Color, math::BoundingBox};
+use crate::{color::Color, engine, math::BoundingBox};
 
 /// Represents a rectangle with a specified color and corner radii.
 #[derive(Debug, Clone)]
@@ -87,79 +87,13 @@ pub struct Custom<'a, CustomElementData> {
     pub data: &'a CustomElementData,
 }
 
-impl From<Clay_RectangleRenderData> for Rectangle {
-    fn from(value: Clay_RectangleRenderData) -> Self {
+impl From<engine::CornerRadius> for CornerRadii {
+    fn from(value: engine::CornerRadius) -> Self {
         Self {
-            color: value.backgroundColor.into(),
-            corner_radii: value.cornerRadius.into(),
-        }
-    }
-}
-
-impl From<Clay_TextRenderData> for Text<'_> {
-    fn from(value: Clay_TextRenderData) -> Self {
-        let text = unsafe {
-            core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                value.stringContents.chars as *const u8,
-                value.stringContents.length as _,
-            ))
-        };
-
-        Self {
-            text,
-            color: value.textColor.into(),
-            font_id: value.fontId,
-            font_size: value.fontSize,
-            letter_spacing: value.letterSpacing,
-            line_height: value.lineHeight,
-        }
-    }
-}
-
-impl<ImageElementData> Image<'_, ImageElementData> {
-    pub(crate) unsafe fn from_clay_image_render_data(value: Clay_ImageRenderData) -> Self {
-        Self {
-            data: unsafe { &*value.imageData.cast() },
-            corner_radii: value.cornerRadius.into(),
-            background_color: value.backgroundColor.into(),
-        }
-    }
-}
-
-impl From<Clay_CornerRadius> for CornerRadii {
-    fn from(value: Clay_CornerRadius) -> Self {
-        Self {
-            top_left: value.topLeft,
-            top_right: value.topRight,
-            bottom_left: value.bottomLeft,
-            bottom_right: value.bottomRight,
-        }
-    }
-}
-
-impl From<Clay_BorderRenderData> for Border {
-    fn from(value: Clay_BorderRenderData) -> Self {
-        Self {
-            color: value.color.into(),
-            corner_radii: value.cornerRadius.into(),
-
-            width: BorderWidth {
-                left: value.width.left,
-                right: value.width.right,
-                top: value.width.top,
-                bottom: value.width.bottom,
-                between_children: value.width.betweenChildren,
-            },
-        }
-    }
-}
-
-impl<CustomElementData> Custom<'_, CustomElementData> {
-    pub(crate) unsafe fn from_clay_custom_element_data(value: Clay_CustomRenderData) -> Self {
-        Self {
-            background_color: value.backgroundColor.into(),
-            corner_radii: value.cornerRadius.into(),
-            data: unsafe { &*value.customData.cast() },
+            top_left: value.top_left,
+            top_right: value.top_right,
+            bottom_left: value.bottom_left,
+            bottom_right: value.bottom_right,
         }
     }
 }
@@ -179,28 +113,78 @@ pub enum RenderCommandConfig<'a, ImageElementData, CustomElementData> {
 impl<ImageElementData, CustomElementData>
     RenderCommandConfig<'_, ImageElementData, CustomElementData>
 {
-    #[allow(non_upper_case_globals)]
-    pub(crate) unsafe fn from_clay_render_command(value: &Clay_RenderCommand) -> Self {
-        match value.commandType {
-            Clay_RenderCommandType_CLAY_RENDER_COMMAND_TYPE_NONE => Self::None(),
-            Clay_RenderCommandType_CLAY_RENDER_COMMAND_TYPE_RECTANGLE => {
-                Self::Rectangle(Rectangle::from(*unsafe { &value.renderData.rectangle }))
+    pub(crate) unsafe fn from_engine_render_command(value: &engine::InternalRenderCommand) -> Self {
+        match value.command_type {
+            engine::RenderCommandType::None => Self::None(),
+            engine::RenderCommandType::Rectangle => {
+                if let engine::InternalRenderData::Rectangle { background_color, corner_radius } = &value.render_data {
+                    Self::Rectangle(Rectangle {
+                        color: *background_color,
+                        corner_radii: (*corner_radius).into(),
+                    })
+                } else {
+                    Self::None()
+                }
             }
-            Clay_RenderCommandType_CLAY_RENDER_COMMAND_TYPE_TEXT => {
-                Self::Text(Text::from(*unsafe { &value.renderData.text }))
+            engine::RenderCommandType::Text => {
+                if let engine::InternalRenderData::Text { text_ptr, text_length, text_color, font_id, font_size, letter_spacing, line_height } = &value.render_data {
+                    let text = core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                        *text_ptr as *const u8,
+                        *text_length as usize,
+                    ));
+                    Self::Text(Text {
+                        text,
+                        color: *text_color,
+                        font_id: *font_id,
+                        font_size: *font_size,
+                        letter_spacing: *letter_spacing,
+                        line_height: *line_height,
+                    })
+                } else {
+                    Self::None()
+                }
             }
-            Clay_RenderCommandType_CLAY_RENDER_COMMAND_TYPE_BORDER => {
-                Self::Border(Border::from(*unsafe { &value.renderData.border }))
+            engine::RenderCommandType::Border => {
+                if let engine::InternalRenderData::Border { color, corner_radius, width } = &value.render_data {
+                    Self::Border(Border {
+                        color: *color,
+                        corner_radii: (*corner_radius).into(),
+                        width: BorderWidth {
+                            left: width.left,
+                            right: width.right,
+                            top: width.top,
+                            bottom: width.bottom,
+                            between_children: width.between_children,
+                        },
+                    })
+                } else {
+                    Self::None()
+                }
             }
-            Clay_RenderCommandType_CLAY_RENDER_COMMAND_TYPE_IMAGE => {
-                Self::Image(unsafe { Image::from_clay_image_render_data(value.renderData.image) })
+            engine::RenderCommandType::Image => {
+                if let engine::InternalRenderData::Image { background_color, corner_radius, image_data } = &value.render_data {
+                    Self::Image(Image {
+                        data: &*(*image_data as *const ImageElementData),
+                        corner_radii: (*corner_radius).into(),
+                        background_color: *background_color,
+                    })
+                } else {
+                    Self::None()
+                }
             }
-            Clay_RenderCommandType_CLAY_RENDER_COMMAND_TYPE_SCISSOR_START => Self::ScissorStart(),
-            Clay_RenderCommandType_CLAY_RENDER_COMMAND_TYPE_SCISSOR_END => Self::ScissorEnd(),
-            Clay_RenderCommandType_CLAY_RENDER_COMMAND_TYPE_CUSTOM => Self::Custom(unsafe {
-                Custom::from_clay_custom_element_data(value.renderData.custom)
-            }),
-            _ => unreachable!(),
+            engine::RenderCommandType::ScissorStart => Self::ScissorStart(),
+            engine::RenderCommandType::ScissorEnd => Self::ScissorEnd(),
+            engine::RenderCommandType::Custom => {
+                if let engine::InternalRenderData::Custom { background_color, corner_radius, custom_data } = &value.render_data {
+                    Self::Custom(Custom {
+                        background_color: *background_color,
+                        corner_radii: (*corner_radius).into(),
+                        data: &*(*custom_data as *const CustomElementData),
+                    })
+                } else {
+                    Self::None()
+                }
+            }
         }
     }
 }
@@ -220,12 +204,12 @@ pub struct RenderCommand<'a, ImageElementData, CustomElementData> {
 }
 
 impl<ImageElementData, CustomElementData> RenderCommand<'_, ImageElementData, CustomElementData> {
-    pub(crate) unsafe fn from_clay_render_command(value: Clay_RenderCommand) -> Self {
+    pub(crate) unsafe fn from_engine_render_command(value: &engine::InternalRenderCommand) -> Self {
         Self {
             id: value.id,
-            z_index: value.zIndex,
-            bounding_box: value.boundingBox.into(),
-            config: unsafe { RenderCommandConfig::from_clay_render_command(&value) },
+            z_index: value.z_index,
+            bounding_box: value.bounding_box,
+            config: RenderCommandConfig::from_engine_render_command(value),
         }
     }
 }
