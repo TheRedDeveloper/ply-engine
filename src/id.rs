@@ -1,6 +1,6 @@
 use crate::engine;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Id {
     pub(crate) id: engine::ElementId,
 }

@@ -4,7 +4,7 @@ A pure Rust UI layout engine built on [macroquad](https://github.com/not-fl3/mac
 
 ## Features
 
-- **Pure Rust** — no C bindings, no FFI
+- **Pure Rust** — no C bindings, no FFI, no irremovable `unsafe` code
 - **Macroquad renderer** — antialiased rounded rectangles, borders, clipping, images, and text out of the box
 - **TextureManager** — automatic GPU texture caching with configurable eviction, supports file paths and embedded bytes
 - **TinyVG support** — render resolution-independent vector graphics via the `tinyvg` feature
@@ -68,7 +68,7 @@ async fn main() {
         clear_background(BLACK);
 
         // Begin layout
-        let mut ply = ply.begin::<()>();
+        let mut ply = ply.begin();
 
         // A column filling the screen
         ply.with(

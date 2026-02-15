@@ -2,7 +2,7 @@ use macroquad::prelude::*;
 use crate::{math::BoundingBox, render_commands::{CornerRadii, RenderCommand, RenderCommandConfig}};
 
 #[cfg(feature = "text-styling")]
-use crate::text_styling::{parse_text_lines, render_styled_text, StyledSegment};
+use crate::text_styling::{render_styled_text, StyledSegment};
 #[cfg(feature = "text-styling")]
 use std::collections::HashMap;
 
@@ -873,10 +873,10 @@ fn resize(texture: &Texture2D, height: f32, width: f32, clip: &Option<(i32, i32,
     render_target.texture
 }
 
-pub async fn render<'a, CustomElementData: 'a>(
-    commands: impl Iterator<Item = RenderCommand<'a, CustomElementData>>,
+pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
+    commands: impl Iterator<Item = RenderCommand<CustomElementData>>,
     fonts: &[Font],
-    handle_custom_command: impl Fn(&RenderCommand<'a, CustomElementData>),
+    handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
 ) {
     let mut state = RenderState::new();
     for command in commands {
@@ -1214,7 +1214,7 @@ pub async fn render<'a, CustomElementData: 'a>(
                 let normal_render = || {
                     let x_scale = if config.letter_spacing > 0 {
                         bb.width / measure_text(
-                            config.text,
+                            &config.text,
                             font,
                             config.font_size as u16,
                             1.0
@@ -1223,7 +1223,7 @@ pub async fn render<'a, CustomElementData: 'a>(
                         1.0
                     };
                     draw_text_ex(
-                        config.text,
+                        &config.text,
                         bb.x,
                         bb.y + bb.height,
                         TextParams {
@@ -1328,7 +1328,7 @@ pub async fn render<'a, CustomElementData: 'a>(
                     
                     let x_scale = if config.letter_spacing > 0 {
                         bb.width / measure_text(
-                            config.text,
+                            &config.text,
                             Some(&fonts[config.font_id as usize]),
                             config.font_size as u16,
                             1.0
@@ -1407,7 +1407,7 @@ pub async fn render<'a, CustomElementData: 'a>(
 
                 let x_scale = if config.letter_spacing > 0 {
                     bb.width / measure_text(
-                        config.text,
+                        &config.text,
                         Some(&fonts[config.font_id as usize]),
                         config.font_size as u16,
                         1.0

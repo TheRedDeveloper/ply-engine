@@ -10,11 +10,9 @@ license-file = "LICENSE.md"
 exclude = ["scripts/*", ".vscode/*", ".github/*", ".cargo/*"]
 
 [features]
-default = ["std"]
+default = []
 text-styling = []
 tinyvg = ["dep:tinyvg", "kurbo", "lyon"]
-
-std = []
 
 [dependencies]
 macroquad = { version = "0.4" }

@@ -154,19 +154,18 @@ pub enum LayoutDirection {
 /// Builder for configuring layout properties in a `Declaration`.
 pub struct LayoutBuilder<
     'declaration,
-    'render,
-    CustomElementData: 'render,
+    CustomElementData: Clone + Default + std::fmt::Debug,
 > {
-    parent: &'declaration mut Declaration<'render, CustomElementData>,
+    parent: &'declaration mut Declaration<CustomElementData>,
 }
 
-impl<'declaration, 'render, CustomElementData: 'render>
-    LayoutBuilder<'declaration, 'render, CustomElementData>
+impl<'declaration, CustomElementData: Clone + Default + std::fmt::Debug>
+    LayoutBuilder<'declaration, CustomElementData>
 {
     /// Creates a new `LayoutBuilder` with the given parent `Declaration`.
     #[inline]
     pub fn new(
-        parent: &'declaration mut Declaration<'render, CustomElementData>,
+        parent: &'declaration mut Declaration<CustomElementData>,
     ) -> Self {
         LayoutBuilder { parent }
     }
@@ -219,7 +218,7 @@ impl<'declaration, 'render, CustomElementData: 'render>
 
     /// Returns the modified `Declaration`.
     #[inline]
-    pub fn end(&mut self) -> &mut Declaration<'render, CustomElementData> {
+    pub fn end(&mut self) -> &mut Declaration<CustomElementData> {
         self.parent
     }
 }

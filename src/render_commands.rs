@@ -11,9 +11,9 @@ pub struct Rectangle {
 
 /// Represents a text element with styling attributes.
 #[derive(Debug, Clone)]
-pub struct Text<'a> {
+pub struct Text {
     /// The text content.
-    pub text: &'a str,
+    pub text: String,
     /// The color of the text.
     pub color: Color,
     /// The ID of the font used.
@@ -78,13 +78,13 @@ pub struct Image {
 
 /// Represents a custom element with a background color, corner radii, and associated data.
 #[derive(Debug, Clone)]
-pub struct Custom<'a, CustomElementData> {
+pub struct Custom<CustomElementData> {
     /// The background color of the custom element.
     pub background_color: Color,
     /// The corner radii for rounded edges.
     pub corner_radii: CornerRadii,
-    /// A pointer to additional custom data.
-    pub data: &'a CustomElementData,
+    /// The custom element data.
+    pub data: CustomElementData,
 }
 
 impl From<engine::CornerRadius> for CornerRadii {
@@ -99,21 +99,21 @@ impl From<engine::CornerRadius> for CornerRadii {
 }
 
 #[derive(Debug, Clone)]
-pub enum RenderCommandConfig<'a, CustomElementData> {
+pub enum RenderCommandConfig<CustomElementData> {
     None(),
     Rectangle(Rectangle),
     Border(Border),
-    Text(Text<'a>),
+    Text(Text),
     Image(Image),
     ScissorStart(),
     ScissorEnd(),
-    Custom(Custom<'a, CustomElementData>),
+    Custom(Custom<CustomElementData>),
 }
 
-impl<CustomElementData>
-    RenderCommandConfig<'_, CustomElementData>
+impl<CustomElementData: Clone + Default + std::fmt::Debug>
+    RenderCommandConfig<CustomElementData>
 {
-    pub(crate) unsafe fn from_engine_render_command(value: &engine::InternalRenderCommand) -> Self {
+    pub(crate) fn from_engine_render_command(value: &engine::InternalRenderCommand<CustomElementData>) -> Self {
         match value.command_type {
             engine::RenderCommandType::None => Self::None(),
             engine::RenderCommandType::Rectangle => {
@@ -127,13 +127,9 @@ impl<CustomElementData>
                 }
             }
             engine::RenderCommandType::Text => {
-                if let engine::InternalRenderData::Text { text_ptr, text_length, text_color, font_id, font_size, letter_spacing, line_height } = &value.render_data {
-                    let text = core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                        *text_ptr as *const u8,
-                        *text_length as usize,
-                    ));
+                if let engine::InternalRenderData::Text { text, text_color, font_id, font_size, letter_spacing, line_height } = &value.render_data {
                     Self::Text(Text {
-                        text,
+                        text: text.clone(),
                         color: *text_color,
                         font_id: *font_id,
                         font_size: *font_size,
@@ -164,7 +160,7 @@ impl<CustomElementData>
             engine::RenderCommandType::Image => {
                 if let engine::InternalRenderData::Image { background_color, corner_radius, image_data } = &value.render_data {
                     Self::Image(Image {
-                        data: &*(*image_data as *const Asset),
+                        data: *image_data,
                         corner_radii: (*corner_radius).into(),
                         background_color: *background_color,
                     })
@@ -179,7 +175,7 @@ impl<CustomElementData>
                     Self::Custom(Custom {
                         background_color: *background_color,
                         corner_radii: (*corner_radius).into(),
-                        data: &*(*custom_data as *const CustomElementData),
+                        data: custom_data.clone(),
                     })
                 } else {
                     Self::None()
@@ -191,11 +187,11 @@ impl<CustomElementData>
 
 /// Represents a render command for drawing an element on the screen.
 #[derive(Debug, Clone)]
-pub struct RenderCommand<'a, CustomElementData> {
+pub struct RenderCommand<CustomElementData> {
     /// The bounding box defining the area occupied by the element.
     pub bounding_box: BoundingBox,
     /// The specific configuration for rendering this command.
-    pub config: RenderCommandConfig<'a, CustomElementData>,
+    pub config: RenderCommandConfig<CustomElementData>,
     /// A unique identifier for the render command.
     pub id: u32,
     /// The z-index determines the stacking order of elements.
@@ -203,8 +199,8 @@ pub struct RenderCommand<'a, CustomElementData> {
     pub z_index: i16,
 }
 
-impl<CustomElementData> RenderCommand<'_, CustomElementData> {
-    pub(crate) unsafe fn from_engine_render_command(value: &engine::InternalRenderCommand) -> Self {
+impl<CustomElementData: Clone + Default + std::fmt::Debug> RenderCommand<CustomElementData> {
+    pub(crate) fn from_engine_render_command(value: &engine::InternalRenderCommand<CustomElementData>) -> Self {
         Self {
             id: value.id,
             z_index: value.z_index,

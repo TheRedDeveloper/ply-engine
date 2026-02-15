@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use crate::color::Color;
+use crate::renderer::Asset;
 use crate::elements::{
     FloatingAttachPointType, FloatingAttachToElement, FloatingClipToElement, PointerCaptureMode,
 };
@@ -212,30 +213,30 @@ impl Default for InternalTextElementConfig {
 }
 
 /// The top-level element declaration.
-#[derive(Debug, Clone, Copy)]
-pub struct ElementDeclaration {
+#[derive(Debug, Clone)]
+pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     pub layout: LayoutConfig,
     pub background_color: Color,
     pub corner_radius: CornerRadius,
     pub aspect_ratio: f32,
-    pub image_data: usize, // opaque pointer stored as usize
+    pub image_data: Option<&'static Asset>,
     pub floating: FloatingConfig,
-    pub custom_data: usize, // opaque pointer stored as usize
+    pub custom_data: Option<CustomElementData>,
     pub clip: ClipConfig,
     pub border: BorderConfig,
     pub user_data: usize,
 }
 
-impl Default for ElementDeclaration {
+impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDeclaration<CustomElementData> {
     fn default() -> Self {
         Self {
             layout: LayoutConfig::default(),
             background_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
             corner_radius: CornerRadius::default(),
             aspect_ratio: 0.0,
-            image_data: 0,
+            image_data: None,
             floating: FloatingConfig::default(),
-            custom_data: 0,
+            custom_data: None,
             clip: ClipConfig::default(),
             border: BorderConfig::default(),
             user_data: 0,
@@ -247,7 +248,7 @@ impl Default for ElementDeclaration {
 // ElementId
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ElementId {
     pub id: u32,
     pub offset: u32,
@@ -255,25 +256,31 @@ pub struct ElementId {
     pub string_id: StringId,
 }
 
-/// Lightweight string reference for debug purposes.
-#[derive(Debug, Clone, Copy, Default)]
+/// Owned string for debug/display purposes.
+#[derive(Debug, Clone, Default)]
 pub struct StringId {
-    pub ptr: usize,
-    pub length: i32,
-    pub is_static: bool,
+    text: String,
 }
 
 impl StringId {
     pub fn from_str(s: &str) -> Self {
         Self {
-            ptr: s.as_ptr() as usize,
-            length: s.len() as i32,
-            is_static: true,
+            text: s.to_string(),
         }
     }
 
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Get the string content.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// Returns true if the string is empty.
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
     }
 }
 
@@ -303,14 +310,13 @@ struct ElementConfigSlice {
 #[derive(Debug, Clone, Copy, Default)]
 struct WrappedTextLine {
     dimensions: Dimensions,
-    line_ptr: usize,
-    line_length: i32,
+    start: usize,
+    length: usize,
 }
 
 #[derive(Debug, Clone)]
 struct TextElementData {
-    text_ptr: usize,
-    text_length: i32,
+    text: String,
     preferred_dimensions: Dimensions,
     element_index: i32,
     wrapped_lines_start: usize,
@@ -347,7 +353,7 @@ impl Clone for LayoutElementHashMapItem {
     fn clone(&self) -> Self {
         Self {
             bounding_box: self.bounding_box,
-            element_id: self.element_id,
+            element_id: self.element_id.clone(),
             layout_element_index: self.layout_element_index,
             on_hover_fn: None, // Callbacks are not cloneable
             generation: self.generation,
@@ -428,26 +434,25 @@ struct BooleanWarnings {
 // Render command types
 // ============================================================================
 
-#[derive(Debug, Clone, Copy)]
-pub struct InternalRenderCommand {
+#[derive(Debug, Clone)]
+pub struct InternalRenderCommand<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     pub bounding_box: BoundingBox,
     pub command_type: RenderCommandType,
-    pub render_data: InternalRenderData,
+    pub render_data: InternalRenderData<CustomElementData>,
     pub user_data: usize,
     pub id: u32,
     pub z_index: i16,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum InternalRenderData {
+#[derive(Debug, Clone)]
+pub enum InternalRenderData<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     None,
     Rectangle {
         background_color: Color,
         corner_radius: CornerRadius,
     },
     Text {
-        text_ptr: usize,
-        text_length: i32,
+        text: String,
         text_color: Color,
         font_id: u16,
         font_size: u16,
@@ -457,12 +462,12 @@ pub enum InternalRenderData {
     Image {
         background_color: Color,
         corner_radius: CornerRadius,
-        image_data: usize,
+        image_data: &'static Asset,
     },
     Custom {
         background_color: Color,
         corner_radius: CornerRadius,
-        custom_data: usize,
+        custom_data: CustomElementData,
     },
     Border {
         color: Color,
@@ -475,13 +480,13 @@ pub enum InternalRenderData {
     },
 }
 
-impl Default for InternalRenderData {
+impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for InternalRenderData<CustomElementData> {
     fn default() -> Self {
         Self::None
     }
 }
 
-impl Default for InternalRenderCommand {
+impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for InternalRenderCommand<CustomElementData> {
     fn default() -> Self {
         Self {
             bounding_box: BoundingBox::default(),
@@ -525,7 +530,7 @@ impl Default for ScrollContainerData {
 // PlyContext - the main layout engine context
 // ============================================================================
 
-pub struct PlyContext {
+pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     // Settings
     pub max_element_count: i32,
     pub max_measure_text_cache_word_count: i32,
@@ -550,7 +555,7 @@ pub struct PlyContext {
 
     // Layout elements
     layout_elements: Vec<LayoutElement>,
-    render_commands: Vec<InternalRenderCommand>,
+    render_commands: Vec<InternalRenderCommand<CustomElementData>>,
     open_layout_element_stack: Vec<i32>,
     layout_element_children: Vec<i32>,
     layout_element_children_buffer: Vec<i32>,
@@ -564,10 +569,10 @@ pub struct PlyContext {
     element_configs: Vec<ElementConfig>,
     text_element_configs: Vec<InternalTextElementConfig>,
     aspect_ratio_configs: Vec<f32>,
-    image_element_configs: Vec<usize>, // imageData pointer
+    image_element_configs: Vec<&'static Asset>,
     floating_element_configs: Vec<FloatingConfig>,
     clip_element_configs: Vec<ClipConfig>,
-    custom_element_configs: Vec<usize>, // customData pointer
+    custom_element_configs: Vec<CustomElementData>,
     border_element_configs: Vec<BorderConfig>,
     shared_element_configs: Vec<SharedElementConfig>,
 
@@ -601,7 +606,6 @@ pub struct PlyContext {
     dynamic_string_data: Vec<u8>,
 
     // Debug view: heap-allocated strings that survive the frame
-    debug_strings: Vec<String>,
 }
 
 // ============================================================================
@@ -679,23 +683,10 @@ fn hash_number(offset: u32, seed: u32) -> ElementId {
 }
 
 fn hash_string_contents_with_config(
-    text_ptr: usize,
-    text_length: i32,
-    is_static: bool,
+    text: &str,
     config: &InternalTextElementConfig,
 ) -> u32 {
-    let mut hash: u32 = 0;
-    if is_static {
-        hash = hash.wrapping_add(text_ptr as u32);
-        hash = hash.wrapping_add(hash << 10);
-        hash ^= hash >> 6;
-        hash = hash.wrapping_add(text_length as u32);
-        hash = hash.wrapping_add(hash << 10);
-        hash ^= hash >> 6;
-    } else {
-        let data = unsafe { core::slice::from_raw_parts(text_ptr as *const u8, text_length as usize) };
-        hash = (hash_data_scalar(data) % u32::MAX as u64) as u32;
-    }
+    let mut hash: u32 = (hash_data_scalar(text.as_bytes()) % u32::MAX as u64) as u32;
     hash = hash.wrapping_add(config.font_id as u32);
     hash = hash.wrapping_add(hash << 10);
     hash ^= hash >> 6;
@@ -731,7 +722,7 @@ fn point_is_inside_rect(point: Vector2, rect: BoundingBox) -> bool {
 // PlyContext implementation
 // ============================================================================
 
-impl PlyContext {
+impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElementData> {
     pub fn new(dimensions: Dimensions) -> Self {
         let max_element_count = DEFAULT_MAX_ELEMENT_COUNT;
         let max_measure_text_cache_word_count = DEFAULT_MAX_MEASURE_TEXT_WORD_CACHE_COUNT;
@@ -781,7 +772,6 @@ impl PlyContext {
             scroll_container_datas: Vec::new(),
             tree_node_visited: Vec::new(),
             dynamic_string_data: Vec::new(),
-            debug_strings: Vec::new(),
         };
         ctx
     }
@@ -803,7 +793,7 @@ impl PlyContext {
 
     fn add_hash_map_item(
         &mut self,
-        element_id: ElementId,
+        element_id: &ElementId,
         layout_element_index: i32,
     ) {
         let gen = self.generation;
@@ -811,7 +801,7 @@ impl PlyContext {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 let item = entry.get_mut();
                 if item.generation <= gen {
-                    item.element_id = element_id;
+                    item.element_id = element_id.clone();
                     item.generation = gen + 1;
                     item.layout_element_index = layout_element_index;
                     item.collision = false;
@@ -823,7 +813,7 @@ impl PlyContext {
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(LayoutElementHashMapItem {
-                    element_id,
+                    element_id: element_id.clone(),
                     layout_element_index,
                     generation: gen + 1,
                     bounding_box: BoundingBox::default(),
@@ -844,8 +834,8 @@ impl PlyContext {
         let parent_id = parent.id;
         let element_id = hash_number(offset, parent_id);
         self.layout_elements[open_element_index].id = element_id.id;
-        self.add_hash_map_item(element_id, open_element_index as i32);
-        self.layout_element_id_strings.push(element_id.string_id);
+        self.add_hash_map_item(&element_id, open_element_index as i32);
+        self.layout_element_id_strings.push(element_id.string_id.clone());
         element_id
     }
 
@@ -965,7 +955,7 @@ impl PlyContext {
         }
     }
 
-    pub fn open_element_with_id(&mut self, element_id: ElementId) {
+    pub fn open_element_with_id(&mut self, element_id: &ElementId) {
         if self.boolean_warnings.max_elements_exceeded {
             return;
         }
@@ -983,7 +973,7 @@ impl PlyContext {
         }
 
         self.add_hash_map_item(element_id, idx);
-        self.layout_element_id_strings.push(element_id.string_id);
+        self.layout_element_id_strings.push(element_id.string_id.clone());
 
         if !self.open_clip_element_stack.is_empty() {
             let clip_id = *self.open_clip_element_stack.last().unwrap();
@@ -993,7 +983,7 @@ impl PlyContext {
         }
     }
 
-    pub fn configure_open_element(&mut self, declaration: &ElementDeclaration) {
+    pub fn configure_open_element(&mut self, declaration: &ElementDeclaration<CustomElementData>) {
         if self.boolean_warnings.max_elements_exceeded {
             return;
         }
@@ -1042,8 +1032,8 @@ impl PlyContext {
         }
 
         // Image config
-        if declaration.image_data != 0 {
-            self.image_element_configs.push(declaration.image_data);
+        if let Some(image_data) = declaration.image_data {
+            self.image_element_configs.push(image_data);
             let idx = self.image_element_configs.len() - 1;
             self.attach_element_config(ElementConfigType::Image, idx);
         }
@@ -1118,8 +1108,8 @@ impl PlyContext {
         }
 
         // Custom config
-        if declaration.custom_data != 0 {
-            self.custom_element_configs.push(declaration.custom_data);
+        if let Some(ref custom_data) = declaration.custom_data {
+            self.custom_element_configs.push(custom_data.clone());
             let idx = self.custom_element_configs.len() - 1;
             self.attach_element_config(ElementConfigType::Custom, idx);
         }
@@ -1354,9 +1344,7 @@ impl PlyContext {
 
     pub fn open_text_element(
         &mut self,
-        text_ptr: usize,
-        text_length: i32,
-        is_static: bool,
+        text: &str,
         text_config_index: usize,
     ) {
         if self.boolean_warnings.max_elements_exceeded {
@@ -1390,11 +1378,11 @@ impl PlyContext {
         // Measure text
         let text_config = self.text_element_configs[text_config_index];
         let text_measured =
-            self.measure_text_cached(text_ptr, text_length, is_static, &text_config);
+            self.measure_text_cached(text, &text_config);
 
         let element_id = hash_number(parent_children_count as u32, parent_id);
         self.layout_elements[text_elem_idx as usize].id = element_id.id;
-        self.add_hash_map_item(element_id, text_elem_idx);
+        self.add_hash_map_item(&element_id, text_elem_idx);
         self.layout_element_id_strings.push(element_id.string_id);
 
         let text_width = text_measured.unwrapped_dimensions.width;
@@ -1412,8 +1400,7 @@ impl PlyContext {
 
         // Store text element data
         let text_data = TextElementData {
-            text_ptr,
-            text_length,
+            text: text.to_string(),
             preferred_dimensions: text_measured.unwrapped_dimensions,
             element_index: text_elem_idx,
             wrapped_lines_start: 0,
@@ -1446,9 +1433,7 @@ impl PlyContext {
 
     fn measure_text_cached(
         &mut self,
-        text_ptr: usize,
-        text_length: i32,
-        is_static: bool,
+        text: &str,
         config: &InternalTextElementConfig,
     ) -> MeasureTextCacheItem {
         match &self.measure_text_fn {
@@ -1461,7 +1446,7 @@ impl PlyContext {
             }
         };
 
-        let id = hash_string_contents_with_config(text_ptr, text_length, is_static, config);
+        let id = hash_string_contents_with_config(text, config);
 
         // Check cache
         if let Some(item) = self.measure_text_cache.get_mut(&id) {
@@ -1470,8 +1455,8 @@ impl PlyContext {
         }
 
         // Not cached - measure now
-        let text_data =
-            unsafe { core::slice::from_raw_parts(text_ptr as *const u8, text_length as usize) };
+        let text_data = text.as_bytes();
+        let text_length = text_data.len() as i32;
 
         let space_str = " ";
         let space_width = (self.measure_text_fn.as_ref().unwrap())(space_str, config).width;
@@ -1494,7 +1479,7 @@ impl PlyContext {
                 let mut dimensions = Dimensions::default();
                 if length > 0 {
                     let substr =
-                        unsafe { core::str::from_utf8_unchecked(&text_data[start as usize..end as usize]) };
+                        core::str::from_utf8(&text_data[start as usize..end as usize]).unwrap();
                     dimensions = (self.measure_text_fn.as_ref().unwrap())(substr, config);
                 }
                 min_width = f32::max(dimensions.width, min_width);
@@ -1551,9 +1536,8 @@ impl PlyContext {
         }
 
         if end - start > 0 {
-            let substr = unsafe {
-                core::str::from_utf8_unchecked(&text_data[start as usize..end as usize])
-            };
+            let substr =
+                core::str::from_utf8(&text_data[start as usize..end as usize]).unwrap();
             let dimensions = (self.measure_text_fn.as_ref().unwrap())(substr, config);
             let word = MeasuredWord {
                 start_offset: start,
@@ -1619,7 +1603,7 @@ impl PlyContext {
         self.boolean_warnings = BooleanWarnings::default();
 
         let root_id = hash_string("Ply__RootContainer", 0);
-        self.open_element_with_id(root_id);
+        self.open_element_with_id(&root_id);
 
         let root_decl = ElementDeclaration {
             layout: LayoutConfig {
@@ -1653,7 +1637,7 @@ impl PlyContext {
         });
     }
 
-    pub fn end_layout(&mut self) -> &[InternalRenderCommand] {
+    pub fn end_layout(&mut self) -> &[InternalRenderCommand<CustomElementData>] {
         self.close_element();
 
         if self.open_layout_element_stack.len() > 1 {
@@ -1717,7 +1701,6 @@ impl PlyContext {
         self.reusable_element_index_buffer.clear();
         self.layout_element_clip_element_ids.clear();
         self.dynamic_string_data.clear();
-        self.debug_strings.clear();
     }
 
     // ========================================================================
@@ -2193,8 +2176,7 @@ impl PlyContext {
     fn wrap_text(&mut self) {
         for text_idx in 0..self.text_element_data.len() {
             let elem_index = self.text_element_data[text_idx].element_index as usize;
-            let text_ptr = self.text_element_data[text_idx].text_ptr;
-            let text_length = self.text_element_data[text_idx].text_length;
+            let text = self.text_element_data[text_idx].text.clone();
             let preferred_dims = self.text_element_data[text_idx].preferred_dimensions;
 
             self.text_element_data[text_idx].wrapped_lines_start = self.wrapped_text_lines.len();
@@ -2208,7 +2190,7 @@ impl PlyContext {
                 .unwrap_or(0);
             let text_config = self.text_element_configs[text_config_idx];
 
-            let measured = self.measure_text_cached(text_ptr, text_length, true, &text_config);
+            let measured = self.measure_text_cached(&text, &text_config);
 
             let line_height = if text_config.line_height > 0 {
                 text_config.line_height as f32
@@ -2220,8 +2202,8 @@ impl PlyContext {
                 // Single line
                 self.wrapped_text_lines.push(WrappedTextLine {
                     dimensions: self.layout_elements[elem_index].dimensions,
-                    line_ptr: text_ptr,
-                    line_length: text_length,
+                    start: 0,
+                    length: text.len(),
                 });
                 self.text_element_data[text_idx].wrapped_lines_length = 1;
                 continue;
@@ -2246,8 +2228,8 @@ impl PlyContext {
                 if line_length_chars == 0 && line_width + measured_word.width > container_width {
                     self.wrapped_text_lines.push(WrappedTextLine {
                         dimensions: Dimensions::new(measured_word.width, line_height),
-                        line_ptr: text_ptr + measured_word.start_offset as usize,
-                        line_length: measured_word.length,
+                        start: measured_word.start_offset as usize,
+                        length: measured_word.length as usize,
                     });
                     self.text_element_data[text_idx].wrapped_lines_length += 1;
                     word_index = measured_word.next;
@@ -2257,12 +2239,10 @@ impl PlyContext {
                 else if measured_word.length == 0
                     || line_width + measured_word.width > container_width
                 {
-                    let text_data = unsafe {
-                        core::slice::from_raw_parts(text_ptr as *const u8, text_length as usize)
-                    };
+                    let text_bytes = text.as_bytes();
                     let final_char_idx = (line_start_offset + line_length_chars - 1).max(0) as usize;
                     let final_char_is_space =
-                        final_char_idx < text_data.len() && text_data[final_char_idx] == b' ';
+                        final_char_idx < text_bytes.len() && text_bytes[final_char_idx] == b' ';
                     let adj_width = line_width
                         + if final_char_is_space {
                             -space_width
@@ -2274,8 +2254,8 @@ impl PlyContext {
 
                     self.wrapped_text_lines.push(WrappedTextLine {
                         dimensions: Dimensions::new(adj_width, line_height),
-                        line_ptr: text_ptr + line_start_offset as usize,
-                        line_length: adj_length,
+                        start: line_start_offset as usize,
+                        length: adj_length as usize,
                     });
                     self.text_element_data[text_idx].wrapped_lines_length += 1;
 
@@ -2298,8 +2278,8 @@ impl PlyContext {
                         line_width - text_config.letter_spacing as f32,
                         line_height,
                     ),
-                    line_ptr: text_ptr + line_start_offset as usize,
-                    line_length: line_length_chars,
+                    start: line_start_offset as usize,
+                    length: line_length_chars as usize,
                 });
                 self.text_element_data[text_idx].wrapped_lines_length += 1;
             }
@@ -2397,7 +2377,7 @@ impl PlyContext {
             || bbox.y + bbox.height < 0.0
     }
 
-    fn add_render_command(&mut self, cmd: InternalRenderCommand) {
+    fn add_render_command(&mut self, cmd: InternalRenderCommand<CustomElementData>) {
         self.render_commands.push(cmd);
     }
 
@@ -2665,20 +2645,23 @@ impl PlyContext {
 
                                 let lines_start = text_data.wrapped_lines_start;
                                 let lines_length = text_data.wrapped_lines_length;
+                                let parent_text = text_data.text.clone();
 
                                 // Collect line data first to avoid borrow issues
                                 let lines_data: Vec<_> = (0..lines_length)
                                     .map(|li| {
                                         let line = &self.wrapped_text_lines[lines_start + li as usize];
-                                        (line.line_length, line.line_ptr, line.dimensions)
+                                        (line.start, line.length, line.dimensions)
                                     })
                                     .collect();
 
-                                for (line_index, &(line_length, line_ptr, line_dims)) in lines_data.iter().enumerate() {
-                                    if line_length == 0 {
+                                for (line_index, &(start, length, line_dims)) in lines_data.iter().enumerate() {
+                                    if length == 0 {
                                         y_position += final_line_height;
                                         continue;
                                     }
+
+                                    let line_text = parent_text[start..start + length].to_string();
 
                                     let mut offset =
                                         current_bbox.width - line_dims.width;
@@ -2698,8 +2681,7 @@ impl PlyContext {
                                         ),
                                         command_type: RenderCommandType::Text,
                                         render_data: InternalRenderData::Text {
-                                            text_ptr: line_ptr,
-                                            text_length: line_length,
+                                            text: line_text,
                                             text_color: text_config.text_color,
                                             font_id: text_config.font_id,
                                             font_size: text_config.font_size,
@@ -2716,7 +2698,7 @@ impl PlyContext {
                             ElementConfigType::Custom => {
                                 if should_render {
                                     let custom_data =
-                                        self.custom_element_configs[config.config_index];
+                                        self.custom_element_configs[config.config_index].clone();
                                     self.add_render_command(InternalRenderCommand {
                                         bounding_box: current_bbox,
                                         command_type: RenderCommandType::Custom,
@@ -3121,7 +3103,7 @@ impl PlyContext {
 
                 // Copy data from map to avoid borrow issues with mutable access later
                 let map_data = self.layout_element_map.get(&elem_id).map(|item| {
-                    (item.bounding_box, item.element_id, item.on_hover_fn.is_some())
+                    (item.bounding_box, item.element_id.clone(), item.on_hover_fn.is_some())
                 });
                 if let Some((raw_box, elem_id_copy, has_hover)) = map_data {
                     let mut elem_box = raw_box;
@@ -3148,7 +3130,7 @@ impl PlyContext {
                             let pointer_data = self.pointer_info;
                             if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
                                 if let Some(ref mut callback) = item.on_hover_fn {
-                                    callback(elem_id_copy, pointer_data);
+                                    callback(elem_id_copy.clone(), pointer_data);
                                 }
                             }
                         }
@@ -3332,67 +3314,50 @@ impl PlyContext {
         #[cfg(feature = "text-styling")]
         {
             let escaped = Self::debug_escape_str(text);
-            let ptr = escaped.as_ptr() as usize;
-            let len = escaped.len() as i32;
-            self.debug_strings.push(escaped);
-            self.open_text_element(ptr, len, false, config_index);
+            self.open_text_element(&escaped, config_index);
         }
         #[cfg(not(feature = "text-styling"))]
         {
-            self.open_text_element(
-                text.as_ptr() as usize,
-                text.len() as i32,
-                true,
-                config_index,
-            );
+            self.open_text_element(text, config_index);
         }
     }
 
-    /// Helper: emit a text element from a raw pointer/length (e.g. element IDs
+    /// Helper: emit a text element from a string (e.g. element IDs
     /// or text previews). Escapes text-styling characters when that feature is
     /// active.
-    fn debug_raw_text(&mut self, ptr: usize, len: i32, is_static: bool, config_index: usize) {
+    fn debug_raw_text(&mut self, text: &str, config_index: usize) {
         #[cfg(feature = "text-styling")]
         {
-            let _ = is_static;
-            let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) };
-            let text = core::str::from_utf8(slice).unwrap_or("");
             let escaped = Self::debug_escape_str(text);
-            let eptr = escaped.as_ptr() as usize;
-            let elen = escaped.len() as i32;
-            self.debug_strings.push(escaped);
-            self.open_text_element(eptr, elen, false, config_index);
+            self.open_text_element(&escaped, config_index);
         }
         #[cfg(not(feature = "text-styling"))]
         {
-            self.open_text_element(ptr, len, is_static, config_index);
+            self.open_text_element(text, config_index);
         }
     }
 
-    /// Helper: format a number as a string, keep it alive for the frame, and emit a text element.
+    /// Helper: format a number as a string and emit a text element.
     fn debug_int_text(&mut self, value: f32, config_index: usize) {
         let s = format!("{}", value as i32);
-        let ptr = s.as_ptr() as usize;
-        let len = s.len() as i32;
-        self.debug_strings.push(s);
-        self.open_text_element(ptr, len, false, config_index);
+        self.open_text_element(&s, config_index);
     }
 
     /// Helper: open an element, configure, return nothing. Caller must close_element().
-    fn debug_open(&mut self, decl: &ElementDeclaration) {
+    fn debug_open(&mut self, decl: &ElementDeclaration<CustomElementData>) {
         self.open_element();
         self.configure_open_element(decl);
     }
 
     /// Helper: open a named element, configure. Caller must close_element().
-    fn debug_open_id(&mut self, name: &str, decl: &ElementDeclaration) {
-        self.open_element_with_id(hash_string(name, 0));
+    fn debug_open_id(&mut self, name: &str, decl: &ElementDeclaration<CustomElementData>) {
+        self.open_element_with_id(&hash_string(name, 0));
         self.configure_open_element(decl);
     }
 
     /// Helper: open a named+indexed element, configure. Caller must close_element().
-    fn debug_open_idi(&mut self, name: &str, offset: u32, decl: &ElementDeclaration) {
-        self.open_element_with_id(hash_string_with_offset(name, offset, 0));
+    fn debug_open_idi(&mut self, name: &str, offset: u32, decl: &ElementDeclaration<CustomElementData>) {
+        self.open_element_with_id(&hash_string_with_offset(name, offset, 0));
         self.configure_open_element(decl);
     }
 
@@ -3509,10 +3474,8 @@ impl PlyContext {
                 wrap_mode: TextElementConfigWrapMode::None,
                 ..Default::default()
             });
-            if _element_id_string.length > 0 {
-                let id_str_ptr = _element_id_string.ptr;
-                let id_str_len = _element_id_string.length;
-                self.debug_raw_text(id_str_ptr, id_str_len, _element_id_string.is_static, tc);
+            if !_element_id_string.is_empty() {
+                self.debug_raw_text(_element_id_string.as_str(), tc);
             }
         }
         self.close_element();
@@ -3855,11 +3818,11 @@ impl PlyContext {
 
                     // Element name
                     let id_string = if current_element_index < self.layout_element_id_strings.len() {
-                        self.layout_element_id_strings[current_element_index]
+                        self.layout_element_id_strings[current_element_index].clone()
                     } else {
                         StringId::empty()
                     };
-                    if id_string.length > 0 {
+                    if !id_string.is_empty() {
                         let tc = if offscreen {
                             self.store_text_element_config(InternalTextElementConfig {
                                 text_color: Self::DEBUG_COLOR_3,
@@ -3869,7 +3832,7 @@ impl PlyContext {
                         } else {
                             self.store_text_element_config(name_text_config)
                         };
-                        self.debug_raw_text(id_string.ptr, id_string.length, id_string.is_static, tc);
+                        self.debug_raw_text(id_string.as_str(), tc);
                     }
 
                     // Config type badges
@@ -3964,11 +3927,10 @@ impl PlyContext {
                 if is_text {
                     row_count += 1;
                     let text_data_idx = self.layout_elements[current_element_index].text_data_index;
-                    let (text_ptr, text_len) = if text_data_idx >= 0 {
-                        let td = &self.text_element_data[text_data_idx as usize];
-                        (td.text_ptr, td.text_length)
+                    let text_content = if text_data_idx >= 0 {
+                        self.text_element_data[text_data_idx as usize].text.clone()
                     } else {
-                        (0, 0)
+                        String::new()
                     };
                     let raw_tc_idx = if offscreen {
                         self.store_text_element_config(InternalTextElementConfig {
@@ -4015,11 +3977,13 @@ impl PlyContext {
                         });
                         self.close_element();
                         self.debug_text("\"", raw_tc_idx);
-                        if text_len > 40 {
-                            self.debug_raw_text(text_ptr, 40, false, raw_tc_idx);
+                        if text_content.len() > 40 {
+                            let mut end = 40;
+                            while !text_content.is_char_boundary(end) { end -= 1; }
+                            self.debug_raw_text(&text_content[..end], raw_tc_idx);
                             self.debug_text("...", raw_tc_idx);
-                        } else if text_len > 0 {
-                            self.debug_raw_text(text_ptr, text_len, false, raw_tc_idx);
+                        } else if !text_content.is_empty() {
+                            self.debug_raw_text(&text_content, raw_tc_idx);
                         }
                         self.debug_text("\"", raw_tc_idx);
                     }
@@ -4079,7 +4043,7 @@ impl PlyContext {
         if self.pointer_info.state == PointerDataInteractionState::PressedThisFrame {
             let collapse_base_id = hash_string("Ply__DebugView_CollapseElement", 0).base_id;
             for i in (0..self.pointer_over_ids.len()).rev() {
-                let element_id = self.pointer_over_ids[i];
+                let element_id = self.pointer_over_ids[i].clone();
                 if element_id.base_id == collapse_base_id {
                     if let Some(item) = self.layout_element_map.get_mut(&element_id.offset) {
                         item.collapsed = !item.collapsed;
@@ -4289,7 +4253,7 @@ impl PlyContext {
             self.close_element();
 
             // Scroll pane
-            self.open_element_with_id(scroll_id);
+            self.open_element_with_id(&scroll_id);
             self.configure_open_element(&ElementDeclaration {
                 layout: LayoutConfig {
                     sizing: SizingConfig {
@@ -4326,7 +4290,8 @@ impl PlyContext {
                 {
                     // Floating element list overlay
                     let panel_contents_id = hash_string("Ply__DebugViewPaneOuter", 0);
-                    self.open_element_with_id(panel_contents_id);
+                    let panel_contents_id_num = panel_contents_id.id;
+                    self.open_element_with_id(&panel_contents_id);
                     self.configure_open_element(&ElementDeclaration {
                         layout: LayoutConfig {
                             sizing: SizingConfig {
@@ -4379,7 +4344,7 @@ impl PlyContext {
                         // Now render row backgrounds
                         // Get content width from the panel
                         let content_width = self.layout_element_map
-                            .get(&panel_contents_id.id)
+                            .get(&panel_contents_id_num)
                             .and_then(|item| {
                                 let idx = item.layout_element_index as usize;
                                 if idx < self.layout_elements.len() {
@@ -4525,9 +4490,9 @@ impl PlyContext {
                 });
                 self.close_element();
                 // Element ID string
-                let sid = selected_item.element_id.string_id;
-                if sid.length > 0 {
-                    self.debug_raw_text(sid.ptr, sid.length, sid.is_static, info_title_config);
+                let sid = selected_item.element_id.string_id.clone();
+                if !sid.is_empty() {
+                    self.debug_raw_text(sid.as_str(), info_title_config);
                     if selected_item.element_id.offset != 0 {
                         self.debug_text(" (", info_title_config);
                         self.debug_int_text(selected_item.element_id.offset as f32, info_title_config);
@@ -4636,7 +4601,7 @@ impl PlyContext {
             let configs_len = self.layout_elements[layout_elem_idx].element_configs.length;
             for ci in 0..configs_len {
                 let ec = self.element_configs[configs_start + ci as usize];
-                let elem_id_string = selected_item.element_id.string_id;
+                let elem_id_string = selected_item.element_id.string_id.clone();
                 self.render_debug_view_element_config_header(elem_id_string, ec.config_type, info_title_config);
 
                 match ec.config_type {
@@ -4761,10 +4726,10 @@ impl PlyContext {
                             self.debug_text("Parent", info_title_config);
                             let parent_name = self.layout_element_map
                                 .get(&float_config.parent_id)
-                                .map(|item| item.element_id.string_id)
+                                .map(|item| item.element_id.string_id.clone())
                                 .unwrap_or(StringId::empty());
-                            if parent_name.length > 0 {
-                                self.debug_raw_text(parent_name.ptr, parent_name.length, parent_name.is_static, info_text_config);
+                            if !parent_name.is_empty() {
+                                self.debug_raw_text(parent_name.as_str(), info_text_config);
                             }
 
                             self.debug_text("Attach Points", info_title_config);
