@@ -14,104 +14,9 @@ pub mod text_styling;
 use id::Id;
 use math::{Dimensions, Vector2};
 use render_commands::RenderCommand;
-
-pub use color::Color;
-
 use text::TextConfig;
 
-use text::TextElementConfig;
-#[derive(Clone)]
-pub struct Declaration<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    id: Option<Id>,
-    inner: engine::ElementDeclaration<CustomElementData>,
-}
-
-impl<CustomElementData: Clone + Default + std::fmt::Debug>
-    Declaration<CustomElementData>
-{
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            id: None,
-            inner: engine::ElementDeclaration::default(),
-        }
-    }
-
-    #[inline]
-    pub fn background_color(&mut self, color: Color) -> &mut Self {
-        self.inner.background_color = color;
-        self
-    }
-
-    /// Sets aspect ratio for image elements.
-    #[inline]
-    pub fn aspect_ratio(&mut self, aspect_ratio: f32) -> &mut Self {
-        self.inner.aspect_ratio = aspect_ratio;
-        self
-    }
-
-    #[inline]
-    pub fn clip(&mut self, horizontal: bool, vertical: bool) -> &mut Self {
-        self.inner.clip.horizontal = horizontal;
-        self.inner.clip.vertical = vertical;
-        self
-    }
-
-    #[inline]
-    pub fn id(&mut self, id: Id) -> &mut Self {
-        self.id = Some(id);
-        self
-    }
-
-    #[inline]
-    pub fn custom_element(&mut self, data: CustomElementData) -> &mut Self {
-        self.inner.custom_data = Some(data);
-        self
-    }
-
-    #[inline]
-    pub fn layout(
-        &mut self,
-    ) -> layout::LayoutBuilder<'_, CustomElementData> {
-        layout::LayoutBuilder::new(self)
-    }
-
-    #[inline]
-    pub fn image(
-        &mut self,
-    ) -> elements::ImageBuilder<'_, CustomElementData> {
-        elements::ImageBuilder::new(self)
-    }
-
-    #[inline]
-    pub fn floating(
-        &mut self,
-    ) -> elements::FloatingBuilder<'_, CustomElementData> {
-        elements::FloatingBuilder::new(self)
-    }
-
-    #[inline]
-    pub fn border(
-        &mut self,
-    ) -> elements::BorderBuilder<'_, CustomElementData> {
-        elements::BorderBuilder::new(self)
-    }
-
-    #[inline]
-    pub fn corner_radius(
-        &mut self,
-    ) -> elements::CornerRadiusBuilder<'_, CustomElementData> {
-        elements::CornerRadiusBuilder::new(self)
-    }
-}
-
-impl<CustomElementData: Clone + Default + std::fmt::Debug> Default
-    for Declaration<CustomElementData>
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub use color::Color;
 
 #[allow(dead_code)]
 pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
@@ -121,99 +26,142 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
 
 pub struct PlyLayoutScope<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     ply: &'ply mut Ply<CustomElementData>,
-    dropped: bool,
 }
 
-impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
-    PlyLayoutScope<'ply, CustomElementData>
+/// Builder for creating elements with closure-based syntax.
+/// Methods return `self` by value for chaining. Finalize with `.children()` or `.empty()`.
+pub struct ElementBuilder<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+    ply_ptr: *mut Ply<CustomElementData>,
+    inner: engine::ElementDeclaration<CustomElementData>,
+    id: Option<Id>,
+}
+
+impl<CustomElementData: Clone + Default + std::fmt::Debug>
+    ElementBuilder<CustomElementData>
 {
-    /// Create an element, passing its config and a function to add children
-    pub fn with<
-        F: FnOnce(&mut PlyLayoutScope<'ply, CustomElementData>),
-    >(
-        &mut self,
-        declaration: &Declaration<CustomElementData>,
-        f: F,
-    ) {
-        if let Some(ref id) = declaration.id {
-            self.ply.context.open_element_with_id(&id.id);
-        } else {
-            self.ply.context.open_element();
+    /// Sets the width of the element.
+    #[inline]
+    pub fn width(mut self, width: layout::Sizing) -> Self {
+        self.inner.layout.sizing.width = width.into();
+        self
+    }
+
+    /// Sets the height of the element.
+    #[inline]
+    pub fn height(mut self, height: layout::Sizing) -> Self {
+        self.inner.layout.sizing.height = height.into();
+        self
+    }
+
+    /// Sets the background color of the element.
+    #[inline]
+    pub fn background_color(mut self, color: impl Into<Color>) -> Self {
+        self.inner.background_color = color.into();
+        self
+    }
+
+    /// Shorthand alias for `background_color`.
+    #[inline]
+    pub fn color(self, color: impl Into<Color>) -> Self {
+        self.background_color(color)
+    }
+
+    /// Sets the corner radius.
+    /// Accepts `f32` (all corners) or `(f32, f32, f32, f32)` in CSS order (top-left, top-right, bottom-right, bottom-left).
+    #[inline]
+    pub fn corner_radius(mut self, radius: impl Into<engine::CornerRadius>) -> Self {
+        self.inner.corner_radius = radius.into();
+        self
+    }
+
+    /// Sets the element's ID.
+    #[inline]
+    pub fn id(mut self, id: Id) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    /// Sets the aspect ratio of the element.
+    #[inline]
+    pub fn aspect_ratio(mut self, aspect_ratio: f32) -> Self {
+        self.inner.aspect_ratio = aspect_ratio;
+        self
+    }
+
+    /// Sets clipping on the element.
+    #[inline]
+    pub fn clip(mut self, horizontal: bool, vertical: bool) -> Self {
+        self.inner.clip.horizontal = horizontal;
+        self.inner.clip.vertical = vertical;
+        self
+    }
+
+    /// Sets custom element data.
+    #[inline]
+    pub fn custom_element(mut self, data: CustomElementData) -> Self {
+        self.inner.custom_data = Some(data);
+        self
+    }
+
+    /// Configures layout properties using a closure.
+    #[inline]
+    pub fn layout(mut self, f: impl for<'a> FnOnce(&'a mut layout::LayoutBuilder) -> &'a mut layout::LayoutBuilder) -> Self {
+        let mut builder = layout::LayoutBuilder { config: self.inner.layout };
+        f(&mut builder);
+        self.inner.layout = builder.config;
+        self
+    }
+
+    /// Configures floating properties using a closure.
+    #[inline]
+    pub fn floating(mut self, f: impl for<'a> FnOnce(&'a mut elements::FloatingBuilder) -> &'a mut elements::FloatingBuilder) -> Self {
+        let mut builder = elements::FloatingBuilder { config: self.inner.floating };
+        f(&mut builder);
+        self.inner.floating = builder.config;
+        self
+    }
+
+    /// Configures border properties using a closure.
+    #[inline]
+    pub fn border(mut self, f: impl for<'a> FnOnce(&'a mut elements::BorderBuilder) -> &'a mut elements::BorderBuilder) -> Self {
+        let mut builder = elements::BorderBuilder { config: self.inner.border };
+        f(&mut builder);
+        self.inner.border = builder.config;
+        self
+    }
+
+    /// Sets the image data for this element.
+    #[inline]
+    pub fn image(mut self, data: &'static renderer::Asset) -> Self {
+        self.inner.image_data = Some(data);
+        self
+    }
+
+    /// Finalizes the element with children defined in a closure.
+    pub fn children(self, f: impl FnOnce(&mut Ply<CustomElementData>)) -> Id {
+        // SAFETY: The raw pointer was obtained from a valid &mut Ply reference
+        // in element(). The Ply instance remains valid for the duration of this call.
+        unsafe {
+            let ply = &mut *self.ply_ptr;
+            if let Some(ref id) = self.id {
+                ply.context.open_element_with_id(&id.id);
+            } else {
+                ply.context.open_element();
+            }
+            ply.context.configure_open_element(&self.inner);
+            let element_id = ply.context.get_open_element_id();
+
+            f(ply);
+
+            ply.context.close_element();
+
+            Id { id: engine::ElementId { id: element_id, ..Default::default() } }
         }
-        self.ply.context.configure_open_element(&declaration.inner);
-
-        f(self);
-
-        self.ply.context.close_element();
     }
 
-    pub fn with_styling<
-        G: FnOnce(
-            &mut PlyLayoutScope<'ply, CustomElementData>,
-        ) -> Declaration<CustomElementData>,
-        F: FnOnce(&mut PlyLayoutScope<'ply, CustomElementData>),
-    >(
-        &mut self,
-        g: G,
-        f: F,
-    ) {
-        let declaration = g(self);
-
-        if let Some(ref id) = declaration.id {
-            self.ply.context.open_element_with_id(&id.id);
-        } else {
-            self.ply.context.open_element();
-        }
-        self.ply.context.configure_open_element(&declaration.inner);
-
-        f(self);
-
-        self.ply.context.close_element();
-    }
-
-    pub fn end(
-        &mut self,
-    ) -> impl Iterator<Item = RenderCommand<CustomElementData>> {
-        self.dropped = true;
-        let commands = self.ply.context.end_layout();
-        let mut result = Vec::new();
-        for cmd in commands {
-            result.push(RenderCommand::from_engine_render_command(cmd));
-        }
-        result.into_iter()
-    }
-
-    /// Adds a text element to the current open element or to the root layout.
-    pub fn text(&mut self, text: &str, config: TextElementConfig) {
-        let text_config_index = self.ply.context.store_text_element_config(config.into_internal());
-        self.ply.context.open_text_element(text, text_config_index);
-    }
-
-    /// Adds a text element from a static string literal.
-    /// This is equivalent to `text()` — the engine always stores an owned copy.
-    pub fn text_literal(&mut self, text: &'static str, config: TextElementConfig) {
-        self.text(text, config);
-    }
-
-    /// Adds a text element from an owned string.
-    /// This is equivalent to `text()` — the engine always stores an owned copy.
-    pub fn text_string(&mut self, text: String, config: TextElementConfig) {
-        self.text(&text, config);
-    }
-
-    pub fn hovered(&self) -> bool {
-        self.ply.context.hovered()
-    }
-
-    pub fn on_hover<F>(&mut self, callback: F)
-    where
-        F: FnMut(engine::ElementId, engine::PointerData) + 'static,
-    {
-        self.ply.context.on_hover(Box::new(callback));
-    }
-
-    pub fn scroll_offset(&self) -> Vector2 {
-        self.ply.context.get_scroll_offset()
+    /// Finalizes the element with no children.
+    pub fn empty(self) -> Id {
+        self.children(|_| {})
     }
 }
 
@@ -232,16 +180,6 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::Dere
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.ply
-    }
-}
-
-impl<CustomElementData: Clone + Default + std::fmt::Debug> Drop
-    for PlyLayoutScope<'_, CustomElementData>
-{
-    fn drop(&mut self) {
-        if !self.dropped {
-            self.ply.context.end_layout();
-        }
     }
 }
 
@@ -276,8 +214,36 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         self.context.begin_layout();
         PlyLayoutScope {
             ply: self,
-            dropped: false,
         }
+    }
+
+    /// Creates a new element builder for configuring and adding an element.
+    /// Finalize with `.children(|ui| {...})` or `.empty()`.
+    pub fn element(&mut self) -> ElementBuilder<CustomElementData> {
+        ElementBuilder {
+            ply_ptr: self as *mut _,
+            inner: engine::ElementDeclaration::default(),
+            id: None,
+        }
+    }
+
+    /// Adds a text element to the current open element or to the root layout.
+    pub fn text(&mut self, text: &str, config_fn: impl FnOnce(&mut TextConfig) -> &mut TextConfig) {
+        let mut config = TextConfig::new();
+        config_fn(&mut config);
+        let text_config_index = self.context.store_text_element_config(config);
+        self.context.open_text_element(text, text_config_index);
+    }
+
+    pub fn on_hover<F>(&mut self, callback: F)
+    where
+        F: FnMut(engine::ElementId, engine::PointerData) + 'static,
+    {
+        self.context.on_hover(Box::new(callback));
+    }
+
+    pub fn scroll_offset(&self) -> Vector2 {
+        self.context.get_scroll_offset()
     }
 
     /// Create a new Ply engine with the given fonts.
@@ -368,9 +334,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     {
         let data = std::cell::RefCell::new(userdata);
         self.context.set_measure_text_function(Box::new(
-            move |text: &str, config: &engine::InternalTextElementConfig| -> Dimensions {
-                let text_config = TextConfig::from_internal(config);
-                callback(text, &text_config, &mut data.borrow_mut())
+            move |text: &str, config: &TextConfig| -> Dimensions {
+                callback(text, config, &mut data.borrow_mut())
             },
         ));
     }
@@ -381,9 +346,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         F: Fn(&str, &TextConfig) -> Dimensions + 'static,
     {
         self.context.set_measure_text_function(Box::new(
-            move |text: &str, config: &engine::InternalTextElementConfig| -> Dimensions {
-                let text_config = TextConfig::from_internal(config);
-                callback(text, &text_config)
+            move |text: &str, config: &TextConfig| -> Dimensions {
+                callback(text, config)
             },
         ));
     }
@@ -454,6 +418,16 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             None
         }
     }
+
+    /// Evaluate the layout and return all render commands.
+    pub fn eval(&mut self) -> Vec<RenderCommand<CustomElementData>> {
+        let commands = self.context.end_layout();
+        let mut result = Vec::new();
+        for cmd in commands {
+            result.push(RenderCommand::from_engine_render_command(cmd));
+        }
+        result
+    }
 }
 
 
@@ -472,57 +446,38 @@ mod tests {
             Dimensions::new(100.0, 24.0)
         });
 
-        let mut ply = ply.begin();
+        let mut ui = ply.begin();
 
-        ply.with(&Declaration::new()
-            .layout()
-                .width(Sizing::Fixed(100.0))
-                .height(Sizing::Fixed(100.0))
-                .end()
-            .background_color(Color::rgb(255., 255., 255.)), |ply|
-        {
-            ply.with(&Declaration::new()
-                .layout()
-                    .width(Sizing::Fixed(100.0))
-                    .height(Sizing::Fixed(100.0))
-                    .end()
-                .background_color(Color::rgb(255., 255., 255.)), |ply|
-            {
-                ply.with(&Declaration::new()
-                    .layout()
-                        .width(Sizing::Fixed(100.0))
-                        .height(Sizing::Fixed(100.0))
-                        .end()
-                    .background_color(Color::rgb(255., 255., 255.)), |ply|
-                    {
-                        ply.text_literal("test", TextConfig::new()
-                            .color(Color::rgb(255., 255., 255.))
-                            .font_size(24)
-                            .end());
-                    },
-                );
+        ui.element().width(fixed!(100.0)).height(fixed!(100.0))
+            .background_color(0xFFFFFF)
+            .children(|ui| {
+                ui.element().width(fixed!(100.0)).height(fixed!(100.0))
+                    .background_color(0xFFFFFF)
+                    .children(|ui| {
+                        ui.element().width(fixed!(100.0)).height(fixed!(100.0))
+                            .background_color(0xFFFFFF)
+                            .children(|ui| {
+                                ui.text("test", |t| t
+                                    .color(0xFFFFFF)
+                                    .font_size(24)
+                                );
+                            });
+                    });
             });
-        });
 
-        ply.with(&Declaration::new()
-            .layout()
-                .end()
-            .border()
-                .color(Color::rgb(255., 255., 0.))
-                .all_directions(2)
-                .end()
-            .corner_radius().all(10.0).end(), |ply|
-        {
-            ply.with(&Declaration::new()
-                .layout()
-                    .width(Sizing::Fixed(50.0))
-                    .height(Sizing::Fixed(50.0))
-                    .end()
-                .background_color(Color::rgb(0., 255., 255.)), |_ply| {},
-            );
-        });
+        ui.element()
+            .border(|b| b
+                .color(0xFFFF00)
+                .all(2)
+            )
+            .corner_radius(10.0)
+            .children(|ui| {
+                ui.element().width(fixed!(50.0)).height(fixed!(50.0))
+                    .background_color(0x00FFFF)
+                    .empty();
+            });
 
-        let items = ply.end().collect::<Vec<_>>();
+        let items = ui.eval();
 
         for item in &items {
             println!(
@@ -633,51 +588,39 @@ mod tests {
     fn test_example() {
         let mut ply = Ply::<()>::new_headless(Dimensions::new(1000.0, 1000.0));
 
-        let mut ply = ply.begin();
+        let mut ui = ply.begin();
 
-        ply.set_measure_text_function(|_, _| {
+        ui.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
         });
 
         for &(label, level) in &[("Road", 1), ("Wall", 2), ("Tower", 3)] {
-            ply.with(
-                &Declaration::new()
-                    .layout()
-                        .width(grow!())
-                        .height(fixed!(36.0))
-                        .direction(crate::layout::LayoutDirection::LeftToRight)
-                        .child_gap(12)
-                        .child_alignment(crate::layout::Alignment::new(
-                            crate::layout::LayoutAlignmentX::Left,
-                            crate::layout::LayoutAlignmentY::Center,
-                        ))
-                        .end(),
-                |ply| {
-                    ply.text_literal(label,
-                        TextConfig::new().font_size(18).color(Color::u_rgb(0xFF, 0xFF, 0xFF)).end());
-                    ply.with(
-                        &Declaration::new()
-                            .layout().width(grow!()).height(fixed!(18.0)).end()
-                            .corner_radius().all(9.0).end()
-                            .background_color(Color::u_rgb(0x55, 0x55, 0x55)),
-                        |ply| {
-                            ply.with(
-                                &Declaration::new()
-                                    .layout()
-                                        .width(fixed!(300.0 * level as f32 / 3.0))
-                                        .height(grow!())
-                                    .end()
-                                    .corner_radius().all(9.0).end()
-                                    .background_color(Color::u_rgb(0x45, 0xA8, 0x5A)),
-                                |_| {},
-                            );
-                        },
+            ui.element().width(grow!()).height(fixed!(36.0))
+                .layout(|l| l
+                    .direction(crate::layout::LayoutDirection::LeftToRight)
+                    .gap(12)
+                    .align(crate::layout::LayoutAlignmentX::Left, crate::layout::LayoutAlignmentY::Center)
+                )
+                .children(|ui| {
+                    ui.text(label, |t| t
+                        .font_size(18)
+                        .color(0xFFFFFF)
                     );
-                },
-            );
+                    ui.element().width(grow!()).height(fixed!(18.0))
+                        .corner_radius(9.0)
+                        .background_color(0x555555)
+                        .children(|ui| {
+                            ui.element()
+                                .width(fixed!(300.0 * level as f32 / 3.0))
+                                .height(grow!())
+                                .corner_radius(9.0)
+                                .background_color(0x45A85A)
+                                .empty();
+                        });
+                });
         }
 
-        let items = ply.end().collect::<Vec<_>>();
+        let items = ui.eval();
 
         for item in &items {
             println!(
@@ -859,46 +802,31 @@ mod tests {
     fn test_floating() {
         let mut ply = Ply::<()>::new_headless(Dimensions::new(1000.0, 1000.0));
 
-        let mut ply = ply.begin();
+        let mut ui = ply.begin();
 
-        ply.set_measure_text_function(|_, _| {
+        ui.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
         });
 
-        ply.with(
-            &Declaration::new()
-                .layout()
-                    .width(fixed!(20.0))
-                    .height(fixed!(20.0))
-                    .child_alignment(crate::layout::Alignment::new(
-                        crate::layout::LayoutAlignmentX::Center,
-                        crate::layout::LayoutAlignmentY::Center,
-                    ))
-                .end()
-                .floating()
-                    .attach_to(crate::elements::FloatingAttachToElement::Root)
-                    .attach_points(
-                        crate::elements::FloatingAttachPointType::CenterCenter,
-                        crate::elements::FloatingAttachPointType::LeftTop,
-                    )
-                    .offset(Vector2::new(100.0, 150.0))
-                    .pointer_capture_mode(crate::elements::PointerCaptureMode::Passthrough)
-                    .z_index(110)
-                .end()
-                .corner_radius().all(10.0).end()
-                .background_color(Color::u_rgb(0x44, 0x88, 0xDD)),
-            |ply| {
-                ply.text_literal(
-                    "Re",
-                    TextConfig::new()
-                        .font_size(6)
-                        .color(Color::u_rgb(0xFF, 0xFF, 0xFF))
-                        .end(),
+        ui.element().width(fixed!(20.0)).height(fixed!(20.0))
+            .layout(|l| l.align(crate::layout::LayoutAlignmentX::Center, crate::layout::LayoutAlignmentY::Center))
+            .floating(|f| f
+                .attach(crate::elements::FloatingAttachToElement::Root)
+                .anchor(crate::elements::FloatingAttachPointType::CenterCenter, crate::elements::FloatingAttachPointType::LeftTop)
+                .offset(100.0, 150.0)
+                .passthrough()
+                .z_index(110)
+            )
+            .corner_radius(10.0)
+            .background_color(0x4488DD)
+            .children(|ui| {
+                ui.text("Re", |t| t
+                    .font_size(6)
+                    .color(0xFFFFFF)
                 );
-            },
-        );
+            });
 
-        let items = ply.end().collect::<Vec<_>>();
+        let items = ui.eval();
 
         for item in &items {
             println!(
@@ -953,33 +881,23 @@ mod tests {
             Dimensions::default()
         });
 
-        let mut ply = ply.begin();
+        let mut ui = ply.begin();
 
-        ply.with(&Declaration::new()
-            .id(ply.id("parent_rect"))
-            .layout()
-                .width(Sizing::Fixed(100.0))
-                .height(Sizing::Fixed(100.0))
+        ui.element()
+            .id(ui.id("parent_rect"))
+            .width(Sizing::Fixed(100.0))
+            .height(Sizing::Fixed(100.0))
+            .layout(|l| l
                 .padding(Padding::all(10))
-                .end()
-            .background_color(Color::rgb(255., 255., 255.)), |ply|
-        {
-            ply.text_literal("test", TextConfig::new()
-                .color(Color::rgb(255., 255., 255.))
-                .font_size(24)
-                .end());
+            )
+            .background_color(Color::rgb(255., 255., 255.))
+            .children(|ui| {
+                ui.text(&format!("{}", 1234), |t| t
+                    .color(Color::rgb(255., 255., 255.))
+                    .font_size(24)
+                );
+            });
 
-            ply.text(&format!("dynamic str {}", 1234), TextConfig::new()
-                .color(Color::rgb(255., 255., 255.))
-                .font_size(24)
-                .end());
-
-            ply.text_string(format!("String {}", 1234), TextConfig::new()
-                .color(Color::rgb(255., 255., 255.))
-                .font_size(24)
-                .end());
-        });
-
-        let _items = ply.end();
+        let _items = ui.eval();
     }
 }

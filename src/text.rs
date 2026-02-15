@@ -1,5 +1,4 @@
 use crate::color::Color;
-use crate::engine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -25,24 +24,15 @@ pub enum TextAlignment {
     Right,
 }
 
-pub struct TextElementConfig {
-    pub(crate) inner: engine::InternalTextElementConfig,
-}
-
-impl TextElementConfig {
-    /// Converts this config into the engine's internal text config.
-    pub fn into_internal(self) -> engine::InternalTextElementConfig {
-        self.inner
-    }
-}
-
 /// Configuration settings for rendering text elements.
 #[derive(Debug, Clone, Copy)]
 pub struct TextConfig {
+    /// Internal engine user data.
+    pub(crate) user_data: usize,
     /// The color of the text.
     pub color: Color,
     /// Ply does not manage fonts. It is up to the user to assign a unique ID to each font
-    /// and provide it via the [`font_id`](Text::font_id) field.
+    /// and provide it via the [`font_id`](TextConfig::font_id) field.
     pub font_id: u16,
     /// The font size of the text.
     pub font_size: u16,
@@ -58,14 +48,14 @@ pub struct TextConfig {
 
 impl TextConfig {
     /// Creates a new `TextConfig` instance with default values.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Sets the text color.
     #[inline]
-    pub fn color(&mut self, color: Color) -> &mut Self {
-        self.color = color;
+    pub fn color(&mut self, color: impl Into<Color>) -> &mut Self {
+        self.color = color.into();
         self
     }
 
@@ -110,41 +100,12 @@ impl TextConfig {
         self.alignment = alignment;
         self
     }
-
-    /// Finalizes the text configuration and stores it in memory.
-    #[inline]
-    pub fn end(&self) -> TextElementConfig {
-        TextElementConfig {
-            inner: engine::InternalTextElementConfig {
-                user_data: 0,
-                text_color: self.color,
-                font_id: self.font_id,
-                font_size: self.font_size,
-                letter_spacing: self.letter_spacing,
-                line_height: self.line_height,
-                wrap_mode: self.wrap_mode,
-                text_alignment: self.alignment,
-            },
-        }
-    }
-
-    /// Creates a TextConfig from an InternalTextElementConfig
-    pub fn from_internal(config: &engine::InternalTextElementConfig) -> Self {
-        Self {
-            color: config.text_color,
-            font_id: config.font_id,
-            font_size: config.font_size,
-            letter_spacing: config.letter_spacing,
-            line_height: config.line_height,
-            wrap_mode: config.wrap_mode,
-            alignment: config.text_alignment,
-        }
-    }
 }
 
 impl Default for TextConfig {
     fn default() -> Self {
         Self {
+            user_data: 0,
             color: Color::rgba(0., 0., 0., 0.),
             font_id: 0,
             font_size: 0,

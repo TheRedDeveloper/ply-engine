@@ -10,7 +10,7 @@ use crate::elements::{
 };
 use crate::layout::{LayoutAlignmentX, LayoutAlignmentY, LayoutDirection};
 use crate::math::{BoundingBox, Dimensions, Vector2};
-use crate::text::{TextAlignment, TextElementConfigWrapMode};
+use crate::text::{TextAlignment, TextConfig, TextElementConfigWrapMode};
 
 // ============================================================================
 // Constants
@@ -135,6 +135,30 @@ impl CornerRadius {
     }
 }
 
+impl From<f32> for CornerRadius {
+    /// Creates a corner radius with the same value for all corners.
+    fn from(value: f32) -> Self {
+        Self {
+            top_left: value,
+            top_right: value,
+            bottom_left: value,
+            bottom_right: value,
+        }
+    }
+}
+
+impl From<(f32, f32, f32, f32)> for CornerRadius {
+    /// Creates corner radii from a tuple in CSS order: (top-left, top-right, bottom-right, bottom-left).
+    fn from((tl, tr, br, bl): (f32, f32, f32, f32)) -> Self {
+        Self {
+            top_left: tl,
+            top_right: tr,
+            bottom_left: bl,
+            bottom_right: br,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FloatingAttachPoints {
     pub element: FloatingAttachPointType,
@@ -183,33 +207,6 @@ impl BorderWidth {
 pub struct BorderConfig {
     pub color: Color,
     pub width: BorderWidth,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct InternalTextElementConfig {
-    pub user_data: usize,
-    pub text_color: Color,
-    pub font_id: u16,
-    pub font_size: u16,
-    pub letter_spacing: u16,
-    pub line_height: u16,
-    pub wrap_mode: TextElementConfigWrapMode,
-    pub text_alignment: TextAlignment,
-}
-
-impl Default for InternalTextElementConfig {
-    fn default() -> Self {
-        Self {
-            user_data: 0,
-            text_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
-            font_id: 0,
-            font_size: 0,
-            letter_spacing: 0,
-            line_height: 0,
-            wrap_mode: TextElementConfigWrapMode::Words,
-            text_alignment: TextAlignment::Left,
-        }
-    }
 }
 
 /// The top-level element declaration.
@@ -551,7 +548,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     dynamic_element_index: u32,
 
     // Measure text callback
-    measure_text_fn: Option<Box<dyn Fn(&str, &InternalTextElementConfig) -> Dimensions>>,
+    measure_text_fn: Option<Box<dyn Fn(&str, &TextConfig) -> Dimensions>>,
 
     // Layout elements
     layout_elements: Vec<LayoutElement>,
@@ -567,7 +564,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     // Configs
     layout_configs: Vec<LayoutConfig>,
     element_configs: Vec<ElementConfig>,
-    text_element_configs: Vec<InternalTextElementConfig>,
+    text_element_configs: Vec<TextConfig>,
     aspect_ratio_configs: Vec<f32>,
     image_element_configs: Vec<&'static Asset>,
     floating_element_configs: Vec<FloatingConfig>,
@@ -684,7 +681,7 @@ fn hash_number(offset: u32, seed: u32) -> ElementId {
 
 fn hash_string_contents_with_config(
     text: &str,
-    config: &InternalTextElementConfig,
+    config: &TextConfig,
 ) -> u32 {
     let mut hash: u32 = (hash_data_scalar(text.as_bytes()) % u32::MAX as u64) as u32;
     hash = hash.wrapping_add(config.font_id as u32);
@@ -783,6 +780,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     fn get_open_layout_element(&self) -> usize {
         let idx = *self.open_layout_element_stack.last().unwrap();
         idx as usize
+    }
+
+    /// Returns the internal u32 id of the currently open element.
+    pub fn get_open_element_id(&self) -> u32 {
+        let open_idx = self.get_open_layout_element();
+        self.layout_elements[open_idx].id
     }
 
     pub fn get_parent_element_id(&self) -> u32 {
@@ -896,7 +899,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     pub fn store_text_element_config(
         &mut self,
-        config: InternalTextElementConfig,
+        config: TextConfig,
     ) -> usize {
         self.text_element_configs.push(config);
         self.text_element_configs.len() - 1
@@ -1445,7 +1448,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     fn measure_text_cached(
         &mut self,
         text: &str,
-        config: &InternalTextElementConfig,
+        config: &TextConfig,
     ) -> MeasureTextCacheItem {
         match &self.measure_text_fn {
             Some(_) => {},
@@ -2676,10 +2679,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                                     let mut offset =
                                         current_bbox.width - line_dims.width;
-                                    if text_config.text_alignment == TextAlignment::Left {
+                                    if text_config.alignment == TextAlignment::Left {
                                         offset = 0.0;
                                     }
-                                    if text_config.text_alignment == TextAlignment::Center {
+                                    if text_config.alignment == TextAlignment::Center {
                                         offset /= 2.0;
                                     }
 
@@ -2693,7 +2696,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         command_type: RenderCommandType::Text,
                                         render_data: InternalRenderData::Text {
                                             text: line_text,
-                                            text_color: text_config.text_color,
+                                            text_color: text_config.color,
                                             font_id: text_config.font_id,
                                             font_size: text_config.font_size,
                                             letter_spacing: text_config.letter_spacing,
@@ -3490,8 +3493,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 ..Default::default()
             });
             {
-                let tc = self.store_text_element_config(InternalTextElementConfig {
-                    text_color: Self::DEBUG_COLOR_4,
+                let tc = self.store_text_element_config(TextConfig {
+                    color: Self::DEBUG_COLOR_4,
                     font_size: 16,
                     ..Default::default()
                 });
@@ -3511,8 +3514,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             });
             self.close_element();
             // Element ID string
-            let tc = self.store_text_element_config(InternalTextElementConfig {
-                text_color: Self::DEBUG_COLOR_3,
+            let tc = self.store_text_element_config(TextConfig {
+                color: Self::DEBUG_COLOR_3,
                 font_size: 16,
                 wrap_mode: TextElementConfigWrapMode::None,
                 ..Default::default()
@@ -3639,8 +3642,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             ..Default::default()
         };
 
-        let name_text_config = InternalTextElementConfig {
-            text_color: Self::DEBUG_COLOR_4,
+        let name_text_config = TextConfig {
+            color: Self::DEBUG_COLOR_4,
             font_size: 16,
             wrap_mode: TextElementConfigWrapMode::None,
             ..Default::default()
@@ -3768,8 +3771,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ..Default::default()
                         });
                         {
-                            let tc = self.store_text_element_config(InternalTextElementConfig {
-                                text_color: Self::DEBUG_COLOR_4,
+                            let tc = self.store_text_element_config(TextConfig {
+                                color: Self::DEBUG_COLOR_4,
                                 font_size: 16,
                                 ..Default::default()
                             });
@@ -3825,8 +3828,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ..Default::default()
                         });
                         {
-                            let tc = self.store_text_element_config(InternalTextElementConfig {
-                                text_color: Self::DEBUG_COLOR_3,
+                            let tc = self.store_text_element_config(TextConfig {
+                                color: Self::DEBUG_COLOR_3,
                                 font_size: 16,
                                 ..Default::default()
                             });
@@ -3849,8 +3852,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ..Default::default()
                         });
                         {
-                            let tc = self.store_text_element_config(InternalTextElementConfig {
-                                text_color: Self::DEBUG_COLOR_3,
+                            let tc = self.store_text_element_config(TextConfig {
+                                color: Self::DEBUG_COLOR_3,
                                 font_size: 16,
                                 ..Default::default()
                             });
@@ -3867,8 +3870,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     };
                     if !id_string.is_empty() {
                         let tc = if offscreen {
-                            self.store_text_element_config(InternalTextElementConfig {
-                                text_color: Self::DEBUG_COLOR_3,
+                            self.store_text_element_config(TextConfig {
+                                color: Self::DEBUG_COLOR_3,
                                 font_size: 16,
                                 ..Default::default()
                             })
@@ -3901,8 +3904,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     ..Default::default()
                                 });
                                 {
-                                    let tc = self.store_text_element_config(InternalTextElementConfig {
-                                        text_color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
+                                    let tc = self.store_text_element_config(TextConfig {
+                                        color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
                                         font_size: 16,
                                         ..Default::default()
                                     });
@@ -3925,8 +3928,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     ..Default::default()
                                 });
                                 {
-                                    let tc = self.store_text_element_config(InternalTextElementConfig {
-                                        text_color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
+                                    let tc = self.store_text_element_config(TextConfig {
+                                        color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
                                         font_size: 16,
                                         ..Default::default()
                                     });
@@ -3952,8 +3955,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ..Default::default()
                         });
                         {
-                            let tc = self.store_text_element_config(InternalTextElementConfig {
-                                text_color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
+                            let tc = self.store_text_element_config(TextConfig {
+                                color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
                                 font_size: 16,
                                 ..Default::default()
                             });
@@ -3976,8 +3979,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         String::new()
                     };
                     let raw_tc_idx = if offscreen {
-                        self.store_text_element_config(InternalTextElementConfig {
-                            text_color: Self::DEBUG_COLOR_3,
+                        self.store_text_element_config(TextConfig {
+                            color: Self::DEBUG_COLOR_3,
                             font_size: 16,
                             ..Default::default()
                         })
@@ -4143,14 +4146,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let outer_padding = Self::DEBUG_VIEW_OUTER_PADDING;
         let debug_width = Self::DEBUG_VIEW_WIDTH;
 
-        let info_text_config = self.store_text_element_config(InternalTextElementConfig {
-            text_color: Self::DEBUG_COLOR_4,
+        let info_text_config = self.store_text_element_config(TextConfig {
+            color: Self::DEBUG_COLOR_4,
             font_size: 16,
             wrap_mode: TextElementConfigWrapMode::None,
             ..Default::default()
         });
-        let info_title_config = self.store_text_element_config(InternalTextElementConfig {
-            text_color: Self::DEBUG_COLOR_3,
+        let info_title_config = self.store_text_element_config(TextConfig {
+            color: Self::DEBUG_COLOR_3,
             font_size: 16,
             wrap_mode: TextElementConfigWrapMode::None,
             ..Default::default()
@@ -4270,8 +4273,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     ..Default::default()
                 });
                 {
-                    let tc = self.store_text_element_config(InternalTextElementConfig {
-                        text_color: Self::DEBUG_COLOR_4,
+                    let tc = self.store_text_element_config(TextConfig {
+                        color: Self::DEBUG_COLOR_4,
                         font_size: 16,
                         ..Default::default()
                     });
@@ -4699,14 +4702,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             };
                             self.debug_text(wrap, info_text_config);
                             self.debug_text("Text Alignment", info_title_config);
-                            let align = match text_config.text_alignment {
+                            let align = match text_config.alignment {
                                 TextAlignment::Center => "CENTER",
                                 TextAlignment::Right => "RIGHT",
                                 _ => "LEFT",
                             };
                             self.debug_text(align, info_text_config);
                             self.debug_text("Text Color", info_title_config);
-                            self.render_debug_view_color(text_config.text_color, info_text_config);
+                            self.render_debug_view_color(text_config.color, info_text_config);
                         }
                         self.close_element();
                     }
@@ -4893,7 +4896,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     pub fn set_measure_text_function(
         &mut self,
-        f: Box<dyn Fn(&str, &InternalTextElementConfig) -> Dimensions>,
+        f: Box<dyn Fn(&str, &TextConfig) -> Dimensions>,
     ) {
         self.measure_text_fn = Some(f);
     }

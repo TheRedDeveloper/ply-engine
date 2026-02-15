@@ -1,4 +1,4 @@
-use crate::{engine, Declaration};
+use crate::engine;
 
 /// Defines different sizing behaviors for an element.
 #[derive(Debug, Clone, Copy)]
@@ -100,6 +100,20 @@ impl Padding {
     }
 }
 
+impl From<u16> for Padding {
+    /// Creates padding with the same value for all sides.
+    fn from(value: u16) -> Self {
+        Self::all(value)
+    }
+}
+
+impl From<(u16, u16, u16, u16)> for Padding {
+    /// Creates padding from a tuple in CSS order: (top, right, bottom, left).
+    fn from((top, right, bottom, left): (u16, u16, u16, u16)) -> Self {
+        Self { left, right, top, bottom }
+    }
+}
+
 /// Represents horizontal alignment options for layout elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -151,75 +165,44 @@ pub enum LayoutDirection {
     TopToBottom,
 }
 
-/// Builder for configuring layout properties in a `Declaration`.
-pub struct LayoutBuilder<
-    'declaration,
-    CustomElementData: Clone + Default + std::fmt::Debug,
-> {
-    parent: &'declaration mut Declaration<CustomElementData>,
+/// Builder for configuring layout properties using a closure.
+/// No lifetime parameters — works cleanly with closures.
+pub struct LayoutBuilder {
+    pub(crate) config: engine::LayoutConfig,
 }
 
-impl<'declaration, CustomElementData: Clone + Default + std::fmt::Debug>
-    LayoutBuilder<'declaration, CustomElementData>
-{
-    /// Creates a new `LayoutBuilder` with the given parent `Declaration`.
-    #[inline]
-    pub fn new(
-        parent: &'declaration mut Declaration<CustomElementData>,
-    ) -> Self {
-        LayoutBuilder { parent }
-    }
-
-    /// Sets the width of the layout.
-    #[inline]
-    pub fn width(&mut self, width: Sizing) -> &mut Self {
-        self.parent.inner.layout.sizing.width = width.into();
-        self
-    }
-
-    /// Sets the height of the layout.
-    #[inline]
-    pub fn height(&mut self, height: Sizing) -> &mut Self {
-        self.parent.inner.layout.sizing.height = height.into();
-        self
-    }
-
-    /// Sets padding values for the layout.
-    #[inline]
-    pub fn padding(&mut self, padding: Padding) -> &mut Self {
-        self.parent.inner.layout.padding.left = padding.left;
-        self.parent.inner.layout.padding.right = padding.right;
-        self.parent.inner.layout.padding.top = padding.top;
-        self.parent.inner.layout.padding.bottom = padding.bottom;
-        self
-    }
-
+impl LayoutBuilder {
     /// Sets the spacing between child elements.
     #[inline]
-    pub fn child_gap(&mut self, child_gap: u16) -> &mut Self {
-        self.parent.inner.layout.child_gap = child_gap;
+    pub fn gap(&mut self, gap: u16) -> &mut Self {
+        self.config.child_gap = gap;
         self
     }
 
-    /// Sets the alignment of child elements.
+    /// Sets the alignment of child elements using separate X and Y values.
     #[inline]
-    pub fn child_alignment(&mut self, child_alignment: Alignment) -> &mut Self {
-        self.parent.inner.layout.child_alignment.x = child_alignment.x;
-        self.parent.inner.layout.child_alignment.y = child_alignment.y;
+    pub fn align(&mut self, x: LayoutAlignmentX, y: LayoutAlignmentY) -> &mut Self {
+        self.config.child_alignment.x = x;
+        self.config.child_alignment.y = y;
         self
     }
 
     /// Sets the layout direction.
     #[inline]
     pub fn direction(&mut self, direction: LayoutDirection) -> &mut Self {
-        self.parent.inner.layout.layout_direction = direction;
+        self.config.layout_direction = direction;
         self
     }
 
-    /// Returns the modified `Declaration`.
+    /// Sets padding values for the layout.
     #[inline]
-    pub fn end(&mut self) -> &mut Declaration<CustomElementData> {
-        self.parent
+    pub fn padding(&mut self, padding: impl Into<Padding>) -> &mut Self {
+        let padding = padding.into();
+        self.config.padding.left = padding.left;
+        self.config.padding.right = padding.right;
+        self.config.padding.top = padding.top;
+        self.config.padding.bottom = padding.bottom;
+        self
     }
 }
 

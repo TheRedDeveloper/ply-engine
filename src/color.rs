@@ -54,3 +54,21 @@ impl From<(u8, u8, u8, u8)> for Color {
         Self::u_rgba(value.0, value.1, value.2, value.3)
     }
 }
+
+impl From<i32> for Color {
+    fn from(hex: i32) -> Self {
+        let r = ((hex >> 16) & 0xFF) as f32;
+        let g = ((hex >> 8) & 0xFF) as f32;
+        let b = (hex & 0xFF) as f32;
+        Color::rgba(r, g, b, 255.0)
+    }
+}
+
+impl From<u32> for Color {
+    fn from(hex: u32) -> Self {
+        let r = ((hex >> 16) & 0xFF) as f32;
+        let g = ((hex >> 8) & 0xFF) as f32;
+        let b = (hex & 0xFF) as f32;
+        Color::rgba(r, g, b, 255.0)
+    }
+}

@@ -874,7 +874,7 @@ fn resize(texture: &Texture2D, height: f32, width: f32, clip: &Option<(i32, i32,
 }
 
 pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
-    commands: impl Iterator<Item = RenderCommand<CustomElementData>>,
+    commands: Vec<RenderCommand<CustomElementData>>,
     fonts: &[Font],
     handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
 ) {

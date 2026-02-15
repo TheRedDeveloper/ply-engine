@@ -19,10 +19,10 @@ A pure Rust UI layout engine built on [macroquad](https://github.com/not-fl3/mac
 
 ```toml
 [dependencies]
-ply-engine = "0.1"
+ply-engine = "0.2"
 
 # Optional features:
-# ply-engine = { version = "0.1", features = ["text-styling", "tinyvg"] }
+# ply-engine = { version = "0.2", features = ["text-styling", "tinyvg"] }
 ```
 
 ## Quick Start
@@ -31,10 +31,9 @@ ply-engine = "0.1"
 use macroquad::prelude::*;
 use ply_engine::{
     fixed, grow,
-    Color, Declaration, Ply,
-    layout::{Alignment, LayoutAlignmentX, LayoutAlignmentY, LayoutDirection},
+    Color, Ply,
+    layout::{LayoutAlignmentX, LayoutAlignmentY, LayoutDirection},
     renderer::render,
-    text::TextConfig,
 };
 
 // Configure the window, I recommend these settings
@@ -65,53 +64,36 @@ async fn main() {
     let fonts = vec![load_ttf_font("assets/lexend.ttf").await.unwrap()];
 
     // Create the engine
-    let mut ply = Ply::new(fonts.clone());
+    let mut ply = Ply::<()>::new(fonts.clone());
 
     loop {
         clear_background(BLACK);
 
         // Begin layout
-        let mut ply = ply.begin();
+        let mut ui = ply.begin();
 
         // A column filling the screen
-        ply.with(
-            &Declaration::new()
-                .layout()
-                    .width(grow!())
-                    .height(grow!())
-                    .direction(LayoutDirection::TopToBottom)
-                    .child_gap(16)
-                    .child_alignment(Alignment::new(
-                        LayoutAlignmentX::Center,
-                        LayoutAlignmentY::Center,
-                    ))
-                .end(),
-            |ply| {
+        ui.element().width(grow!()).height(grow!())
+            .layout(|l| l
+                .direction(LayoutDirection::TopToBottom)
+                .gap(16)
+                .align(LayoutAlignmentX::Center, LayoutAlignmentY::Center)
+            )
+            .children(|ui| {
                 // A colored box
-                ply.with(
-                    &Declaration::new()
-                        .layout()
-                            .width(fixed!(200.0))
-                            .height(fixed!(100.0))
-                        .end()
-                        .corner_radius().all(8.0).end()
-                        .background_color(Color::u_rgb(0x45, 0xA8, 0x5A)),
-                    |_| {},
-                );
+                ui.element().width(fixed!(200.0)).height(fixed!(100.0))
+                    .corner_radius(8.0)
+                    .color(0x45A85A)
+                    .empty();
 
                 // Some text below that box
-                ply.text_literal(
-                    "Hello, Ply!",
-                    TextConfig::new()
-                        .font_size(32)
-                        .color(Color::u_rgb(0xFF, 0xFF, 0xFF))
-                        .end(),
+                ui.text("Hello, Ply!", |t| t
+                    .font_size(32)
+                    .color(0xFFFFFF)
                 );
-            },
-        );
+            });
 
-        // Render all commands through the macroquad renderer
-        render(ply.end(), &fonts, |_| {}).await;
+        render(ui.eval(), &fonts, |_| {}).await;
 
         next_frame().await;
     }
@@ -120,31 +102,27 @@ async fn main() {
 
 ## Layout API
 
-Layouts are built with a closure-based nesting API. The `Declaration` builder configures each element's sizing, alignment, borders, background color, images, and more.
+Layouts are built with a closure-based nesting API. The `element()` builder configures each element's sizing, alignment, borders, background color, images, and more.
 
 ```rust
-ply.with(
-    &Declaration::new()
-        .id(ply.id("sidebar"))
-        .layout()
-            .width(fixed!(250.0))
-            .height(grow!())
-            .direction(LayoutDirection::TopToBottom)
-            .child_gap(8)
-            .padding(Padding::all(16))
-        .end()
-        .border()
-            .color(Color::u_rgb(0x33, 0x33, 0x33))
-            .right(2)
-        .end()
-        .background_color(Color::u_rgb(0x1A, 0x1A, 0x2E)),
-    |ply| {
+ui.element().width(fixed!(250.0)).height(grow!())
+    .id(ui.id("sidebar"))
+    .layout(|l| l
+        .direction(LayoutDirection::TopToBottom)
+        .gap(8)
+        .padding(16)
+    )
+    .border(|b| b
+        .color(0x333333)
+        .right(2)
+    )
+    .color(0x1A1A2E)
+    .children(|ui| {
         // children go here
-    },
-);
+    });
 ```
 
-Sizing helpers: `fixed!(px)`, `grow!()`, `fit!()`, and `Sizing::Percent(0.0..=1.0)`.
+Sizing helpers: `fixed!(px)`, `grow!()`, `fit!()`, and `percent!(0.0..=1.0)`.
 
 ## TextureManager
 
