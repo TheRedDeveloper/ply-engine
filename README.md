@@ -30,7 +30,7 @@ use ply_engine::{
     fixed, grow,
     Color, Declaration, Ply,
     layout::{Alignment, LayoutAlignmentX, LayoutAlignmentY, LayoutDirection},
-    renderer::{render, create_measure_text_function, Asset},
+    renderer::render,
     text::TextConfig,
 };
 
@@ -62,17 +62,13 @@ async fn main() {
     let fonts = vec![load_ttf_font("assets/lexend.ttf").await.unwrap()];
 
     // Create the engine
-    let mut ply = Ply::new((screen_width(), screen_height()).into());
-    ply.set_measure_text_function(create_measure_text_function(fonts.clone()));
+    let mut ply = Ply::new((screen_width(), screen_height()).into(), fonts.clone());
 
     loop {
         clear_background(BLACK);
 
-        // Resize each frame
-        ply.set_layout_dimensions((screen_width(), screen_height()).into());
-
         // Begin layout
-        let mut ply = ply.begin::<&'static Asset, ()>();
+        let mut ply = ply.begin::<()>();
 
         // A column filling the screen
         ply.with(

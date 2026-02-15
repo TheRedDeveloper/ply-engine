@@ -12,6 +12,7 @@ const PIXELS_PER_POINT: f32 = 2.0;
 static ANIMATION_TRACKER: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (usize, f64)>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Represents an asset that can be loaded as a texture. This can be either a file path or embedded bytes.
+#[derive(Debug)]
 pub enum Asset {
     Path(&'static str), // For external assets
     Bytes{file_name: &'static str, data: &'static [u8]}, // For embedded assets
@@ -873,9 +874,9 @@ fn resize(texture: &Texture2D, height: f32, width: f32, clip: &Option<(i32, i32,
 }
 
 pub async fn render<'a, CustomElementData: 'a>(
-    commands: impl Iterator<Item = RenderCommand<'a, &'static Asset, CustomElementData>>,
+    commands: impl Iterator<Item = RenderCommand<'a, CustomElementData>>,
     fonts: &[Font],
-    handle_custom_command: impl Fn(&RenderCommand<'a, &'static Asset, CustomElementData>),
+    handle_custom_command: impl Fn(&RenderCommand<'a, CustomElementData>),
 ) {
     let mut state = RenderState::new();
     for command in commands {

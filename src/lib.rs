@@ -26,14 +26,14 @@ use text::TextConfig;
 
 use text::TextElementConfig;
 #[derive(Clone)]
-pub struct Declaration<'render, ImageElementData: 'render, CustomElementData: 'render> {
+pub struct Declaration<'render, CustomElementData: 'render> {
     id: Option<Id>,
     inner: engine::ElementDeclaration,
-    _phantom: PhantomData<(&'render CustomElementData, &'render ImageElementData)>,
+    _phantom: PhantomData<&'render CustomElementData>,
 }
 
-impl<'render, ImageElementData: 'render, CustomElementData: 'render>
-    Declaration<'render, ImageElementData, CustomElementData>
+impl<'render, CustomElementData: 'render>
+    Declaration<'render, CustomElementData>
 {
     #[inline]
     pub fn new() -> Self {
@@ -80,41 +80,41 @@ impl<'render, ImageElementData: 'render, CustomElementData: 'render>
     #[inline]
     pub fn layout(
         &mut self,
-    ) -> layout::LayoutBuilder<'_, 'render, ImageElementData, CustomElementData> {
+    ) -> layout::LayoutBuilder<'_, 'render, CustomElementData> {
         layout::LayoutBuilder::new(self)
     }
 
     #[inline]
     pub fn image(
         &mut self,
-    ) -> elements::ImageBuilder<'_, 'render, ImageElementData, CustomElementData> {
+    ) -> elements::ImageBuilder<'_, 'render, CustomElementData> {
         elements::ImageBuilder::new(self)
     }
 
     #[inline]
     pub fn floating(
         &mut self,
-    ) -> elements::FloatingBuilder<'_, 'render, ImageElementData, CustomElementData> {
+    ) -> elements::FloatingBuilder<'_, 'render, CustomElementData> {
         elements::FloatingBuilder::new(self)
     }
 
     #[inline]
     pub fn border(
         &mut self,
-    ) -> elements::BorderBuilder<'_, 'render, ImageElementData, CustomElementData> {
+    ) -> elements::BorderBuilder<'_, 'render, CustomElementData> {
         elements::BorderBuilder::new(self)
     }
 
     #[inline]
     pub fn corner_radius(
         &mut self,
-    ) -> elements::CornerRadiusBuilder<'_, 'render, ImageElementData, CustomElementData> {
+    ) -> elements::CornerRadiusBuilder<'_, 'render, CustomElementData> {
         elements::CornerRadiusBuilder::new(self)
     }
 }
 
-impl<ImageElementData, CustomElementData> Default
-    for Declaration<'_, ImageElementData, CustomElementData>
+impl<CustomElementData> Default
+    for Declaration<'_, CustomElementData>
 {
     fn default() -> Self {
         Self::new()
@@ -124,25 +124,26 @@ impl<ImageElementData, CustomElementData> Default
 #[allow(dead_code)]
 pub struct Ply {
     context: engine::PlyContext,
+    auto_resize: bool,
 }
 
-pub struct PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData> {
+pub struct PlyLayoutScope<'ply, 'render, CustomElementData> {
     ply: &'ply mut Ply,
-    _phantom: core::marker::PhantomData<(&'render ImageElementData, &'render CustomElementData)>,
+    _phantom: core::marker::PhantomData<&'render CustomElementData>,
     dropped: bool,
     #[cfg(feature = "std")]
     owned_strings: std::vec::Vec<std::string::String>,
 }
 
-impl<'render, 'ply: 'render, ImageElementData: 'render, CustomElementData: 'render>
-    PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>
+impl<'render, 'ply: 'render, CustomElementData: 'render>
+    PlyLayoutScope<'ply, 'render, CustomElementData>
 {
     /// Create an element, passing its config and a function to add children
     pub fn with<
-        F: FnOnce(&mut PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>),
+        F: FnOnce(&mut PlyLayoutScope<'ply, 'render, CustomElementData>),
     >(
         &mut self,
-        declaration: &Declaration<'render, ImageElementData, CustomElementData>,
+        declaration: &Declaration<'render, CustomElementData>,
         f: F,
     ) {
         if let Some(id) = declaration.id {
@@ -159,9 +160,9 @@ impl<'render, 'ply: 'render, ImageElementData: 'render, CustomElementData: 'rend
 
     pub fn with_styling<
         G: FnOnce(
-            &mut PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>,
-        ) -> Declaration<'render, ImageElementData, CustomElementData>,
-        F: FnOnce(&mut PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>),
+            &mut PlyLayoutScope<'ply, 'render, CustomElementData>,
+        ) -> Declaration<'render, CustomElementData>,
+        F: FnOnce(&mut PlyLayoutScope<'ply, 'render, CustomElementData>),
     >(
         &mut self,
         g: G,
@@ -183,7 +184,7 @@ impl<'render, 'ply: 'render, ImageElementData: 'render, CustomElementData: 'rend
 
     pub fn end(
         &mut self,
-    ) -> impl Iterator<Item = RenderCommand<'render, ImageElementData, CustomElementData>> {
+    ) -> impl Iterator<Item = RenderCommand<'render, CustomElementData>> {
         self.dropped = true;
         let commands = self.ply.context.end_layout();
         let mut result = Vec::new();
@@ -253,8 +254,8 @@ impl<'render, 'ply: 'render, ImageElementData: 'render, CustomElementData: 'rend
     }
 }
 
-impl<'ply, 'render, ImageElementData, CustomElementData> core::ops::Deref
-    for PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>
+impl<'ply, 'render, CustomElementData> core::ops::Deref
+    for PlyLayoutScope<'ply, 'render, CustomElementData>
 {
     type Target = Ply;
 
@@ -263,16 +264,16 @@ impl<'ply, 'render, ImageElementData, CustomElementData> core::ops::Deref
     }
 }
 
-impl<'ply, 'render, ImageElementData, CustomElementData> core::ops::DerefMut
-    for PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>
+impl<'ply, 'render, CustomElementData> core::ops::DerefMut
+    for PlyLayoutScope<'ply, 'render, CustomElementData>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.ply
     }
 }
 
-impl<ImageElementData, CustomElementData> Drop
-    for PlyLayoutScope<'_, '_, ImageElementData, CustomElementData>
+impl<CustomElementData> Drop
+    for PlyLayoutScope<'_, '_, CustomElementData>
 {
     fn drop(&mut self) {
         if !self.dropped {
@@ -282,9 +283,15 @@ impl<ImageElementData, CustomElementData> Drop
 }
 
 impl Ply {
-    pub fn begin<'render, ImageElementData: 'render, CustomElementData: 'render>(
+    pub fn begin<'render, CustomElementData: 'render>(
         &mut self,
-    ) -> PlyLayoutScope<'_, 'render, ImageElementData, CustomElementData> {
+    ) -> PlyLayoutScope<'_, 'render, CustomElementData> {
+        if self.auto_resize {
+            self.context.set_layout_dimensions(Dimensions::new(
+                macroquad::prelude::screen_width(),
+                macroquad::prelude::screen_height(),
+            ));
+        }
         self.context.begin_layout();
         PlyLayoutScope {
             ply: self,
@@ -295,10 +302,30 @@ impl Ply {
         }
     }
 
+    /// Create a new Ply engine with the given dimensions and fonts.
+    ///
+    /// Text measurement is set up automatically from the provided fonts.
+    /// For custom text measurement, use [`Ply::new_headless`] and
+    /// [`Ply::set_measure_text_function`].
     #[cfg(feature = "std")]
-    pub fn new(dimensions: Dimensions) -> Self {
+    pub fn new(dimensions: Dimensions, fonts: Vec<macroquad::prelude::Font>) -> Self {
+        let mut ply = Self {
+            context: engine::PlyContext::new(dimensions),
+            auto_resize: true,
+        };
+        ply.set_measure_text_function(renderer::create_measure_text_function(fonts));
+        ply
+    }
+
+    /// Create a new Ply engine without text measurement.
+    ///
+    /// Use [`Ply::set_measure_text_function`] to configure text measurement
+    /// before rendering any text elements.
+    #[cfg(feature = "std")]
+    pub fn new_headless(dimensions: Dimensions) -> Self {
         Self {
             context: engine::PlyContext::new(dimensions),
+            auto_resize: false,
         }
     }
 
@@ -461,13 +488,13 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_begin() {
-        let mut ply = Ply::new(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         ply.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
         });
 
-        let mut ply = ply.begin::<(), ()>();
+        let mut ply = ply.begin::<()>();
 
         ply.with(&Declaration::new()
             .layout()
@@ -626,9 +653,9 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_example() {
-        let mut ply = Ply::new(Dimensions::new(1000.0, 1000.0));
+        let mut ply = Ply::new_headless(Dimensions::new(1000.0, 1000.0));
 
-        let mut ply = ply.begin::<(), ()>();
+        let mut ply = ply.begin::<()>();
 
         ply.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
@@ -852,9 +879,9 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_floating() {
-        let mut ply = Ply::new(Dimensions::new(1000.0, 1000.0));
+        let mut ply = Ply::new_headless(Dimensions::new(1000.0, 1000.0));
 
-        let mut ply = ply.begin::<(), ()>();
+        let mut ply = ply.begin::<()>();
 
         ply.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
@@ -942,13 +969,13 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_simple_text_measure() {
-        let mut ply = Ply::new(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         ply.set_measure_text_function(|_text, _config| {
             Dimensions::default()
         });
 
-        let mut ply = ply.begin::<(), ()>();
+        let mut ply = ply.begin::<()>();
 
         ply.with(&Declaration::new()
             .id(ply.id("parent_rect"))

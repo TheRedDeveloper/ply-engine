@@ -1,22 +1,21 @@
-use crate::{color::Color, Declaration, Dimensions, Vector2};
+use crate::{color::Color, Declaration, Dimensions, Vector2, renderer::Asset};
 
 /// Builder for configuring border properties of a `Declaration`.
 pub struct BorderBuilder<
     'declaration,
     'render,
-    ImageElementData: 'render,
     CustomElementData: 'render,
 > {
-    parent: &'declaration mut Declaration<'render, ImageElementData, CustomElementData>,
+    parent: &'declaration mut Declaration<'render, CustomElementData>,
 }
 
-impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'render>
-    BorderBuilder<'declaration, 'render, ImageElementData, CustomElementData>
+impl<'declaration, 'render, CustomElementData: 'render>
+    BorderBuilder<'declaration, 'render, CustomElementData>
 {
     /// Creates a new `BorderBuilder` with the given parent `Declaration`.
     #[inline]
     pub fn new(
-        parent: &'declaration mut Declaration<'render, ImageElementData, CustomElementData>,
+        parent: &'declaration mut Declaration<'render, CustomElementData>,
     ) -> Self {
         BorderBuilder { parent }
     }
@@ -75,7 +74,7 @@ impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'rende
 
     /// Returns the modified `Declaration`.
     #[inline]
-    pub fn end(&mut self) -> &mut Declaration<'render, ImageElementData, CustomElementData> {
+    pub fn end(&mut self) -> &mut Declaration<'render, CustomElementData> {
         self.parent
     }
 }
@@ -84,19 +83,18 @@ impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'rende
 pub struct ImageBuilder<
     'declaration,
     'render,
-    ImageElementData: 'render,
     CustomElementData: 'render,
 > {
-    parent: &'declaration mut Declaration<'render, ImageElementData, CustomElementData>,
+    parent: &'declaration mut Declaration<'render, CustomElementData>,
 }
 
-impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'render>
-    ImageBuilder<'declaration, 'render, ImageElementData, CustomElementData>
+impl<'declaration, 'render, CustomElementData: 'render>
+    ImageBuilder<'declaration, 'render, CustomElementData>
 {
     /// Creates a new `ImageBuilder` with the given parent `Declaration`.
     #[inline]
     pub fn new(
-        parent: &'declaration mut Declaration<'render, ImageElementData, CustomElementData>,
+        parent: &'declaration mut Declaration<'render, CustomElementData>,
     ) -> Self {
         ImageBuilder { parent }
     }
@@ -104,13 +102,13 @@ impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'rende
     /// Sets the image data.
     /// The data must be created using [`Ply::data`].
     #[inline]
-    pub fn data(&mut self, data: &'render ImageElementData) -> &mut Self {
-        self.parent.inner.image_data = data as *const ImageElementData as usize;
+    pub fn data(&mut self, data: &'static Asset) -> &mut Self {
+        self.parent.inner.image_data = data as *const Asset as usize;
         self
     }
     /// Returns the modified `Declaration`.
     #[inline]
-    pub fn end(&mut self) -> &mut Declaration<'render, ImageElementData, CustomElementData> {
+    pub fn end(&mut self) -> &mut Declaration<'render, CustomElementData> {
         self.parent
     }
 }
@@ -181,19 +179,18 @@ pub enum FloatingClipToElement {
 pub struct FloatingBuilder<
     'declaration,
     'render,
-    ImageElementData: 'render,
     CustomElementData: 'render,
 > {
-    parent: &'declaration mut Declaration<'render, ImageElementData, CustomElementData>,
+    parent: &'declaration mut Declaration<'render, CustomElementData>,
 }
 
-impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'render>
-    FloatingBuilder<'declaration, 'render, ImageElementData, CustomElementData>
+impl<'declaration, 'render, CustomElementData: 'render>
+    FloatingBuilder<'declaration, 'render, CustomElementData>
 {
     /// Creates a new `FloatingBuilder` with the given parent `Declaration`.
     #[inline]
     pub fn new(
-        parent: &'declaration mut Declaration<'render, ImageElementData, CustomElementData>,
+        parent: &'declaration mut Declaration<'render, CustomElementData>,
     ) -> Self {
         FloatingBuilder { parent }
     }
@@ -259,7 +256,7 @@ impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'rende
 
     /// Returns the modified `Declaration`.
     #[inline]
-    pub fn end(&mut self) -> &mut Declaration<'render, ImageElementData, CustomElementData> {
+    pub fn end(&mut self) -> &mut Declaration<'render, CustomElementData> {
         self.parent
     }
 }
@@ -268,19 +265,18 @@ impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'rende
 pub struct CornerRadiusBuilder<
     'declaration,
     'render,
-    ImageElementData: 'render,
     CustomElementData: 'render,
 > {
-    parent: &'declaration mut Declaration<'render, ImageElementData, CustomElementData>,
+    parent: &'declaration mut Declaration<'render, CustomElementData>,
 }
 
-impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'render>
-    CornerRadiusBuilder<'declaration, 'render, ImageElementData, CustomElementData>
+impl<'declaration, 'render, CustomElementData: 'render>
+    CornerRadiusBuilder<'declaration, 'render, CustomElementData>
 {
     /// Creates a new `CornerRadiusBuilder` with the given parent `Declaration`.
     #[inline]
     pub fn new(
-        parent: &'declaration mut Declaration<'render, ImageElementData, CustomElementData>,
+        parent: &'declaration mut Declaration<'render, CustomElementData>,
     ) -> Self {
         CornerRadiusBuilder { parent }
     }
@@ -325,7 +321,7 @@ impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'rende
 
     /// Returns the modified `Declaration`.
     #[inline]
-    pub fn end(&mut self) -> &mut Declaration<'render, ImageElementData, CustomElementData> {
+    pub fn end(&mut self) -> &mut Declaration<'render, CustomElementData> {
         self.parent
     }
 }

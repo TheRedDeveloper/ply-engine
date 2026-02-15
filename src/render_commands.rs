@@ -1,4 +1,4 @@
-use crate::{color::Color, engine, math::BoundingBox};
+use crate::{color::Color, engine, math::BoundingBox, renderer::Asset};
 
 /// Represents a rectangle with a specified color and corner radii.
 #[derive(Debug, Clone)]
@@ -67,13 +67,13 @@ pub struct Border {
 
 /// Represents an image with defined dimensions and data.
 #[derive(Debug, Clone)]
-pub struct Image<'a, ImageElementData> {
+pub struct Image {
     /// Background color
     pub background_color: Color,
     /// The corner radii for rounded border edges.
     pub corner_radii: CornerRadii,
-    /// A pointer to the image data.
-    pub data: &'a ImageElementData,
+    /// A reference to the asset data.
+    pub data: &'static Asset,
 }
 
 /// Represents a custom element with a background color, corner radii, and associated data.
@@ -99,19 +99,19 @@ impl From<engine::CornerRadius> for CornerRadii {
 }
 
 #[derive(Debug, Clone)]
-pub enum RenderCommandConfig<'a, ImageElementData, CustomElementData> {
+pub enum RenderCommandConfig<'a, CustomElementData> {
     None(),
     Rectangle(Rectangle),
     Border(Border),
     Text(Text<'a>),
-    Image(Image<'a, ImageElementData>),
+    Image(Image),
     ScissorStart(),
     ScissorEnd(),
     Custom(Custom<'a, CustomElementData>),
 }
 
-impl<ImageElementData, CustomElementData>
-    RenderCommandConfig<'_, ImageElementData, CustomElementData>
+impl<CustomElementData>
+    RenderCommandConfig<'_, CustomElementData>
 {
     pub(crate) unsafe fn from_engine_render_command(value: &engine::InternalRenderCommand) -> Self {
         match value.command_type {
@@ -164,7 +164,7 @@ impl<ImageElementData, CustomElementData>
             engine::RenderCommandType::Image => {
                 if let engine::InternalRenderData::Image { background_color, corner_radius, image_data } = &value.render_data {
                     Self::Image(Image {
-                        data: &*(*image_data as *const ImageElementData),
+                        data: &*(*image_data as *const Asset),
                         corner_radii: (*corner_radius).into(),
                         background_color: *background_color,
                     })
@@ -191,11 +191,11 @@ impl<ImageElementData, CustomElementData>
 
 /// Represents a render command for drawing an element on the screen.
 #[derive(Debug, Clone)]
-pub struct RenderCommand<'a, ImageElementData, CustomElementData> {
+pub struct RenderCommand<'a, CustomElementData> {
     /// The bounding box defining the area occupied by the element.
     pub bounding_box: BoundingBox,
     /// The specific configuration for rendering this command.
-    pub config: RenderCommandConfig<'a, ImageElementData, CustomElementData>,
+    pub config: RenderCommandConfig<'a, CustomElementData>,
     /// A unique identifier for the render command.
     pub id: u32,
     /// The z-index determines the stacking order of elements.
@@ -203,7 +203,7 @@ pub struct RenderCommand<'a, ImageElementData, CustomElementData> {
     pub z_index: i16,
 }
 
-impl<ImageElementData, CustomElementData> RenderCommand<'_, ImageElementData, CustomElementData> {
+impl<CustomElementData> RenderCommand<'_, CustomElementData> {
     pub(crate) unsafe fn from_engine_render_command(value: &engine::InternalRenderCommand) -> Self {
         Self {
             id: value.id,
