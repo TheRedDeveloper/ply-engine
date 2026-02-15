@@ -122,46 +122,46 @@ impl<ImageElementData, CustomElementData> Default
 }
 
 #[allow(dead_code)]
-pub struct Clay {
-    context: engine::ClayContext,
+pub struct Ply {
+    context: engine::PlyContext,
 }
 
-pub struct ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData> {
-    clay: &'clay mut Clay,
+pub struct PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData> {
+    ply: &'ply mut Ply,
     _phantom: core::marker::PhantomData<(&'render ImageElementData, &'render CustomElementData)>,
     dropped: bool,
     #[cfg(feature = "std")]
     owned_strings: std::vec::Vec<std::string::String>,
 }
 
-impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'render>
-    ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>
+impl<'render, 'ply: 'render, ImageElementData: 'render, CustomElementData: 'render>
+    PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>
 {
     /// Create an element, passing its config and a function to add children
     pub fn with<
-        F: FnOnce(&mut ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>),
+        F: FnOnce(&mut PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>),
     >(
         &mut self,
         declaration: &Declaration<'render, ImageElementData, CustomElementData>,
         f: F,
     ) {
         if let Some(id) = declaration.id {
-            self.clay.context.open_element_with_id(id.id);
+            self.ply.context.open_element_with_id(id.id);
         } else {
-            self.clay.context.open_element();
+            self.ply.context.open_element();
         }
-        self.clay.context.configure_open_element(&declaration.inner);
+        self.ply.context.configure_open_element(&declaration.inner);
 
         f(self);
 
-        self.clay.context.close_element();
+        self.ply.context.close_element();
     }
 
     pub fn with_styling<
         G: FnOnce(
-            &mut ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>,
+            &mut PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>,
         ) -> Declaration<'render, ImageElementData, CustomElementData>,
-        F: FnOnce(&mut ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>),
+        F: FnOnce(&mut PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>),
     >(
         &mut self,
         g: G,
@@ -170,22 +170,22 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
         let declaration = g(self);
 
         if let Some(id) = declaration.id {
-            self.clay.context.open_element_with_id(id.id);
+            self.ply.context.open_element_with_id(id.id);
         } else {
-            self.clay.context.open_element();
+            self.ply.context.open_element();
         }
-        self.clay.context.configure_open_element(&declaration.inner);
+        self.ply.context.configure_open_element(&declaration.inner);
 
         f(self);
 
-        self.clay.context.close_element();
+        self.ply.context.close_element();
     }
 
     pub fn end(
         &mut self,
     ) -> impl Iterator<Item = RenderCommand<'render, ImageElementData, CustomElementData>> {
         self.dropped = true;
-        let commands = self.clay.context.end_layout();
+        let commands = self.ply.context.end_layout();
         let mut result = Vec::new();
         for cmd in commands {
             result.push(unsafe { RenderCommand::from_engine_render_command(cmd) });
@@ -207,8 +207,8 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
     /// Only available in no_std - you must ensure the string lives long enough.
     #[cfg(not(feature = "std"))]
     pub fn text(&mut self, text: &'render str, config: TextElementConfig) {
-        let text_config_index = self.clay.context.store_text_element_config(config.into_internal());
-        self.clay.context.open_text_element(
+        let text_config_index = self.ply.context.store_text_element_config(config.into_internal());
+        self.ply.context.open_text_element(
             text.as_ptr() as usize,
             text.len() as i32,
             false,
@@ -218,8 +218,8 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
 
     /// Adds a text element from a static string literal without copying.
     pub fn text_literal(&mut self, text: &'static str, config: TextElementConfig) {
-        let text_config_index = self.clay.context.store_text_element_config(config.into_internal());
-        self.clay.context.open_text_element(
+        let text_config_index = self.ply.context.store_text_element_config(config.into_internal());
+        self.ply.context.open_text_element(
             text.as_ptr() as usize,
             text.len() as i32,
             true,
@@ -233,61 +233,61 @@ impl<'render, 'clay: 'render, ImageElementData: 'render, CustomElementData: 'ren
         let ptr = text.as_ptr() as usize;
         let len = text.len() as i32;
         self.owned_strings.push(text);
-        let text_config_index = self.clay.context.store_text_element_config(config.into_internal());
-        self.clay.context.open_text_element(ptr, len, false, text_config_index);
+        let text_config_index = self.ply.context.store_text_element_config(config.into_internal());
+        self.ply.context.open_text_element(ptr, len, false, text_config_index);
     }
 
     pub fn hovered(&self) -> bool {
-        self.clay.context.hovered()
+        self.ply.context.hovered()
     }
 
     pub fn on_hover<F>(&mut self, callback: F)
     where
         F: FnMut(engine::ElementId, engine::PointerData) + 'static,
     {
-        self.clay.context.on_hover(Box::new(callback));
+        self.ply.context.on_hover(Box::new(callback));
     }
 
     pub fn scroll_offset(&self) -> Vector2 {
-        self.clay.context.get_scroll_offset()
+        self.ply.context.get_scroll_offset()
     }
 }
 
-impl<'clay, 'render, ImageElementData, CustomElementData> core::ops::Deref
-    for ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>
+impl<'ply, 'render, ImageElementData, CustomElementData> core::ops::Deref
+    for PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>
 {
-    type Target = Clay;
+    type Target = Ply;
 
     fn deref(&self) -> &Self::Target {
-        self.clay
+        self.ply
     }
 }
 
-impl<'clay, 'render, ImageElementData, CustomElementData> core::ops::DerefMut
-    for ClayLayoutScope<'clay, 'render, ImageElementData, CustomElementData>
+impl<'ply, 'render, ImageElementData, CustomElementData> core::ops::DerefMut
+    for PlyLayoutScope<'ply, 'render, ImageElementData, CustomElementData>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.clay
+        self.ply
     }
 }
 
 impl<ImageElementData, CustomElementData> Drop
-    for ClayLayoutScope<'_, '_, ImageElementData, CustomElementData>
+    for PlyLayoutScope<'_, '_, ImageElementData, CustomElementData>
 {
     fn drop(&mut self) {
         if !self.dropped {
-            self.clay.context.end_layout();
+            self.ply.context.end_layout();
         }
     }
 }
 
-impl Clay {
+impl Ply {
     pub fn begin<'render, ImageElementData: 'render, CustomElementData: 'render>(
         &mut self,
-    ) -> ClayLayoutScope<'_, 'render, ImageElementData, CustomElementData> {
+    ) -> PlyLayoutScope<'_, 'render, ImageElementData, CustomElementData> {
         self.context.begin_layout();
-        ClayLayoutScope {
-            clay: self,
+        PlyLayoutScope {
+            ply: self,
             _phantom: core::marker::PhantomData,
             dropped: false,
             #[cfg(feature = "std")]
@@ -298,7 +298,7 @@ impl Clay {
     #[cfg(feature = "std")]
     pub fn new(dimensions: Dimensions) -> Self {
         Self {
-            context: engine::ClayContext::new(dimensions),
+            context: engine::PlyContext::new(dimensions),
         }
     }
 
@@ -383,19 +383,19 @@ impl Clay {
         ));
     }
 
-    /// Sets the maximum number of elements that clay supports
-    /// **Use only if you know what you are doing or you're getting errors from clay**
+    /// Sets the maximum number of elements that ply supports
+    /// **Use only if you know what you are doing or you're getting errors from ply**
     pub fn max_element_count(&mut self, max_element_count: u32) {
         self.context.set_max_element_count(max_element_count as i32);
     }
 
     /// Sets the capacity of the cache used for text in the measure text function
-    /// **Use only if you know what you are doing or you're getting errors from clay**
+    /// **Use only if you know what you are doing or you're getting errors from ply**
     pub fn max_measure_text_cache_word_count(&mut self, count: u32) {
         self.context.set_max_measure_text_cache_word_count(count as i32);
     }
 
-    /// Enables or disables the debug mode of clay
+    /// Enables or disables the debug mode of ply
     pub fn set_debug_mode(&mut self, enable: bool) {
         self.context.set_debug_mode_enabled(enable);
     }
@@ -416,7 +416,7 @@ impl Clay {
         self.context.set_layout_dimensions(dimensions);
     }
 
-    /// Updates the state of the pointer for clay. Used to update scroll containers and for
+    /// Updates the state of the pointer for ply. Used to update scroll containers and for
     /// interactions functions
     pub fn pointer_state(&mut self, position: Vector2, is_down: bool) {
         self.context.set_pointer_state(position, is_down);
@@ -461,36 +461,36 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_begin() {
-        let mut clay = Clay::new(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new(Dimensions::new(800.0, 600.0));
 
-        clay.set_measure_text_function(|_, _| {
+        ply.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
         });
 
-        let mut clay = clay.begin::<(), ()>();
+        let mut ply = ply.begin::<(), ()>();
 
-        clay.with(&Declaration::new()
+        ply.with(&Declaration::new()
             .layout()
                 .width(Sizing::Fixed(100.0))
                 .height(Sizing::Fixed(100.0))
                 .end()
-            .background_color(Color::rgb(255., 255., 255.)), |clay|
+            .background_color(Color::rgb(255., 255., 255.)), |ply|
         {
-            clay.with(&Declaration::new()
+            ply.with(&Declaration::new()
                 .layout()
                     .width(Sizing::Fixed(100.0))
                     .height(Sizing::Fixed(100.0))
                     .end()
-                .background_color(Color::rgb(255., 255., 255.)), |clay|
+                .background_color(Color::rgb(255., 255., 255.)), |ply|
             {
-                clay.with(&Declaration::new()
+                ply.with(&Declaration::new()
                     .layout()
                         .width(Sizing::Fixed(100.0))
                         .height(Sizing::Fixed(100.0))
                         .end()
-                    .background_color(Color::rgb(255., 255., 255.)), |clay|
+                    .background_color(Color::rgb(255., 255., 255.)), |ply|
                     {
-                        clay.text_literal("test", TextConfig::new()
+                        ply.text_literal("test", TextConfig::new()
                             .color(Color::rgb(255., 255., 255.))
                             .font_size(24)
                             .end());
@@ -499,25 +499,25 @@ mod tests {
             });
         });
 
-        clay.with(&Declaration::new()
+        ply.with(&Declaration::new()
             .layout()
                 .end()
             .border()
                 .color(Color::rgb(255., 255., 0.))
                 .all_directions(2)
                 .end()
-            .corner_radius().all(10.0).end(), |clay|
+            .corner_radius().all(10.0).end(), |ply|
         {
-            clay.with(&Declaration::new()
+            ply.with(&Declaration::new()
                 .layout()
                     .width(Sizing::Fixed(50.0))
                     .height(Sizing::Fixed(50.0))
                     .end()
-                .background_color(Color::rgb(0., 255., 255.)), |_clay| {},
+                .background_color(Color::rgb(0., 255., 255.)), |_ply| {},
             );
         });
 
-        let items = clay.end().collect::<Vec<_>>();
+        let items = ply.end().collect::<Vec<_>>();
 
         for item in &items {
             println!(
@@ -626,16 +626,16 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_example() {
-        let mut clay = Clay::new(Dimensions::new(1000.0, 1000.0));
+        let mut ply = Ply::new(Dimensions::new(1000.0, 1000.0));
 
-        let mut clay = clay.begin::<(), ()>();
+        let mut ply = ply.begin::<(), ()>();
 
-        clay.set_measure_text_function(|_, _| {
+        ply.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
         });
 
         for &(label, level) in &[("Road", 1), ("Wall", 2), ("Tower", 3)] {
-            clay.with(
+            ply.with(
                 &Declaration::new()
                     .layout()
                         .width(grow!())
@@ -647,16 +647,16 @@ mod tests {
                             crate::layout::LayoutAlignmentY::Center,
                         ))
                         .end(),
-                |clay| {
-                    clay.text_literal(label,
+                |ply| {
+                    ply.text_literal(label,
                         TextConfig::new().font_size(18).color(Color::u_rgb(0xFF, 0xFF, 0xFF)).end());
-                    clay.with(
+                    ply.with(
                         &Declaration::new()
                             .layout().width(grow!()).height(fixed!(18.0)).end()
                             .corner_radius().all(9.0).end()
                             .background_color(Color::u_rgb(0x55, 0x55, 0x55)),
-                        |clay| {
-                            clay.with(
+                        |ply| {
+                            ply.with(
                                 &Declaration::new()
                                     .layout()
                                         .width(fixed!(300.0 * level as f32 / 3.0))
@@ -672,7 +672,7 @@ mod tests {
             );
         }
 
-        let items = clay.end().collect::<Vec<_>>();
+        let items = ply.end().collect::<Vec<_>>();
 
         for item in &items {
             println!(
@@ -852,15 +852,15 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_floating() {
-        let mut clay = Clay::new(Dimensions::new(1000.0, 1000.0));
+        let mut ply = Ply::new(Dimensions::new(1000.0, 1000.0));
 
-        let mut clay = clay.begin::<(), ()>();
+        let mut ply = ply.begin::<(), ()>();
 
-        clay.set_measure_text_function(|_, _| {
+        ply.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
         });
 
-        clay.with(
+        ply.with(
             &Declaration::new()
                 .layout()
                     .width(fixed!(20.0))
@@ -882,8 +882,8 @@ mod tests {
                 .end()
                 .corner_radius().all(10.0).end()
                 .background_color(Color::u_rgb(0x44, 0x88, 0xDD)),
-            |clay| {
-                clay.text_literal(
+            |ply| {
+                ply.text_literal(
                     "Re",
                     TextConfig::new()
                         .font_size(6)
@@ -893,7 +893,7 @@ mod tests {
             },
         );
 
-        let items = clay.end().collect::<Vec<_>>();
+        let items = ply.end().collect::<Vec<_>>();
 
         for item in &items {
             println!(
@@ -942,39 +942,39 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_simple_text_measure() {
-        let mut clay = Clay::new(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new(Dimensions::new(800.0, 600.0));
 
-        clay.set_measure_text_function(|_text, _config| {
+        ply.set_measure_text_function(|_text, _config| {
             Dimensions::default()
         });
 
-        let mut clay = clay.begin::<(), ()>();
+        let mut ply = ply.begin::<(), ()>();
 
-        clay.with(&Declaration::new()
-            .id(clay.id("parent_rect"))
+        ply.with(&Declaration::new()
+            .id(ply.id("parent_rect"))
             .layout()
                 .width(Sizing::Fixed(100.0))
                 .height(Sizing::Fixed(100.0))
                 .padding(Padding::all(10))
                 .end()
-            .background_color(Color::rgb(255., 255., 255.)), |clay|
+            .background_color(Color::rgb(255., 255., 255.)), |ply|
         {
-            clay.text_literal("test", TextConfig::new()
+            ply.text_literal("test", TextConfig::new()
                 .color(Color::rgb(255., 255., 255.))
                 .font_size(24)
                 .end());
 
-            clay.text(&format!("dynamic str {}", 1234), TextConfig::new()
+            ply.text(&format!("dynamic str {}", 1234), TextConfig::new()
                 .color(Color::rgb(255., 255., 255.))
                 .font_size(24)
                 .end());
 
-            clay.text_string(format!("String {}", 1234), TextConfig::new()
+            ply.text_string(format!("String {}", 1234), TextConfig::new()
                 .color(Color::rgb(255., 255., 255.))
                 .font_size(24)
                 .end());
         });
 
-        let _items = clay.end();
+        let _items = ply.end();
     }
 }

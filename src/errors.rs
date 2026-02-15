@@ -1,8 +1,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ErrorType {
-    /// Thrown if the text measurement function is never provided to clay and you try using
-    /// `Clay::text`
+    /// Thrown if the text measurement function is never provided to ply and you try using
+    /// `Ply::text`
     TextMeasurementFunctionNotProvided,
     ArenaCapacityExceeded,
     ElementsCapacityExceeded,

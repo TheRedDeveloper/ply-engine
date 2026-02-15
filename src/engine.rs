@@ -1,5 +1,5 @@
-//! Pure Rust implementation of the Clay layout engine.
-//! Replaces the C implementation from clay.h.
+//! Pure Rust implementation of the Ply layout engine.
+//! A UI layout engine inspired by Clay.
 
 use std::collections::HashMap;
 
@@ -211,7 +211,7 @@ impl Default for InternalTextElementConfig {
     }
 }
 
-/// The top-level element declaration, replacing Clay_ElementDeclaration.
+/// The top-level element declaration.
 #[derive(Debug, Clone, Copy)]
 pub struct ElementDeclaration {
     pub layout: LayoutConfig,
@@ -522,10 +522,10 @@ impl Default for ScrollContainerData {
 }
 
 // ============================================================================
-// ClayContext - the main layout engine context
+// PlyContext - the main layout engine context
 // ============================================================================
 
-pub struct ClayContext {
+pub struct PlyContext {
     // Settings
     pub max_element_count: i32,
     pub max_measure_text_cache_word_count: i32,
@@ -728,10 +728,10 @@ fn point_is_inside_rect(point: Vector2, rect: BoundingBox) -> bool {
 }
 
 // ============================================================================
-// ClayContext implementation
+// PlyContext implementation
 // ============================================================================
 
-impl ClayContext {
+impl PlyContext {
     pub fn new(dimensions: Dimensions) -> Self {
         let max_element_count = DEFAULT_MAX_ELEMENT_COUNT;
         let max_measure_text_cache_word_count = DEFAULT_MAX_MEASURE_TEXT_WORD_CACHE_COUNT;
@@ -1089,7 +1089,7 @@ impl ClayContext {
                     == FloatingAttachToElement::Root
                 {
                     floating_config.parent_id =
-                        hash_string("Clay__RootContainer", 0).id;
+                        hash_string("Ply__RootContainer", 0).id;
                 }
 
                 if declaration.floating.clip_to == FloatingClipToElement::None {
@@ -1618,7 +1618,7 @@ impl ClayContext {
 
         self.boolean_warnings = BooleanWarnings::default();
 
-        let root_id = hash_string("Clay__RootContainer", 0);
+        let root_id = hash_string("Ply__RootContainer", 0);
         self.open_element_with_id(root_id);
 
         let root_decl = ElementDeclaration {
@@ -3597,7 +3597,7 @@ impl ClayContext {
 
             // Separator between roots
             if root_index > 0 {
-                self.debug_open_idi("Clay__DebugView_EmptyRowOuter", root_index as u32, &ElementDeclaration {
+                self.debug_open_idi("Ply__DebugView_EmptyRowOuter", root_index as u32, &ElementDeclaration {
                     layout: LayoutConfig {
                         sizing: SizingConfig {
                             width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
@@ -3609,7 +3609,7 @@ impl ClayContext {
                     ..Default::default()
                 });
                 {
-                    self.debug_open_idi("Clay__DebugView_EmptyRow", root_index as u32, &ElementDeclaration {
+                    self.debug_open_idi("Ply__DebugView_EmptyRow", root_index as u32, &ElementDeclaration {
                         layout: LayoutConfig {
                             sizing: SizingConfig {
                                 width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
@@ -3683,7 +3683,7 @@ impl ClayContext {
                 }
 
                 // Row for this element
-                self.debug_open_idi("Clay__DebugView_ElementOuter", current_elem_id, &ElementDeclaration {
+                self.debug_open_idi("Ply__DebugView_ElementOuter", current_elem_id, &ElementDeclaration {
                     layout: scroll_item_layout,
                     ..Default::default()
                 });
@@ -3694,7 +3694,7 @@ impl ClayContext {
                     // Collapse icon / button or dot
                     if !is_text && children_len > 0 {
                         // Collapse button
-                        self.debug_open_idi("Clay__DebugView_CollapseElement", current_elem_id, &ElementDeclaration {
+                        self.debug_open_idi("Ply__DebugView_CollapseElement", current_elem_id, &ElementDeclaration {
                             layout: LayoutConfig {
                                 sizing: SizingConfig {
                                     width: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: 16.0, max: 16.0 }, ..Default::default() },
@@ -4026,7 +4026,7 @@ impl ClayContext {
 
         // Handle collapse button clicks
         if self.pointer_info.state == PointerDataInteractionState::PressedThisFrame {
-            let collapse_base_id = hash_string("Clay__DebugView_CollapseElement", 0).base_id;
+            let collapse_base_id = hash_string("Ply__DebugView_CollapseElement", 0).base_id;
             for i in (0..self.pointer_over_ids.len()).rev() {
                 let element_id = self.pointer_over_ids[i];
                 if element_id.base_id == collapse_base_id {
@@ -4040,7 +4040,7 @@ impl ClayContext {
 
         // Render highlight on hovered element
         if highlighted_element_id != 0 {
-            self.debug_open_id("Clay__DebugView_ElementHighlight", &ElementDeclaration {
+            self.debug_open_id("Ply__DebugView_ElementHighlight", &ElementDeclaration {
                 layout: LayoutConfig {
                     sizing: SizingConfig {
                         width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
@@ -4058,7 +4058,7 @@ impl ClayContext {
                 ..Default::default()
             });
             {
-                self.debug_open_id("Clay__DebugView_ElementHighlightRectangle", &ElementDeclaration {
+                self.debug_open_id("Ply__DebugView_ElementHighlightRectangle", &ElementDeclaration {
                     layout: LayoutConfig {
                         sizing: SizingConfig {
                             width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
@@ -4099,7 +4099,7 @@ impl ClayContext {
         });
 
         // Determine scroll offset for the debug scroll pane
-        let scroll_id = hash_string("Clay__DebugViewOuterScrollPane", 0);
+        let scroll_id = hash_string("Ply__DebugViewOuterScrollPane", 0);
         let mut scroll_y_offset: f32 = 0.0;
         let mut pointer_in_debug_view = self.pointer_info.position.y < self.layout_dimensions.height - 300.0;
         for scd in &self.scroll_container_datas {
@@ -4126,7 +4126,7 @@ impl ClayContext {
         };
 
         // Main debug view panel (floating)
-        self.debug_open_id("Clay__DebugView", &ElementDeclaration {
+        self.debug_open_id("Ply__DebugView", &ElementDeclaration {
             layout: LayoutConfig {
                 sizing: SizingConfig {
                     width: SizingAxis {
@@ -4179,7 +4179,7 @@ impl ClayContext {
                 ..Default::default()
             });
             {
-                self.debug_text("Clay Debug Tools", info_text_config);
+                self.debug_text("Ply Debug Tools", info_text_config);
                 // Spacer
                 self.debug_open(&ElementDeclaration {
                     layout: LayoutConfig {
@@ -4274,7 +4274,7 @@ impl ClayContext {
                 });
                 {
                     // Floating element list overlay
-                    let panel_contents_id = hash_string("Clay__DebugViewPaneOuter", 0);
+                    let panel_contents_id = hash_string("Ply__DebugViewPaneOuter", 0);
                     self.open_element_with_id(panel_contents_id);
                     self.configure_open_element(&ElementDeclaration {
                         layout: LayoutConfig {
@@ -4384,7 +4384,7 @@ impl ClayContext {
                     self.render_debug_selected_element_panel(info_text_config, info_title_config);
                 }
             }
-            self.close_element(); // Clay__DebugView
+            self.close_element(); // Ply__DebugView
         }
     }
 
@@ -4538,7 +4538,7 @@ impl ClayContext {
 
                 // Padding
                 self.debug_text("Padding", info_title_config);
-                self.debug_open_id("Clay__DebugViewElementInfoPadding", &ElementDeclaration::default());
+                self.debug_open_id("Ply__DebugViewElementInfoPadding", &ElementDeclaration::default());
                 {
                     self.debug_text("{ left: ", info_text_config);
                     self.debug_int_text(layout_config.padding.left as f32, info_text_config);
@@ -4758,7 +4758,7 @@ impl ClayContext {
                     }
                     ElementConfigType::Border => {
                         let border_config = self.border_element_configs[ec.config_index];
-                        self.debug_open_id("Clay__DebugViewElementInfoBorderBody", &ElementDeclaration {
+                        self.debug_open_id("Ply__DebugViewElementInfoBorderBody", &ElementDeclaration {
                             layout: LayoutConfig {
                                 padding: attr_padding,
                                 child_gap: 8,

@@ -41,7 +41,7 @@ impl TextElementConfig {
 pub struct TextConfig {
     /// The color of the text.
     pub color: Color,
-    /// Clay does not manage fonts. It is up to the user to assign a unique ID to each font
+    /// Ply does not manage fonts. It is up to the user to assign a unique ID to each font
     /// and provide it via the [`font_id`](Text::font_id) field.
     pub font_id: u16,
     /// The font size of the text.

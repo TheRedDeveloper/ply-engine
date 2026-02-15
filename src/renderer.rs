@@ -114,12 +114,12 @@ impl TextureManager {
     }
 }
 
-fn clay_to_macroquad_color(clay_color: &crate::color::Color) -> Color {
+fn ply_to_macroquad_color(ply_color: &crate::color::Color) -> Color {
     Color {
-        r: clay_color.r / 255.0,
-        g: clay_color.g / 255.0,
-        b: clay_color.b / 255.0,
-        a: clay_color.a / 255.0,
+        r: ply_color.r / 255.0,
+        g: ply_color.g / 255.0,
+        b: ply_color.b / 255.0,
+        a: ply_color.a / 255.0,
     }
 }
 
@@ -883,7 +883,7 @@ pub async fn render<'a, CustomElementData: 'a>(
             RenderCommandConfig::Image(image) => {
                 let bb = command.bounding_box;
                 let cr = &image.corner_radii;
-                let mut tint = clay_to_macroquad_color(&image.background_color);
+                let mut tint = ply_to_macroquad_color(&image.background_color);
                 if tint == Color::new(0.0, 0.0, 0.0, 0.0) {
                     tint = Color::new(1.0, 1.0, 1.0, 1.0);
                 }
@@ -1082,7 +1082,7 @@ pub async fn render<'a, CustomElementData: 'a>(
             }
             RenderCommandConfig::Rectangle(config) => {
                 let bb = command.bounding_box;
-                let color = clay_to_macroquad_color(&config.color);
+                let color = ply_to_macroquad_color(&config.color);
                 let cr = &config.corner_radii;
 
                 if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
@@ -1208,7 +1208,7 @@ pub async fn render<'a, CustomElementData: 'a>(
                 let bb = command.bounding_box;
                 let font_size = config.font_size as f32;
                 let font = Some(&fonts[config.font_id as usize]);
-                let default_color = clay_to_macroquad_color(&config.color);
+                let default_color = ply_to_macroquad_color(&config.color);
 
                 let normal_render = || {
                     let x_scale = if config.letter_spacing > 0 {
@@ -1402,7 +1402,7 @@ pub async fn render<'a, CustomElementData: 'a>(
             #[cfg(not(feature = "text-styling"))]
             RenderCommandConfig::Text(config) => {
                 let bb = command.bounding_box;
-                let color = clay_to_macroquad_color(&config.color);
+                let color = ply_to_macroquad_color(&config.color);
 
                 let x_scale = if config.letter_spacing > 0 {
                     bb.width / measure_text(
@@ -1432,7 +1432,7 @@ pub async fn render<'a, CustomElementData: 'a>(
                 let bb = command.bounding_box;
                 let bw = &config.width;
                 let cr = &config.corner_radii;
-                let color = clay_to_macroquad_color(&config.color);
+                let color = ply_to_macroquad_color(&config.color);
                 if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
                     if bw.left == bw.right && bw.left == bw.top && bw.left == bw.bottom {
                         let border_width = bw.left as f32;

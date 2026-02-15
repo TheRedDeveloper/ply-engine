@@ -6,13 +6,13 @@ pub struct Id {
 }
 
 impl Id {
-    /// Creates a clay id using the `label`
+    /// Creates a ply id using the `label`
     #[inline]
     pub(crate) fn new(label: &'static str) -> Id {
         Self::new_index(label, 0)
     }
 
-    /// Creates a clay id using the `label` and the `index`
+    /// Creates a ply id using the `label` and the `index`
     #[inline]
     pub(crate) fn new_index(label: &'static str, index: u32) -> Id {
         let id = engine::hash_string_with_offset(label, index, 0);

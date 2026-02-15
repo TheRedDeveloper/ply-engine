@@ -1,16 +1,13 @@
 [package]
-name = "clay-layout"
-version = "0.4.0"
+name = "ply-engine"
+version = "0.1.0"
 edition = "2021"
-description = "Rust bindings for Clay, a UI layout library written in C."
-keywords = ["clay", "ui", "layout", "bindings", "no_std"]
-repository = "https://github.com/clay-ui-rs/clay"
+description = "A pure Rust UI layout engine, inspired by Clay."
+keywords = ["engine", "ui", "layout", "ply"]
+repository = "https://github.com/TheRedDeveloper/ply-engine"
 readme = "README.md"
 license-file = "LICENSE.md"
 exclude = ["scripts/*", ".vscode/*", ".github/*", ".cargo/*"]
-
-[build-dependencies]
-cc = "1.0"
 
 [features]
 default = ["std"]
@@ -18,23 +15,9 @@ text-styling = []
 tinyvg = ["dep:tinyvg", "kurbo", "lyon"]
 
 std = []
-wasm = []
-debug = []
 
 [dependencies]
 macroquad = { version = "0.4" }
 tinyvg = { version = "0.2", default-features = false, optional = true }
 kurbo = { version = "0.13.0", optional = true }
 lyon = { version = "1.0", optional = true }
-
-[dev-dependencies]
-winit = "0.30"
-wgpu = "24.0"
-pollster = "0.4"
-bytemuck = { version = "1.23", features = [ "derive" ] }
-glyphon = "0.8.0"
-
-[[example]]
-name = "raylib_renderer"
-path = "examples/raylib_renderer.rs"
-required-features = ["raylib", "std"]

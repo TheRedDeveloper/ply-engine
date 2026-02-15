@@ -102,7 +102,7 @@ impl<'declaration, 'render, ImageElementData: 'render, CustomElementData: 'rende
     }
 
     /// Sets the image data.
-    /// The data must be created using [`Clay::data`].
+    /// The data must be created using [`Ply::data`].
     #[inline]
     pub fn data(&mut self, data: &'render ImageElementData) -> &mut Self {
         self.parent.inner.image_data = data as *const ImageElementData as usize;
