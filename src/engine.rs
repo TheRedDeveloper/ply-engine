@@ -1116,11 +1116,22 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
         // Clip config
         if declaration.clip.horizontal || declaration.clip.vertical {
-            self.clip_element_configs.push(declaration.clip);
+            let mut clip = declaration.clip;
+
+            let elem_id = self.layout_elements[open_idx].id;
+
+            // Auto-apply stored scroll position as child_offset
+            for scd in &self.scroll_container_datas {
+                if scd.element_id == elem_id {
+                    clip.child_offset = scd.scroll_position;
+                    break;
+                }
+            }
+
+            self.clip_element_configs.push(clip);
             let idx = self.clip_element_configs.len() - 1;
             self.attach_element_config(ElementConfigType::Clip, idx);
 
-            let elem_id = self.layout_elements[open_idx].id;
             self.open_clip_element_stack.push(elem_id as i32);
 
             // Track scroll container
@@ -3203,16 +3214,48 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         scroll_delta: Vector2,
         _delta_time: f32,
     ) {
-        // Basic scroll delta application
-        for si in 0..self.scroll_container_datas.len() {
-            if !self.scroll_container_datas[si].open_this_frame {
-                self.scroll_container_datas.swap_remove(si);
+        let pointer = self.pointer_info.position;
+
+        // Remove containers that weren't open this frame, reset flag for next frame
+        let mut i = 0;
+        while i < self.scroll_container_datas.len() {
+            if !self.scroll_container_datas[i].open_this_frame {
+                self.scroll_container_datas.swap_remove(i);
                 continue;
             }
-            self.scroll_container_datas[si].open_this_frame = false;
+            self.scroll_container_datas[i].open_this_frame = false;
+            i += 1;
         }
-        // TODO: Full scroll handling (momentum, drag, etc.)
-        let _ = scroll_delta;
+
+        // Apply scroll delta to the deepest scroll container the pointer is over
+        if scroll_delta.x != 0.0 || scroll_delta.y != 0.0 {
+            // Find the deepest (last in list) scroll container the pointer is inside
+            let mut best: Option<usize> = None;
+            for si in 0..self.scroll_container_datas.len() {
+                let bb = self.scroll_container_datas[si].bounding_box;
+                if pointer.x >= bb.x
+                    && pointer.x <= bb.x + bb.width
+                    && pointer.y >= bb.y
+                    && pointer.y <= bb.y + bb.height
+                {
+                    best = Some(si);
+                }
+            }
+            if let Some(si) = best {
+                let scd = &mut self.scroll_container_datas[si];
+                // macroquad mouse_wheel: positive y = scroll up → content moves down → scroll_position.y should decrease
+                scd.scroll_position.y += scroll_delta.y;
+                scd.scroll_position.x += scroll_delta.x;
+
+                // Clamp: scroll_position should be <= 0 (scrolling "up" means offset becomes more negative)
+                let max_scroll_y =
+                    -(scd.content_size.height - scd.bounding_box.height).max(0.0);
+                let max_scroll_x =
+                    -(scd.content_size.width - scd.bounding_box.width).max(0.0);
+                scd.scroll_position.y = scd.scroll_position.y.clamp(max_scroll_y, 0.0);
+                scd.scroll_position.x = scd.scroll_position.x.clamp(max_scroll_x, 0.0);
+            }
+        }
     }
 
     pub fn hovered(&self) -> bool {
@@ -4161,7 +4204,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             floating: FloatingConfig {
                 z_index: 32765,
                 attach_points: FloatingAttachPoints {
-                    element: FloatingAttachPointType::LeftCenter,
+                    element: FloatingAttachPointType::RightCenter,
                     parent: FloatingAttachPointType::RightCenter,
                 },
                 attach_to: FloatingAttachToElement::Root,
@@ -4438,7 +4481,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
                     height: SizingAxis {
                         type_: SizingType::Fixed,
-                        min_max: SizingMinMax { min: 300.0, max: 300.0 },
+                        min_max: SizingMinMax { min: 316.0, max: 316.0 },
                         ..Default::default()
                     },
                 },

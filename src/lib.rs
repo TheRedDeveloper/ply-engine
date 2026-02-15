@@ -51,10 +51,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
     }
 
     #[inline]
-    pub fn clip(&mut self, horizontal: bool, vertical: bool, child_offset: Vector2) -> &mut Self {
+    pub fn clip(&mut self, horizontal: bool, vertical: bool) -> &mut Self {
         self.inner.clip.horizontal = horizontal;
         self.inner.clip.vertical = vertical;
-        self.inner.clip.child_offset = child_offset;
         self
     }
 
@@ -266,9 +265,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             self.context.set_pointer_state(Vector2::new(mx, my), is_down);
 
             let (scroll_x, scroll_y) = macroquad::prelude::mouse_wheel();
+            const SCROLL_SPEED: f32 = 20.0;
             self.context.update_scroll_containers(
                 true,
-                Vector2::new(scroll_x, scroll_y),
+                Vector2::new(scroll_x * SCROLL_SPEED, scroll_y * SCROLL_SPEED),
                 macroquad::prelude::get_frame_time(),
             );
         }
