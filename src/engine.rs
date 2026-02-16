@@ -3993,7 +3993,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 if highlighted_row == row_count {
                     if self.pointer_info.state == PointerDataInteractionState::PressedThisFrame {
                         let elem_id = self.layout_elements[current_element_index].id;
-                        self.debug_selected_element_id = elem_id;
+                        if self.debug_selected_element_id == elem_id {
+                            self.debug_selected_element_id = 0; // Deselect on re-click
+                        } else {
+                            self.debug_selected_element_id = elem_id;
+                        }
                     }
                     highlighted_element_id = self.layout_elements[current_element_index].id;
                 }
@@ -4022,8 +4026,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 }
 
                 // Row for this element
+                let row_bg = if self.debug_selected_element_id == current_elem_id {
+                    Color::rgba(217.0, 91.0, 67.0, 40.0) // Slight red for selected
+                } else {
+                    Color::rgba(0.0, 0.0, 0.0, 0.0)
+                };
                 self.debug_open_idi("Ply__DebugView_ElementOuter", current_elem_id, &ElementDeclaration {
                     layout: scroll_item_layout,
+                    background_color: row_bg,
                     ..Default::default()
                 });
                 {
@@ -4193,15 +4203,16 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 self.close_element();
                             }
                             if shared.corner_radius.bottom_left > 0.0 {
+                                let radius_color = Color::rgba(26.0, 188.0, 156.0, 90.0);
                                 self.debug_open(&ElementDeclaration {
                                     layout: LayoutConfig {
                                         padding: PaddingConfig { left: 8, right: 8, top: 2, bottom: 2 },
                                         ..Default::default()
                                     },
-                                    background_color: label_color,
+                                    background_color: radius_color,
                                     corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
                                     border: BorderConfig {
-                                        color: label_color,
+                                        color: radius_color,
                                         width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                     },
                                     ..Default::default()
@@ -4240,6 +4251,93 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 ..Default::default()
                             });
                             self.debug_text(label, tc);
+                        }
+                        self.close_element();
+                    }
+
+                    // Shader badge
+                    let has_shaders = self.element_shaders.get(current_element_index)
+                        .map_or(false, |s| !s.is_empty());
+                    if has_shaders {
+                        let badge_color = Color::rgba(155.0, 89.0, 182.0, 90.0);
+                        self.debug_open(&ElementDeclaration {
+                            layout: LayoutConfig {
+                                padding: PaddingConfig { left: 8, right: 8, top: 2, bottom: 2 },
+                                ..Default::default()
+                            },
+                            background_color: badge_color,
+                            corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
+                            border: BorderConfig {
+                                color: badge_color,
+                                width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                            },
+                            ..Default::default()
+                        });
+                        {
+                            let tc = self.store_text_element_config(TextConfig {
+                                color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
+                                font_size: 16,
+                                ..Default::default()
+                            });
+                            self.debug_text("Shader", tc);
+                        }
+                        self.close_element();
+                    }
+
+                    // Visual Rotation badge
+                    let has_visual_rot = self.element_visual_rotations.get(current_element_index)
+                        .map_or(false, |r| r.is_some());
+                    if has_visual_rot {
+                        let badge_color = Color::rgba(155.0, 89.0, 182.0, 90.0);
+                        self.debug_open(&ElementDeclaration {
+                            layout: LayoutConfig {
+                                padding: PaddingConfig { left: 8, right: 8, top: 2, bottom: 2 },
+                                ..Default::default()
+                            },
+                            background_color: badge_color,
+                            corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
+                            border: BorderConfig {
+                                color: badge_color,
+                                width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                            },
+                            ..Default::default()
+                        });
+                        {
+                            let tc = self.store_text_element_config(TextConfig {
+                                color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
+                                font_size: 16,
+                                ..Default::default()
+                            });
+                            self.debug_text("VisualRot", tc);
+                        }
+                        self.close_element();
+                    }
+
+                    // Shape Rotation badge
+                    let has_shape_rot = self.element_shape_rotations.get(current_element_index)
+                        .map_or(false, |r| r.is_some());
+                    if has_shape_rot {
+                        let badge_color = Color::rgba(26.0, 188.0, 156.0, 90.0);
+                        self.debug_open(&ElementDeclaration {
+                            layout: LayoutConfig {
+                                padding: PaddingConfig { left: 8, right: 8, top: 2, bottom: 2 },
+                                ..Default::default()
+                            },
+                            background_color: badge_color,
+                            corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
+                            border: BorderConfig {
+                                color: badge_color,
+                                width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                            },
+                            ..Default::default()
+                        });
+                        {
+                            let tc = self.store_text_element_config(TextConfig {
+                                color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
+                                font_size: 16,
+                                ..Default::default()
+                            });
+                            self.debug_text("ShapeRot", tc);
                         }
                         self.close_element();
                     }
@@ -4378,8 +4476,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
         }
 
-        // Render highlight on hovered element
-        if highlighted_element_id != 0 {
+        // Render highlight on hovered or selected element
+        // When an element is selected, show its bounding box; otherwise show hovered
+        let highlight_target = if self.debug_selected_element_id != 0 {
+            self.debug_selected_element_id
+        } else {
+            highlighted_element_id
+        };
+        if highlight_target != 0 {
             self.debug_open_id("Ply__DebugView_ElementHighlight", &ElementDeclaration {
                 layout: LayoutConfig {
                     sizing: SizingConfig {
@@ -4389,7 +4493,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     ..Default::default()
                 },
                 floating: FloatingConfig {
-                    parent_id: highlighted_element_id,
+                    parent_id: highlight_target,
                     z_index: 32767,
                     pointer_capture_mode: PointerCaptureMode::Passthrough,
                     attach_to: FloatingAttachToElement::ElementWithId,
@@ -4534,7 +4638,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 self.close_element();
                 // Close button
                 let close_size = row_height - 10.0;
-                self.debug_open(&ElementDeclaration {
+                self.debug_open_id("Ply__DebugView_CloseButton", &ElementDeclaration {
                     layout: LayoutConfig {
                         sizing: SizingConfig {
                             width: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: close_size, max: close_size }, ..Default::default() },
@@ -4600,11 +4704,18 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 } else {
                     Self::DEBUG_COLOR_1
                 };
+                // Content container — Fit height so it extends beyond the scroll pane
                 self.debug_open(&ElementDeclaration {
                     layout: LayoutConfig {
                         sizing: SizingConfig {
                             width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
-                            height: SizingAxis { type_: SizingType::Grow, ..Default::default() },
+                            ..Default::default() // height defaults to Fit
+                        },
+                        padding: PaddingConfig {
+                            left: outer_padding,
+                            right: outer_padding,
+                            top: 0,
+                            bottom: 0,
                         },
                         layout_direction: LayoutDirection::TopToBottom,
                         ..Default::default()
@@ -4613,119 +4724,51 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     ..Default::default()
                 });
                 {
-                    // Floating element list overlay
-                    let panel_contents_id = hash_string("Ply__DebugViewPaneOuter", 0);
-                    let panel_contents_id_num = panel_contents_id.id;
-                    self.open_element_with_id(&panel_contents_id);
-                    self.configure_open_element(&ElementDeclaration {
-                        layout: LayoutConfig {
-                            sizing: SizingConfig {
-                                width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
-                                height: SizingAxis { type_: SizingType::Grow, ..Default::default() },
-                            },
-                            ..Default::default()
-                        },
-                        floating: FloatingConfig {
-                            z_index: 32766,
-                            pointer_capture_mode: PointerCaptureMode::Passthrough,
-                            attach_to: FloatingAttachToElement::Parent,
-                            clip_to: FloatingClipToElement::AttachedParent,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    });
-                    {
-                        self.debug_open(&ElementDeclaration {
-                            layout: LayoutConfig {
-                                sizing: SizingConfig {
-                                    width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
-                                    height: SizingAxis { type_: SizingType::Grow, ..Default::default() },
-                                },
-                                padding: PaddingConfig {
-                                    left: outer_padding,
-                                    right: outer_padding,
-                                    top: 0,
-                                    bottom: 0,
-                                },
-                                layout_direction: LayoutDirection::TopToBottom,
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        });
-                        {
-                            let _layout_data = self.render_debug_layout_elements_list(
-                                initial_roots_length,
-                                highlighted_row,
-                            );
-
-                            // Row backgrounds (behind the floating element list)
-                            // We need to close the float containers first
-                            // Actually the C code does this after closing the float
-                            // Let me replicate the structure: close the inner padding container
-                            self.close_element(); // inner padding
-                        }
-                        self.close_element(); // panel_contents_id (floating)
-
-                        // Now render row backgrounds
-                        // Get content width from the panel
-                        let content_width = self.layout_element_map
-                            .get(&panel_contents_id_num)
-                            .and_then(|item| {
-                                let idx = item.layout_element_index as usize;
-                                if idx < self.layout_elements.len() {
-                                    Some(self.layout_elements[idx].dimensions.width)
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or(debug_width);
-
-                        // Column spacer with content width
-                        self.debug_open(&ElementDeclaration {
-                            layout: LayoutConfig {
-                                sizing: SizingConfig {
-                                    width: SizingAxis {
-                                        type_: SizingType::Fixed,
-                                        min_max: SizingMinMax { min: content_width, max: content_width },
-                                        ..Default::default()
-                                    },
-                                    ..Default::default()
-                                },
-                                layout_direction: LayoutDirection::TopToBottom,
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        });
-                        self.close_element();
-
-                        // Render row color backgrounds
-                        // We need layout_data but it was in a nested scope. Let me restructure.
-                        // For simplicity, re-derive from the stored state.
-                    }
-                    self.close_element(); // alt_bg container
+                    let _layout_data = self.render_debug_layout_elements_list(
+                        initial_roots_length,
+                        highlighted_row,
+                    );
                 }
-                self.close_element(); // scroll pane
+                self.close_element(); // content container
+            }
+            self.close_element(); // scroll pane
 
-                // Separator
-                self.debug_open(&ElementDeclaration {
-                    layout: LayoutConfig {
-                        sizing: SizingConfig {
-                            width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
-                            height: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: 1.0, max: 1.0 }, ..Default::default() },
-                        },
-                        ..Default::default()
+            // Separator
+            self.debug_open(&ElementDeclaration {
+                layout: LayoutConfig {
+                    sizing: SizingConfig {
+                        width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
+                        height: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: 1.0, max: 1.0 }, ..Default::default() },
                     },
-                    background_color: Self::DEBUG_COLOR_3,
                     ..Default::default()
-                });
-                self.close_element();
+                },
+                background_color: Self::DEBUG_COLOR_3,
+                ..Default::default()
+            });
+            self.close_element();
 
-                // Selected element detail panel
-                if self.debug_selected_element_id != 0 {
-                    self.render_debug_selected_element_panel(info_text_config, info_title_config);
+            // Selected element detail panel
+            if self.debug_selected_element_id != 0 {
+                self.render_debug_selected_element_panel(info_text_config, info_title_config);
+            }
+        }
+        self.close_element(); // Ply__DebugView
+
+        // Handle close button click
+        if self.pointer_info.state == PointerDataInteractionState::PressedThisFrame {
+            let close_base_id = hash_string("Ply__DebugView_CloseButton", 0).id;
+            let header_base_id = hash_string("Ply__DebugView_LayoutConfigHeader", 0).id;
+            for i in (0..self.pointer_over_ids.len()).rev() {
+                let id = self.pointer_over_ids[i].id;
+                if id == close_base_id {
+                    self.debug_mode_enabled = false;
+                    break;
+                }
+                if id == header_base_id {
+                    self.debug_selected_element_id = 0;
+                    break;
                 }
             }
-            self.close_element(); // Ply__DebugView
         }
     }
 
@@ -4784,7 +4827,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         });
         {
             // Header: "Layout Config" + element ID
-            self.debug_open(&ElementDeclaration {
+            self.debug_open_id("Ply__DebugView_LayoutConfigHeader", &ElementDeclaration {
                 layout: LayoutConfig {
                     sizing: SizingConfig {
                         width: SizingAxis { type_: SizingType::Grow, ..Default::default() },
