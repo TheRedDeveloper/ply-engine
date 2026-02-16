@@ -147,7 +147,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
     /// Multiple `.effect()` calls are supported — each adds to the effects list.
     ///
     /// # Example
-    /// ```ignore
+    /// ```rust,ignore
     /// ui.element()
     ///     .effect(&MY_SHADER, |s| s
     ///         .uniform("time", time)
@@ -171,7 +171,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
     /// shaders wrap earlier ones.
     ///
     /// # Example
-    /// ```ignore
+    /// ```rust,ignore
     /// ui.element()
     ///     .shader(&FOIL_EFFECT, |s| s
     ///         .uniform("time", time)
@@ -186,6 +186,58 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
         let mut builder = shaders::ShaderBuilder::new(asset);
         f(&mut builder);
         self.inner.shaders.push(builder.into_config());
+        self
+    }
+
+    /// Applies a visual rotation to the element and all its children.
+    ///
+    /// This renders the element to an offscreen buffer and draws it back with
+    /// rotation, flip, and pivot applied. It does **not** affect layout.
+    ///
+    /// When combined with `.shader()`, the rotation shares the same render
+    /// target (no extra GPU cost).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// ui.element()
+    ///     .rotate_visual(|r| r
+    ///         .degrees(15.0)
+    ///         .pivot(0.5, 0.5)
+    ///         .flip_x()
+    ///     )
+    ///     .children(|ui| { /* ... */ });
+    /// ```
+    #[inline]
+    pub fn rotate_visual(mut self, f: impl for<'a> FnOnce(&'a mut elements::VisualRotationBuilder) -> &'a mut elements::VisualRotationBuilder) -> Self {
+        let mut builder = elements::VisualRotationBuilder {
+            config: engine::VisualRotationConfig::default(),
+        };
+        f(&mut builder);
+        self.inner.visual_rotation = Some(builder.config);
+        self
+    }
+
+    /// Applies vertex-level shape rotation to this element's geometry.
+    ///
+    /// Rotates the element's own rectangle / image / border at the vertex level
+    /// and adjusts its layout bounding box to the AABB of the rotated shape.
+    /// Children, text, and shaders are **not** affected.
+    ///
+    /// There is no pivot — shape rotation always rotates around the center.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// ui.element()
+    ///     .rotate_shape(|r| r.degrees(45.0).flip_x())
+    ///     .empty();
+    /// ```
+    #[inline]
+    pub fn rotate_shape(mut self, f: impl for<'a> FnOnce(&'a mut elements::ShapeRotationBuilder) -> &'a mut elements::ShapeRotationBuilder) -> Self {
+        let mut builder = elements::ShapeRotationBuilder {
+            config: engine::ShapeRotationConfig::default(),
+        };
+        f(&mut builder);
+        self.inner.shape_rotation = Some(builder.config);
         self
     }
 
@@ -991,20 +1043,22 @@ mod tests {
             );
         }
 
-        // Expected order (ShaderBegin now wraps the entire element group):
-        // 0: ShaderBegin
+        // Expected order (GroupBegin now wraps the entire element group):
+        // 0: GroupBegin
         // 1: Rectangle (parent background)
         // 2: Rectangle (child)
-        // 3: ShaderEnd
+        // 3: GroupEnd
         assert!(items.len() >= 4, "Expected at least 4 items, got {}", items.len());
 
         match &items[0].config {
-            render_commands::RenderCommandConfig::ShaderBegin(config) => {
-                assert!(!config.fragment.is_empty(), "ShaderBegin should have fragment source");
+            render_commands::RenderCommandConfig::GroupBegin { shader, visual_rotation } => {
+                let config = shader.as_ref().expect("GroupBegin should have shader config");
+                assert!(!config.fragment.is_empty(), "GroupBegin should have fragment source");
                 assert_eq!(config.uniforms.len(), 1);
                 assert_eq!(config.uniforms[0].name, "time");
+                assert!(visual_rotation.is_none(), "Shader-only group should have no visual_rotation");
             }
-            other => panic!("Expected ShaderBegin for item 0, got {:?}", other),
+            other => panic!("Expected GroupBegin for item 0, got {:?}", other),
         }
 
         match &items[1].config {
@@ -1026,8 +1080,8 @@ mod tests {
         }
 
         match &items[3].config {
-            render_commands::RenderCommandConfig::ShaderEnd => {}
-            other => panic!("Expected ShaderEnd for item 3, got {:?}", other),
+            render_commands::RenderCommandConfig::GroupEnd => {}
+            other => panic!("Expected GroupEnd for item 3, got {:?}", other),
         }
     }
 
@@ -1069,28 +1123,30 @@ mod tests {
             println!("[{}] config: {:?}", i, item.config);
         }
 
-        // Expected order (ShaderBegin wraps before element drawing):
-        // 0: ShaderBegin(shader_b) — outermost, wraps everything
-        // 1: ShaderBegin(shader_a) — innermost, wraps element + children
+        // Expected order (GroupBegin wraps before element drawing):
+        // 0: GroupBegin(shader_b) — outermost, wraps everything
+        // 1: GroupBegin(shader_a) — innermost, wraps element + children
         // 2: Rectangle (parent)
         // 3: Rectangle (child)
-        // 4: ShaderEnd — closes shader_a
-        // 5: ShaderEnd — closes shader_b
+        // 4: GroupEnd — closes shader_a
+        // 5: GroupEnd — closes shader_b
         assert!(items.len() >= 6, "Expected at least 6 items, got {}", items.len());
 
         match &items[0].config {
-            render_commands::RenderCommandConfig::ShaderBegin(config) => {
+            render_commands::RenderCommandConfig::GroupBegin { shader, .. } => {
+                let config = shader.as_ref().unwrap();
                 // shader_b is outermost
                 assert!(config.fragment.contains("0.5"), "Expected shader_b fragment");
             }
-            other => panic!("Expected ShaderBegin(shader_b) for item 0, got {:?}", other),
+            other => panic!("Expected GroupBegin(shader_b) for item 0, got {:?}", other),
         }
         match &items[1].config {
-            render_commands::RenderCommandConfig::ShaderBegin(config) => {
+            render_commands::RenderCommandConfig::GroupBegin { shader, .. } => {
+                let config = shader.as_ref().unwrap();
                 // shader_a is innermost
                 assert!(config.fragment.contains("1.0"), "Expected shader_a fragment");
             }
-            other => panic!("Expected ShaderBegin(shader_a) for item 1, got {:?}", other),
+            other => panic!("Expected GroupBegin(shader_a) for item 1, got {:?}", other),
         }
         match &items[2].config {
             render_commands::RenderCommandConfig::Rectangle(_) => {}
@@ -1101,12 +1157,12 @@ mod tests {
             other => panic!("Expected Rectangle for item 3, got {:?}", other),
         }
         match &items[4].config {
-            render_commands::RenderCommandConfig::ShaderEnd => {}
-            other => panic!("Expected ShaderEnd for item 4, got {:?}", other),
+            render_commands::RenderCommandConfig::GroupEnd => {}
+            other => panic!("Expected GroupEnd for item 4, got {:?}", other),
         }
         match &items[5].config {
-            render_commands::RenderCommandConfig::ShaderEnd => {}
-            other => panic!("Expected ShaderEnd for item 5, got {:?}", other),
+            render_commands::RenderCommandConfig::GroupEnd => {}
+            other => panic!("Expected GroupEnd for item 5, got {:?}", other),
         }
     }
 
@@ -1140,5 +1196,493 @@ mod tests {
         assert_eq!(items[0].effects[0].uniforms.len(), 2);
         assert_eq!(items[0].effects[0].uniforms[0].name, "color_a");
         assert_eq!(items[0].effects[0].uniforms[1].name, "color_b");
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_visual_rotation_emits_group() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(50.0))
+            .background_color(0xFF0000)
+            .rotate_visual(|r| r.degrees(45.0))
+            .empty();
+
+        let items = ui.eval();
+
+        // Expected: GroupBegin, Rectangle, GroupEnd
+        assert_eq!(items.len(), 3, "Expected 3 items, got {}", items.len());
+
+        match &items[0].config {
+            render_commands::RenderCommandConfig::GroupBegin { shader, visual_rotation } => {
+                assert!(shader.is_none(), "Rotation-only group should have no shader");
+                let vr = visual_rotation.as_ref().expect("Should have visual_rotation");
+                assert!((vr.rotation_radians - 45.0_f32.to_radians()).abs() < 0.001);
+                assert_eq!(vr.pivot_x, 0.5);
+                assert_eq!(vr.pivot_y, 0.5);
+                assert!(!vr.flip_x);
+                assert!(!vr.flip_y);
+            }
+            other => panic!("Expected GroupBegin for item 0, got {:?}", other),
+        }
+
+        match &items[1].config {
+            render_commands::RenderCommandConfig::Rectangle(_) => {}
+            other => panic!("Expected Rectangle for item 1, got {:?}", other),
+        }
+
+        match &items[2].config {
+            render_commands::RenderCommandConfig::GroupEnd => {}
+            other => panic!("Expected GroupEnd for item 2, got {:?}", other),
+        }
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_visual_rotation_with_shader_merged() {
+        use shaders::ShaderAsset;
+
+        let test_shader = ShaderAsset::Source {
+            file_name: "merge_test.glsl",
+            fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
+        };
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        // Both shader and visual rotation — should emit ONE GroupBegin
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(100.0))
+            .background_color(0xFF0000)
+            .shader(&test_shader, |s| { s.uniform("v", 1.0f32); })
+            .rotate_visual(|r| r.degrees(30.0).pivot(0.0, 0.0))
+            .empty();
+
+        let items = ui.eval();
+
+        // Expected: GroupBegin (with shader + rotation), Rectangle, GroupEnd
+        assert_eq!(items.len(), 3, "Expected 3 items (merged), got {}", items.len());
+
+        match &items[0].config {
+            render_commands::RenderCommandConfig::GroupBegin { shader, visual_rotation } => {
+                assert!(shader.is_some(), "Merged group should have shader");
+                let vr = visual_rotation.as_ref().expect("Merged group should have visual_rotation");
+                assert!((vr.rotation_radians - 30.0_f32.to_radians()).abs() < 0.001);
+                assert_eq!(vr.pivot_x, 0.0);
+                assert_eq!(vr.pivot_y, 0.0);
+            }
+            other => panic!("Expected GroupBegin for item 0, got {:?}", other),
+        }
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_visual_rotation_with_multiple_shaders() {
+        use shaders::ShaderAsset;
+
+        let shader_a = ShaderAsset::Source {
+            file_name: "vr_a.glsl",
+            fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
+        };
+        let shader_b = ShaderAsset::Source {
+            file_name: "vr_b.glsl",
+            fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(0.5); }",
+        };
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(100.0))
+            .background_color(0xFF0000)
+            .shader(&shader_a, |s| { s.uniform("v", 1.0f32); })
+            .shader(&shader_b, |s| { s.uniform("v", 2.0f32); })
+            .rotate_visual(|r| r.degrees(90.0))
+            .empty();
+
+        let items = ui.eval();
+
+        // Expected: GroupBegin(shader_b + rotation), GroupBegin(shader_a), Rect, GroupEnd, GroupEnd
+        assert!(items.len() >= 5, "Expected at least 5 items, got {}", items.len());
+
+        // Outermost GroupBegin carries both shader_b and visual_rotation
+        match &items[0].config {
+            render_commands::RenderCommandConfig::GroupBegin { shader, visual_rotation } => {
+                assert!(shader.is_some(), "Outermost should have shader");
+                assert!(visual_rotation.is_some(), "Outermost should have visual_rotation");
+            }
+            other => panic!("Expected GroupBegin for item 0, got {:?}", other),
+        }
+
+        // Inner GroupBegin has shader only, no rotation
+        match &items[1].config {
+            render_commands::RenderCommandConfig::GroupBegin { shader, visual_rotation } => {
+                assert!(shader.is_some(), "Inner should have shader");
+                assert!(visual_rotation.is_none(), "Inner should NOT have visual_rotation");
+            }
+            other => panic!("Expected GroupBegin for item 1, got {:?}", other),
+        }
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_visual_rotation_noop_skipped() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        // 0° rotation with no flips — should be optimized away
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(100.0))
+            .background_color(0xFF0000)
+            .rotate_visual(|r| r.degrees(0.0))
+            .empty();
+
+        let items = ui.eval();
+
+        // Should be just the rectangle, no GroupBegin/End
+        assert_eq!(items.len(), 1, "Noop rotation should produce 1 item, got {}", items.len());
+        match &items[0].config {
+            render_commands::RenderCommandConfig::Rectangle(_) => {}
+            other => panic!("Expected Rectangle, got {:?}", other),
+        }
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_visual_rotation_flip_only() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        // 0° but flip_x — NOT a noop, should emit group
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(100.0))
+            .background_color(0xFF0000)
+            .rotate_visual(|r| r.flip_x())
+            .empty();
+
+        let items = ui.eval();
+
+        // GroupBegin, Rectangle, GroupEnd
+        assert_eq!(items.len(), 3, "Flip-only should produce 3 items, got {}", items.len());
+        match &items[0].config {
+            render_commands::RenderCommandConfig::GroupBegin { visual_rotation, .. } => {
+                let vr = visual_rotation.as_ref().expect("Should have rotation config");
+                assert!(vr.flip_x);
+                assert!(!vr.flip_y);
+                assert_eq!(vr.rotation_radians, 0.0);
+            }
+            other => panic!("Expected GroupBegin, got {:?}", other),
+        }
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_visual_rotation_preserves_bounding_box() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(200.0)).height(fixed!(100.0))
+            .background_color(0xFF0000)
+            .rotate_visual(|r| r.degrees(45.0))
+            .empty();
+
+        let items = ui.eval();
+
+        // The rectangle inside should keep original dimensions (layout unaffected)
+        let rect = &items[1]; // Rectangle is after GroupBegin
+        assert_eq!(rect.bounding_box.width, 200.0);
+        assert_eq!(rect.bounding_box.height, 100.0);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_visual_rotation_config_values() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(100.0))
+            .background_color(0xFF0000)
+            .rotate_visual(|r| r
+                .radians(std::f32::consts::FRAC_PI_2)
+                .pivot(0.25, 0.75)
+                .flip_x()
+                .flip_y()
+            )
+            .empty();
+
+        let items = ui.eval();
+
+        match &items[0].config {
+            render_commands::RenderCommandConfig::GroupBegin { visual_rotation, .. } => {
+                let vr = visual_rotation.as_ref().unwrap();
+                assert!((vr.rotation_radians - std::f32::consts::FRAC_PI_2).abs() < 0.001);
+                assert_eq!(vr.pivot_x, 0.25);
+                assert_eq!(vr.pivot_y, 0.75);
+                assert!(vr.flip_x);
+                assert!(vr.flip_y);
+            }
+            other => panic!("Expected GroupBegin, got {:?}", other),
+        }
+    }
+
+    // =====================================================================
+    // Shape rotation tests (Phase 2)
+    // =====================================================================
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_shape_rotation_emits_with_rotation() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(50.0))
+            .background_color(0xFF0000)
+            .rotate_shape(|r| r.degrees(45.0))
+            .empty();
+
+        let items = ui.eval();
+
+        // Should produce a single Rectangle with shape_rotation
+        assert_eq!(items.len(), 1, "Expected 1 item, got {}", items.len());
+        let sr = items[0].shape_rotation.as_ref().expect("Should have shape_rotation");
+        assert!((sr.rotation_radians - 45.0_f32.to_radians()).abs() < 0.001);
+        assert!(!sr.flip_x);
+        assert!(!sr.flip_y);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_shape_rotation_aabb_90_degrees() {
+        // 90° rotation of a 200×100 rect → AABB should be 100×200
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element().width(grow!()).height(grow!())
+            .layout(|l| l)
+            .children(|ui| {
+                ui.element()
+                    .width(fixed!(200.0)).height(fixed!(100.0))
+                    .background_color(0xFF0000)
+                    .rotate_shape(|r| r.degrees(90.0))
+                    .empty();
+            });
+
+        let items = ui.eval();
+
+        // Find the rectangle
+        let rect = items.iter().find(|i| matches!(i.config, render_commands::RenderCommandConfig::Rectangle(_))).unwrap();
+        // The bounding box should have original dims (centered in AABB)
+        assert!((rect.bounding_box.width - 200.0).abs() < 0.1, "width should be 200, got {}", rect.bounding_box.width);
+        assert!((rect.bounding_box.height - 100.0).abs() < 0.1, "height should be 100, got {}", rect.bounding_box.height);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_shape_rotation_aabb_45_degrees_sharp() {
+        // 45° rotation of a 100×100 sharp rect → AABB ≈ 141.4×141.4
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        // We need a parent to see the AABB effect on sibling positioning
+        ui.element().width(grow!()).height(grow!())
+            .layout(|l| l.direction(layout::LayoutDirection::LeftToRight))
+            .children(|ui| {
+                ui.element()
+                    .width(fixed!(100.0)).height(fixed!(100.0))
+                    .background_color(0xFF0000)
+                    .rotate_shape(|r| r.degrees(45.0))
+                    .empty();
+
+                // Second element — its x-position should be offset by ~141.4
+                ui.element()
+                    .width(fixed!(50.0)).height(fixed!(50.0))
+                    .background_color(0x00FF00)
+                    .empty();
+            });
+
+        let items = ui.eval();
+
+        // Find the green rectangle (second one)
+        let rects: Vec<_> = items.iter()
+            .filter(|i| matches!(i.config, render_commands::RenderCommandConfig::Rectangle(_)))
+            .collect();
+        assert!(rects.len() >= 2, "Expected at least 2 rectangles, got {}", rects.len());
+
+        let expected_aabb_w = (2.0_f32.sqrt()) * 100.0; // ~141.42
+        let green_x = rects[1].bounding_box.x;
+        // Green rect starts at AABB width (since parent starts at x=0)
+        assert!((green_x - expected_aabb_w).abs() < 1.0,
+            "Green rect x should be ~{}, got {}", expected_aabb_w, green_x);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_shape_rotation_aabb_45_degrees_rounded() {
+        // 45° rotation of a 100×100 rect with corner radius 10 →
+        // AABB = |(100-20)cos45| + |(100-20)sin45| + 20 ≈ 133.14
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element().width(grow!()).height(grow!())
+            .layout(|l| l.direction(layout::LayoutDirection::LeftToRight))
+            .children(|ui| {
+                ui.element()
+                    .width(fixed!(100.0)).height(fixed!(100.0))
+                    .corner_radius(10.0)
+                    .background_color(0xFF0000)
+                    .rotate_shape(|r| r.degrees(45.0))
+                    .empty();
+
+                ui.element()
+                    .width(fixed!(50.0)).height(fixed!(50.0))
+                    .background_color(0x00FF00)
+                    .empty();
+            });
+
+        let items = ui.eval();
+
+        let rects: Vec<_> = items.iter()
+            .filter(|i| matches!(i.config, render_commands::RenderCommandConfig::Rectangle(_)))
+            .collect();
+        assert!(rects.len() >= 2);
+
+        // Expected: |(100-20)·cos45| + |(100-20)·sin45| + 20 = 80·√2 + 20 ≈ 133.14
+        let expected_aabb_w = 80.0 * 2.0_f32.sqrt() + 20.0;
+        let green_x = rects[1].bounding_box.x;
+        // Green rect starts at AABB width (since parent starts at x=0)
+        assert!((green_x - expected_aabb_w).abs() < 1.0,
+            "Green rect x should be ~{}, got {}", expected_aabb_w, green_x);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_shape_rotation_noop_no_aabb_change() {
+        // 0° with no flip = noop, should not change dimensions
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(50.0))
+            .background_color(0xFF0000)
+            .rotate_shape(|r| r.degrees(0.0))
+            .empty();
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].bounding_box.width, 100.0);
+        assert_eq!(items[0].bounding_box.height, 50.0);
+        // shape_rotation should still be present (renderer filters noop)
+        // Actually noop is filtered at engine level, so it should be None
+        assert!(items[0].shape_rotation.is_none(), "Noop shape rotation should be filtered");
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_shape_rotation_flip_only() {
+        // flip_x with 0° — NOT noop, but doesn't change AABB
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(100.0)).height(fixed!(50.0))
+            .background_color(0xFF0000)
+            .rotate_shape(|r| r.flip_x())
+            .empty();
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 1);
+        let sr = items[0].shape_rotation.as_ref().expect("flip_x should produce shape_rotation");
+        assert!(sr.flip_x);
+        assert!(!sr.flip_y);
+        // AABB unchanged for flip-only
+        assert_eq!(items[0].bounding_box.width, 100.0);
+        assert_eq!(items[0].bounding_box.height, 50.0);
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_shape_rotation_180_no_aabb_change() {
+        // 180° rotation → AABB same as original
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(200.0)).height(fixed!(100.0))
+            .background_color(0xFF0000)
+            .rotate_shape(|r| r.degrees(180.0))
+            .empty();
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].bounding_box.width, 200.0);
+        assert_eq!(items[0].bounding_box.height, 100.0);
+    }
+
+    // =====================================================================
+    // Math tests
+    // =====================================================================
+
+    #[test]
+    fn test_classify_angle() {
+        use math::{classify_angle, AngleType};
+        assert_eq!(classify_angle(0.0), AngleType::Zero);
+        assert_eq!(classify_angle(std::f32::consts::TAU), AngleType::Zero);
+        assert_eq!(classify_angle(-std::f32::consts::TAU), AngleType::Zero);
+        assert_eq!(classify_angle(std::f32::consts::FRAC_PI_2), AngleType::Right90);
+        assert_eq!(classify_angle(std::f32::consts::PI), AngleType::Straight180);
+        assert_eq!(classify_angle(3.0 * std::f32::consts::FRAC_PI_2), AngleType::Right270);
+        match classify_angle(1.0) {
+            AngleType::Arbitrary(v) => assert!((v - 1.0).abs() < 0.01),
+            other => panic!("Expected Arbitrary, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compute_rotated_aabb_zero() {
+        use math::compute_rotated_aabb;
+        use engine::CornerRadius;
+        let cr = CornerRadius::default();
+        let (w, h) = compute_rotated_aabb(100.0, 50.0, &cr, 0.0);
+        assert_eq!(w, 100.0);
+        assert_eq!(h, 50.0);
+    }
+
+    #[test]
+    fn test_compute_rotated_aabb_90() {
+        use math::compute_rotated_aabb;
+        use engine::CornerRadius;
+        let cr = CornerRadius::default();
+        let (w, h) = compute_rotated_aabb(200.0, 100.0, &cr, std::f32::consts::FRAC_PI_2);
+        assert!((w - 100.0).abs() < 0.1, "w should be 100, got {}", w);
+        assert!((h - 200.0).abs() < 0.1, "h should be 200, got {}", h);
+    }
+
+    #[test]
+    fn test_compute_rotated_aabb_45_sharp() {
+        use math::compute_rotated_aabb;
+        use engine::CornerRadius;
+        let cr = CornerRadius::default();
+        let theta = std::f32::consts::FRAC_PI_4;
+        let (w, h) = compute_rotated_aabb(100.0, 100.0, &cr, theta);
+        let expected = 100.0 * 2.0_f32.sqrt();
+        assert!((w - expected).abs() < 0.5, "w should be ~{}, got {}", expected, w);
+        assert!((h - expected).abs() < 0.5, "h should be ~{}, got {}", expected, h);
+    }
+
+    #[test]
+    fn test_compute_rotated_aabb_45_rounded() {
+        use math::compute_rotated_aabb;
+        use engine::CornerRadius;
+        let cr = CornerRadius { top_left: 10.0, top_right: 10.0, bottom_left: 10.0, bottom_right: 10.0 };
+        let theta = std::f32::consts::FRAC_PI_4;
+        let (w, h) = compute_rotated_aabb(100.0, 100.0, &cr, theta);
+        let expected = 80.0 * 2.0_f32.sqrt() + 20.0; // ~133.14
+        assert!((w - expected).abs() < 0.5, "w should be ~{}, got {}", expected, w);
+        assert!((h - expected).abs() < 0.5, "h should be ~{}, got {}", expected, h);
     }
 }

@@ -1,4 +1,4 @@
-use crate::{color::Color, engine, math::BoundingBox, renderer::GraphicAsset, shaders::ShaderConfig};
+use crate::{color::Color, engine::{self, ShapeRotationConfig, VisualRotationConfig}, math::BoundingBox, renderer::GraphicAsset, shaders::ShaderConfig};
 
 /// Represents a rectangle with a specified color and corner radii.
 #[derive(Debug, Clone)]
@@ -108,11 +108,16 @@ pub enum RenderCommandConfig<CustomElementData> {
     ScissorStart(),
     ScissorEnd(),
     Custom(Custom<CustomElementData>),
-    /// Begin a group shader — renders children to an offscreen buffer,
-    /// then applies a fragment shader as a post-process.
-    ShaderBegin(ShaderConfig),
-    /// End a group shader — pops the render target and composites.
-    ShaderEnd,
+    /// Begin a group — renders children to an offscreen buffer.
+    /// Optionally applies a fragment shader and/or visual rotation.
+    GroupBegin {
+        /// Fragment shader to apply as post-process. `None` for rotation-only groups.
+        shader: Option<ShaderConfig>,
+        /// Visual rotation applied when compositing the render target.
+        visual_rotation: Option<VisualRotationConfig>,
+    },
+    /// End a group — pops the render target and composites.
+    GroupEnd,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug>
@@ -175,15 +180,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
             }
             engine::RenderCommandType::ScissorStart => Self::ScissorStart(),
             engine::RenderCommandType::ScissorEnd => Self::ScissorEnd(),
-            engine::RenderCommandType::ShaderBegin => {
-                // ShaderBegin uses the first effect from the render command as its config
-                if let Some(config) = value.effects.first() {
-                    Self::ShaderBegin(config.clone())
-                } else {
-                    Self::None()
-                }
+            engine::RenderCommandType::GroupBegin => {
+                // GroupBegin uses the first effect from the render command as its shader config,
+                // and carries the visual_rotation from the render command.
+                let shader = value.effects.first().cloned();
+                let visual_rotation = value.visual_rotation;
+                Self::GroupBegin { shader, visual_rotation }
             }
-            engine::RenderCommandType::ShaderEnd => Self::ShaderEnd,
+            engine::RenderCommandType::GroupEnd => Self::GroupEnd,
             engine::RenderCommandType::Custom => {
                 if let engine::InternalRenderData::Custom { background_color, corner_radius, custom_data } = &value.render_data {
                     Self::Custom(Custom {
@@ -213,6 +217,8 @@ pub struct RenderCommand<CustomElementData> {
     pub z_index: i16,
     /// Per-element shader effects (chained in order).
     pub effects: Vec<ShaderConfig>,
+    /// Shape rotation applied at the vertex level (only for Rectangle / Image / Custom / Border).
+    pub shape_rotation: Option<ShapeRotationConfig>,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> RenderCommand<CustomElementData> {
@@ -223,6 +229,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> RenderCommand<CustomE
             bounding_box: value.bounding_box,
             config: RenderCommandConfig::from_engine_render_command(value),
             effects: value.effects.clone(),
+            shape_rotation: value.shape_rotation,
         }
     }
 }

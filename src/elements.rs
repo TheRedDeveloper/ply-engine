@@ -188,3 +188,83 @@ impl BorderBuilder {
         self
     }
 }
+
+/// Builder for configuring visual rotation (render-target based).
+pub struct VisualRotationBuilder {
+    pub(crate) config: engine::VisualRotationConfig,
+}
+
+impl VisualRotationBuilder {
+    /// Sets the rotation angle in degrees.
+    #[inline]
+    pub fn degrees(&mut self, degrees: f32) -> &mut Self {
+        self.config.rotation_radians = degrees.to_radians();
+        self
+    }
+
+    /// Sets the rotation angle in radians.
+    #[inline]
+    pub fn radians(&mut self, radians: f32) -> &mut Self {
+        self.config.rotation_radians = radians;
+        self
+    }
+
+    /// Sets the rotation pivot as normalized coordinates (0.0–1.0).
+    /// Default is (0.5, 0.5) = center of the element.
+    /// (0.0, 0.0) = top-left corner.
+    #[inline]
+    pub fn pivot(&mut self, x: f32, y: f32) -> &mut Self {
+        self.config.pivot_x = x;
+        self.config.pivot_y = y;
+        self
+    }
+
+    /// Flips the element horizontally (mirror across the vertical axis).
+    #[inline]
+    pub fn flip_x(&mut self) -> &mut Self {
+        self.config.flip_x = true;
+        self
+    }
+
+    /// Flips the element vertically (mirror across the horizontal axis).
+    #[inline]
+    pub fn flip_y(&mut self) -> &mut Self {
+        self.config.flip_y = true;
+        self
+    }
+}
+
+/// Builder for configuring shape rotation (vertex-level).
+pub struct ShapeRotationBuilder {
+    pub(crate) config: engine::ShapeRotationConfig,
+}
+
+impl ShapeRotationBuilder {
+    /// Sets the rotation angle in degrees.
+    #[inline]
+    pub fn degrees(&mut self, degrees: f32) -> &mut Self {
+        self.config.rotation_radians = degrees.to_radians();
+        self
+    }
+
+    /// Sets the rotation angle in radians.
+    #[inline]
+    pub fn radians(&mut self, radians: f32) -> &mut Self {
+        self.config.rotation_radians = radians;
+        self
+    }
+
+    /// Flips the shape horizontally (applied before rotation).
+    #[inline]
+    pub fn flip_x(&mut self) -> &mut Self {
+        self.config.flip_x = true;
+        self
+    }
+
+    /// Flips the shape vertically (applied before rotation).
+    #[inline]
+    pub fn flip_y(&mut self) -> &mut Self {
+        self.config.flip_y = true;
+        self
+    }
+}

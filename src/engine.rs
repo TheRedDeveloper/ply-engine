@@ -48,8 +48,8 @@ pub enum RenderCommandType {
     ScissorStart,
     ScissorEnd,
     Custom,
-    ShaderBegin,
-    ShaderEnd,
+    GroupBegin,
+    GroupEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -162,6 +162,74 @@ impl From<(f32, f32, f32, f32)> for CornerRadius {
     }
 }
 
+/// Configuration for visual rotation (render-target based).
+/// Renders the element + children to an offscreen buffer, then draws the
+/// buffer with rotation / flip applied via `DrawTextureParams`.
+#[derive(Debug, Clone, Copy)]
+pub struct VisualRotationConfig {
+    /// Rotation angle in radians.
+    pub rotation_radians: f32,
+    /// Normalized pivot X (0.0 = left, 0.5 = center, 1.0 = right). Default 0.5.
+    pub pivot_x: f32,
+    /// Normalized pivot Y (0.0 = top, 0.5 = center, 1.0 = bottom). Default 0.5.
+    pub pivot_y: f32,
+    /// Mirror horizontally.
+    pub flip_x: bool,
+    /// Mirror vertically.
+    pub flip_y: bool,
+}
+
+impl Default for VisualRotationConfig {
+    fn default() -> Self {
+        Self {
+            rotation_radians: 0.0,
+            pivot_x: 0.5,
+            pivot_y: 0.5,
+            flip_x: false,
+            flip_y: false,
+        }
+    }
+}
+
+impl VisualRotationConfig {
+    /// Returns `true` when the config is effectively a no-op.
+    pub fn is_noop(&self) -> bool {
+        self.rotation_radians == 0.0 && !self.flip_x && !self.flip_y
+    }
+}
+
+/// Configuration for shape rotation (vertex-level).
+/// Rotates the element geometry itself and adjusts the layout bounding box
+/// to the axis-aligned bounding box (AABB) of the rotated shape.
+/// Does NOT affect children, text, or shaders — only the element's own
+/// rectangle / image / border.
+#[derive(Debug, Clone, Copy)]
+pub struct ShapeRotationConfig {
+    /// Rotation angle in radians.
+    pub rotation_radians: f32,
+    /// Mirror horizontally (applied before rotation).
+    pub flip_x: bool,
+    /// Mirror vertically (applied before rotation).
+    pub flip_y: bool,
+}
+
+impl Default for ShapeRotationConfig {
+    fn default() -> Self {
+        Self {
+            rotation_radians: 0.0,
+            flip_x: false,
+            flip_y: false,
+        }
+    }
+}
+
+impl ShapeRotationConfig {
+    /// Returns `true` when the config is effectively a no-op.
+    pub fn is_noop(&self) -> bool {
+        self.rotation_radians == 0.0 && !self.flip_x && !self.flip_y
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FloatingAttachPoints {
     pub element: FloatingAttachPointType,
@@ -227,6 +295,8 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub user_data: usize,
     pub effects: Vec<ShaderConfig>,
     pub shaders: Vec<ShaderConfig>,
+    pub visual_rotation: Option<VisualRotationConfig>,
+    pub shape_rotation: Option<ShapeRotationConfig>,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDeclaration<CustomElementData> {
@@ -244,6 +314,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
             user_data: 0,
             effects: Vec::new(),
             shaders: Vec::new(),
+            visual_rotation: None,
+            shape_rotation: None,
         }
     }
 }
@@ -447,6 +519,8 @@ pub struct InternalRenderCommand<CustomElementData: Clone + Default + std::fmt::
     pub id: u32,
     pub z_index: i16,
     pub effects: Vec<ShaderConfig>,
+    pub visual_rotation: Option<VisualRotationConfig>,
+    pub shape_rotation: Option<ShapeRotationConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -501,6 +575,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for InternalR
             id: 0,
             z_index: 0,
             effects: Vec::new(),
+            visual_rotation: None,
+            shape_rotation: None,
         }
     }
 }
@@ -586,6 +662,14 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     element_effects: Vec<Vec<ShaderConfig>>,
     // Per-element group shaders (indexed by layout element index)
     element_shaders: Vec<Vec<ShaderConfig>>,
+
+    // Per-element visual rotation (indexed by layout element index)
+    element_visual_rotations: Vec<Option<VisualRotationConfig>>,
+
+    // Per-element shape rotation (indexed by layout element index)
+    element_shape_rotations: Vec<Option<ShapeRotationConfig>>,
+    // Original dimensions before AABB expansion (only set when shape_rotation is active)
+    element_pre_rotation_dimensions: Vec<Option<Dimensions>>,
 
     // String IDs for debug
     layout_element_id_strings: Vec<StringId>,
@@ -772,6 +856,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             shared_element_configs: Vec::new(),
             element_effects: Vec::new(),
             element_shaders: Vec::new(),
+            element_visual_rotations: Vec::new(),
+            element_shape_rotations: Vec::new(),
+            element_pre_rotation_dimensions: Vec::new(),
             layout_element_id_strings: Vec::new(),
             wrapped_text_lines: Vec::new(),
             tree_node_array: Vec::new(),
@@ -1193,6 +1280,18 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             self.element_shaders.push(Vec::new());
         }
         self.element_shaders[open_idx] = declaration.shaders.clone();
+
+        // Store per-element visual rotation
+        while self.element_visual_rotations.len() <= open_idx {
+            self.element_visual_rotations.push(None);
+        }
+        self.element_visual_rotations[open_idx] = declaration.visual_rotation;
+
+        // Store per-element shape rotation
+        while self.element_shape_rotations.len() <= open_idx {
+            self.element_shape_rotations.push(None);
+        }
+        self.element_shape_rotations[open_idx] = declaration.shape_rotation;
     }
 
     pub fn close_element(&mut self) {
@@ -1361,6 +1460,40 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
 
         self.update_aspect_ratio_box(open_idx);
+
+        // Apply shape rotation AABB expansion
+        if let Some(shape_rot) = self.element_shape_rotations.get(open_idx).copied().flatten() {
+            if !shape_rot.is_noop() {
+                let orig_w = self.layout_elements[open_idx].dimensions.width;
+                let orig_h = self.layout_elements[open_idx].dimensions.height;
+
+                // Find corner radius for this element
+                let cr = self
+                    .find_element_config_index(open_idx, ElementConfigType::Shared)
+                    .map(|idx| self.shared_element_configs[idx].corner_radius)
+                    .unwrap_or_default();
+
+                let (eff_w, eff_h) = crate::math::compute_rotated_aabb(
+                    orig_w,
+                    orig_h,
+                    &cr,
+                    shape_rot.rotation_radians,
+                );
+
+                // Store original dimensions for renderer
+                while self.element_pre_rotation_dimensions.len() <= open_idx {
+                    self.element_pre_rotation_dimensions.push(None);
+                }
+                self.element_pre_rotation_dimensions[open_idx] =
+                    Some(Dimensions::new(orig_w, orig_h));
+
+                // Replace layout dimensions with AABB
+                self.layout_elements[open_idx].dimensions.width = eff_w;
+                self.layout_elements[open_idx].dimensions.height = eff_h;
+                self.layout_elements[open_idx].min_dimensions.width = eff_w;
+                self.layout_elements[open_idx].min_dimensions.height = eff_h;
+            }
+        }
 
         let element_is_floating =
             self.element_has_config(open_idx, ElementConfigType::Floating);
@@ -1732,6 +1865,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.shared_element_configs.clear();
         self.element_effects.clear();
         self.element_shaders.clear();
+        self.element_visual_rotations.clear();
+        self.element_shape_rotations.clear();
+        self.element_pre_rotation_dimensions.clear();
         self.layout_element_id_strings.clear();
         self.wrapped_text_lines.clear();
         self.tree_node_array.clear();
@@ -2620,16 +2756,62 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     // Get per-element shader effects
                     let elem_effects = self.element_effects.get(current_elem_idx).cloned().unwrap_or_default();
 
-                    // Emit ShaderBegin commands for group shaders BEFORE element drawing
+                    // Get per-element visual rotation
+                    let elem_visual_rotation = self.element_visual_rotations.get(current_elem_idx).cloned().flatten();
+                    // Filter out no-op rotations
+                    let elem_visual_rotation = elem_visual_rotation.filter(|vr| !vr.is_noop());
+
+                    // Get per-element shape rotation and compute original bbox
+                    let elem_shape_rotation = self.element_shape_rotations.get(current_elem_idx).cloned().flatten()
+                        .filter(|sr| !sr.is_noop());
+                    // If shape rotation is active, current_bbox has AABB dims.
+                    // Compute the original-dimension bbox centered within the AABB.
+                    let shape_draw_bbox = if let Some(ref _sr) = elem_shape_rotation {
+                        if let Some(orig_dims) = self.element_pre_rotation_dimensions.get(current_elem_idx).copied().flatten() {
+                            let offset_x = (current_bbox.width - orig_dims.width) / 2.0;
+                            let offset_y = (current_bbox.height - orig_dims.height) / 2.0;
+                            BoundingBox::new(
+                                current_bbox.x + offset_x,
+                                current_bbox.y + offset_y,
+                                orig_dims.width,
+                                orig_dims.height,
+                            )
+                        } else {
+                            current_bbox
+                        }
+                    } else {
+                        current_bbox
+                    };
+
+                    // Emit GroupBegin commands for group shaders BEFORE element drawing
                     // so that the element's background, children, and border are all captured.
+                    // If visual_rotation is present, it is attached to the outermost group.
                     let elem_shaders = self.element_shaders.get(current_elem_idx).cloned().unwrap_or_default();
-                    for shader in elem_shaders.iter().rev() {
+
+                    if !elem_shaders.is_empty() {
+                        // Emit GroupBegin for each shader (outermost first = reversed order)
+                        for (i, shader) in elem_shaders.iter().rev().enumerate() {
+                            // Attach visual_rotation to the outermost GroupBegin (i == 0)
+                            let vr = if i == 0 { elem_visual_rotation } else { None };
+                            self.add_render_command(InternalRenderCommand {
+                                bounding_box: current_bbox,
+                                command_type: RenderCommandType::GroupBegin,
+                                effects: vec![shader.clone()],
+                                id: elem_id,
+                                z_index: root.z_index,
+                                visual_rotation: vr,
+                                ..Default::default()
+                            });
+                        }
+                    } else if let Some(vr) = elem_visual_rotation {
+                        // No shaders but visual rotation: emit standalone GroupBegin/End
                         self.add_render_command(InternalRenderCommand {
                             bounding_box: current_bbox,
-                            command_type: RenderCommandType::ShaderBegin,
-                            effects: vec![shader.clone()],
+                            command_type: RenderCommandType::GroupBegin,
+                            effects: vec![],
                             id: elem_id,
                             z_index: root.z_index,
+                            visual_rotation: Some(vr),
                             ..Default::default()
                         });
                     }
@@ -2661,6 +2843,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         user_data: 0,
                                         id: elem_id,
                                         z_index: root.z_index,
+                                        visual_rotation: None,
+                                        shape_rotation: None,
                                         effects: Vec::new(),
                                     });
                                 }
@@ -2670,7 +2854,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     let image_data =
                                         self.image_element_configs[config.config_index];
                                     self.add_render_command(InternalRenderCommand {
-                                        bounding_box: current_bbox,
+                                        bounding_box: shape_draw_bbox,
                                         command_type: RenderCommandType::Image,
                                         render_data: InternalRenderData::Image {
                                             background_color: shared.background_color,
@@ -2680,6 +2864,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         user_data: shared.user_data,
                                         id: elem_id,
                                         z_index: root.z_index,
+                                        visual_rotation: None,
+                                        shape_rotation: elem_shape_rotation,
                                         effects: elem_effects.clone(),
                                     });
                                 }
@@ -2755,6 +2941,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         user_data: text_config.user_data,
                                         id: hash_number(line_index as u32, elem_id).id,
                                         z_index: root.z_index,
+                                        visual_rotation: None,
+                                        shape_rotation: None,
                                         effects: text_config.effects.clone(),
                                     });
                                     y_position += final_line_height;
@@ -2765,7 +2953,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     let custom_data =
                                         self.custom_element_configs[config.config_index].clone();
                                     self.add_render_command(InternalRenderCommand {
-                                        bounding_box: current_bbox,
+                                        bounding_box: shape_draw_bbox,
                                         command_type: RenderCommandType::Custom,
                                         render_data: InternalRenderData::Custom {
                                             background_color: shared.background_color,
@@ -2775,6 +2963,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         user_data: shared.user_data,
                                         id: elem_id,
                                         z_index: root.z_index,
+                                        visual_rotation: None,
+                                        shape_rotation: elem_shape_rotation,
                                         effects: elem_effects.clone(),
                                     });
                                 }
@@ -2785,7 +2975,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                     if emit_rectangle {
                         self.add_render_command(InternalRenderCommand {
-                            bounding_box: current_bbox,
+                            bounding_box: shape_draw_bbox,
                             command_type: RenderCommandType::Rectangle,
                             render_data: InternalRenderData::Rectangle {
                                 background_color: shared.background_color,
@@ -2794,6 +2984,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             user_data: shared.user_data,
                             id: elem_id,
                             z_index: root.z_index,
+                            visual_rotation: None,
+                            shape_rotation: elem_shape_rotation,
                             effects: elem_effects.clone(),
                         });
                     }
@@ -2933,6 +3125,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     )
                                     .id,
                                     z_index: root.z_index,
+                                    visual_rotation: None,
+                                    shape_rotation: None,
                                     effects: Vec::new(),
                                 });
 
@@ -2978,6 +3172,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     )
                                                     .id,
                                                     z_index: root.z_index,
+                                                    visual_rotation: None,
+                                                    shape_rotation: None,
                                                     effects: Vec::new(),
                                                 });
                                             }
@@ -3014,6 +3210,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     )
                                                     .id,
                                                     z_index: root.z_index,
+                                                    visual_rotation: None,
+                                                    shape_rotation: None,
                                                     effects: Vec::new(),
                                                 });
                                             }
@@ -3040,11 +3238,24 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         });
                     }
 
-                    // Emit ShaderEnd commands AFTER border and scissor (innermost first, outermost last)
+                    // Emit GroupEnd commands AFTER border and scissor (innermost first, outermost last)
                     let elem_shaders = self.element_shaders.get(current_elem_idx).cloned().unwrap_or_default();
+                    let elem_visual_rotation = self.element_visual_rotations.get(current_elem_idx).cloned().flatten()
+                        .filter(|vr| !vr.is_noop());
+
+                    // GroupEnd for each shader
                     for _shader in elem_shaders.iter() {
                         self.add_render_command(InternalRenderCommand {
-                            command_type: RenderCommandType::ShaderEnd,
+                            command_type: RenderCommandType::GroupEnd,
+                            id: self.layout_elements[current_elem_idx].id,
+                            z_index: root.z_index,
+                            ..Default::default()
+                        });
+                    }
+                    // If no shaders but visual rotation was present, emit its GroupEnd
+                    if elem_shaders.is_empty() && elem_visual_rotation.is_some() {
+                        self.add_render_command(InternalRenderCommand {
+                            command_type: RenderCommandType::GroupEnd,
                             id: self.layout_elements[current_elem_idx].id,
                             z_index: root.z_index,
                             ..Default::default()

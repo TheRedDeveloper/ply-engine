@@ -369,11 +369,163 @@ fn draw_good_rounded_rectangle(x: f32, y: f32, w: f32, h: f32, cr: &CornerRadii,
     draw_mesh(&mesh);
 }
 
+/// Draws a rounded rectangle rotated by `rotation_radians` around its center.
+/// All outline vertices are rotated before building the triangle fan mesh.
+/// `(x, y, w, h)` is the *original* (unrotated) bounding box — the centre of
+/// rotation is `(x + w/2, y + h/2)`.
+fn draw_good_rotated_rounded_rectangle(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    cr: &CornerRadii,
+    color: Color,
+    rotation_radians: f32,
+    flip_x: bool,
+    flip_y: bool,
+) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    let cx = x + w / 2.0;
+    let cy = y + h / 2.0;
+
+    let cos_r = rotation_radians.cos();
+    let sin_r = rotation_radians.sin();
+
+    // Rotate a point around (cx, cy)
+    let rotate_point = |px: f32, py: f32| -> Vec2 {
+        // Apply flips relative to centre first
+        let mut dx = px - cx;
+        let mut dy = py - cy;
+        if flip_x { dx = -dx; }
+        if flip_y { dy = -dy; }
+        let rx = dx * cos_r - dy * sin_r;
+        let ry = dx * sin_r + dy * cos_r;
+        Vec2::new(cx + rx, cy + ry)
+    };
+
+    // Build outline in local (unrotated) space, then rotate
+    let mut outline: Vec<Vec2> = Vec::new();
+
+    let add_arc = |outline: &mut Vec<Vec2>, arc_cx: f32, arc_cy: f32, radius: f32, start_angle: f32, end_angle: f32| {
+        if radius <= 0.0 {
+            outline.push(rotate_point(arc_cx, arc_cy));
+            return;
+        }
+        let sides = ((FRAC_PI_2 * radius) / PIXELS_PER_POINT).max(6.0) as usize;
+        for i in 0..=sides {
+            let t = i as f32 / sides as f32;
+            let angle = start_angle + t * (end_angle - start_angle);
+            let px = arc_cx + angle.cos() * radius;
+            let py = arc_cy + angle.sin() * radius;
+            outline.push(rotate_point(px, py));
+        }
+    };
+
+    if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
+        // Sharp rectangle — just rotate 4 corners
+        outline.push(rotate_point(x, y));
+        outline.push(rotate_point(x + w, y));
+        outline.push(rotate_point(x + w, y + h));
+        outline.push(rotate_point(x, y + h));
+    } else {
+        add_arc(&mut outline, x + cr.top_left, y + cr.top_left, cr.top_left,
+                PI, 3.0 * FRAC_PI_2);
+        add_arc(&mut outline, x + w - cr.top_right, y + cr.top_right, cr.top_right,
+                3.0 * FRAC_PI_2, 2.0 * PI);
+        add_arc(&mut outline, x + w - cr.bottom_right, y + h - cr.bottom_right, cr.bottom_right,
+                0.0, FRAC_PI_2);
+        add_arc(&mut outline, x + cr.bottom_left, y + h - cr.bottom_left, cr.bottom_left,
+                FRAC_PI_2, PI);
+    }
+
+    let n = outline.len();
+    if n < 3 { return; }
+
+    let color_bytes = [
+        (color.r * 255.0) as u8,
+        (color.g * 255.0) as u8,
+        (color.b * 255.0) as u8,
+        (color.a * 255.0) as u8,
+    ];
+
+    let center_rot = Vec2::new(cx, cy);
+
+    let mut vertices = Vec::with_capacity(n + 1);
+    vertices.push(Vertex {
+        position: Vec3::new(center_rot.x, center_rot.y, 0.0),
+        uv: Vec2::new(0.5, 0.5),
+        color: color_bytes,
+        normal: Vec4::new(0.0, 0.0, 1.0, 0.0),
+    });
+    for p in &outline {
+        vertices.push(Vertex {
+            position: Vec3::new(p.x, p.y, 0.0),
+            uv: Vec2::new((p.x - x) / w, (p.y - y) / h),
+            color: color_bytes,
+            normal: Vec4::new(0.0, 0.0, 1.0, 0.0),
+        });
+    }
+
+    let mut indices = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        indices.push(0u16);
+        indices.push((i + 1) as u16);
+        indices.push(((i + 1) % n + 1) as u16);
+    }
+
+    draw_mesh(&Mesh { vertices, indices, texture: None });
+}
+
+/// Remap corner radii for a 90° clockwise rotation.
+fn rotate_corner_radii_90(cr: &CornerRadii) -> CornerRadii {
+    CornerRadii {
+        top_left: cr.bottom_left,
+        top_right: cr.top_left,
+        bottom_right: cr.top_right,
+        bottom_left: cr.bottom_right,
+    }
+}
+
+/// Remap corner radii for a 180° rotation.
+fn rotate_corner_radii_180(cr: &CornerRadii) -> CornerRadii {
+    CornerRadii {
+        top_left: cr.bottom_right,
+        top_right: cr.bottom_left,
+        bottom_right: cr.top_left,
+        bottom_left: cr.top_right,
+    }
+}
+
+/// Remap corner radii for a 270° clockwise rotation.
+fn rotate_corner_radii_270(cr: &CornerRadii) -> CornerRadii {
+    CornerRadii {
+        top_left: cr.top_right,
+        top_right: cr.bottom_right,
+        bottom_right: cr.bottom_left,
+        bottom_left: cr.top_left,
+    }
+}
+
+/// Apply flip_x and flip_y to corner radii (before rotation).
+fn flip_corner_radii(cr: &CornerRadii, flip_x: bool, flip_y: bool) -> CornerRadii {
+    let mut result = cr.clone();
+    if flip_x {
+        std::mem::swap(&mut result.top_left, &mut result.top_right);
+        std::mem::swap(&mut result.bottom_left, &mut result.bottom_right);
+    }
+    if flip_y {
+        std::mem::swap(&mut result.top_left, &mut result.bottom_left);
+        std::mem::swap(&mut result.top_right, &mut result.bottom_right);
+    }
+    result
+}
+
 struct RenderState {
     clip: Option<(i32, i32, i32, i32)>,
-    /// Render target stack for group shaders.
-    /// Each entry: (render_target, shader_config, bounding_box)
-    rt_stack: Vec<(RenderTarget, crate::shaders::ShaderConfig, BoundingBox)>,
+    /// Render target stack for group effects (shaders and/or visual rotation).
+    /// Each entry: (render_target, shader_config, visual_rotation, bounding_box)
+    rt_stack: Vec<(RenderTarget, Option<crate::shaders::ShaderConfig>, Option<crate::engine::VisualRotationConfig>, BoundingBox)>,
     #[cfg(feature = "text-styling")]
     style_stack: Vec<String>,
     #[cfg(feature = "text-styling")]
@@ -1262,7 +1414,36 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     gl_use_material(material);
                 }
 
-                if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
+                if let Some(ref sr) = command.shape_rotation {
+                    use crate::math::{classify_angle, AngleType};
+                    let flip_x = sr.flip_x;
+                    let flip_y = sr.flip_y;
+                    match classify_angle(sr.rotation_radians) {
+                        AngleType::Zero => {
+                            // Flips only — remap corner radii
+                            let cr = flip_corner_radii(cr, flip_x, flip_y);
+                            draw_good_rounded_rectangle(bb.x, bb.y, bb.width, bb.height, &cr, color);
+                        }
+                        AngleType::Right90 => {
+                            let cr = rotate_corner_radii_90(&flip_corner_radii(cr, flip_x, flip_y));
+                            draw_good_rounded_rectangle(bb.x, bb.y, bb.width, bb.height, &cr, color);
+                        }
+                        AngleType::Straight180 => {
+                            let cr = rotate_corner_radii_180(&flip_corner_radii(cr, flip_x, flip_y));
+                            draw_good_rounded_rectangle(bb.x, bb.y, bb.width, bb.height, &cr, color);
+                        }
+                        AngleType::Right270 => {
+                            let cr = rotate_corner_radii_270(&flip_corner_radii(cr, flip_x, flip_y));
+                            draw_good_rounded_rectangle(bb.x, bb.y, bb.width, bb.height, &cr, color);
+                        }
+                        AngleType::Arbitrary(theta) => {
+                            draw_good_rotated_rounded_rectangle(
+                                bb.x, bb.y, bb.width, bb.height,
+                                cr, color, theta, flip_x, flip_y,
+                            );
+                        }
+                    }
+                } else if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
                     draw_rectangle(
                         bb.x,
                         bb.y,
@@ -1711,7 +1892,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
             RenderCommandConfig::Custom(_) => {
                 handle_custom_command(&command);
             }
-            RenderCommandConfig::ShaderBegin(config) => {
+            RenderCommandConfig::GroupBegin { ref shader, ref visual_rotation } => {
                 let bb = command.bounding_box;
                 let rt = render_target_msaa(bb.width as u32, bb.height as u32);
                 rt.texture.set_filter(FilterMode::Linear);
@@ -1723,12 +1904,12 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 };
                 set_camera(&cam);
                 clear_background(Color::new(0.0, 0.0, 0.0, 0.0));
-                state.rt_stack.push((rt, config.clone(), bb));
+                state.rt_stack.push((rt, shader.clone(), *visual_rotation, bb));
             }
-            RenderCommandConfig::ShaderEnd => {
-                if let Some((rt, config, bb)) = state.rt_stack.pop() {
+            RenderCommandConfig::GroupEnd => {
+                if let Some((rt, shader_config, visual_rotation, bb)) = state.rt_stack.pop() {
                     // Restore previous camera
-                    if let Some((prev_rt, _, prev_bb)) = state.rt_stack.last() {
+                    if let Some((prev_rt, _, _, prev_bb)) = state.rt_stack.last() {
                         let cam = Camera2D {
                             render_target: Some(prev_rt.clone()),
                             ..Camera2D::from_display_rect(Rect::new(
@@ -1740,13 +1921,26 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                         set_default_camera();
                     }
 
-                    // Apply the shader material
-                    let mut mat_mgr = MATERIAL_MANAGER.lock().unwrap();
-                    let material = mat_mgr.get_or_create(&config);
-                    apply_shader_uniforms(material, &config, &bb);
-                    // macroquad auto-binds the texture from draw_texture_ex
-                    // to the default `Texture` sampler in the shader.
-                    gl_use_material(material);
+                    // Apply the shader material if present
+                    if let Some(ref config) = shader_config {
+                        let mut mat_mgr = MATERIAL_MANAGER.lock().unwrap();
+                        let material = mat_mgr.get_or_create(config);
+                        apply_shader_uniforms(material, config, &bb);
+                        gl_use_material(material);
+                    }
+
+                    // Compute draw params — apply visual rotation if present
+                    let (rotation, flip_x, flip_y, pivot) = match &visual_rotation {
+                        Some(rot) => {
+                            let pivot_screen = Vec2::new(
+                                bb.x + rot.pivot_x * bb.width,
+                                bb.y + rot.pivot_y * bb.height,
+                            );
+                            // flip_y is inverted because render targets are flipped in OpenGL
+                            (rot.rotation_radians, rot.flip_x, !rot.flip_y, Some(pivot_screen))
+                        }
+                        None => (0.0, false, true, None),
+                    };
 
                     draw_texture_ex(
                         &rt.texture,
@@ -1755,11 +1949,17 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                         WHITE,
                         DrawTextureParams {
                             dest_size: Some(Vec2::new(bb.width, bb.height)),
-                            flip_y: true,
+                            rotation,
+                            flip_x,
+                            flip_y,
+                            pivot,
                             ..Default::default()
                         },
                     );
-                    gl_use_default_material();
+
+                    if shader_config.is_some() {
+                        gl_use_default_material();
+                    }
                 }
             }
             RenderCommandConfig::None() => {}
