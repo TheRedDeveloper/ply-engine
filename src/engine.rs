@@ -434,7 +434,6 @@ struct ScrollContainerDataInternal {
     scroll_momentum: Vector2,
     scroll_position: Vector2,
     previous_delta: Vector2,
-    momentum_time: f32,
     element_id: u32,
     layout_element_index: i32,
     open_this_frame: bool,
@@ -3462,13 +3461,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
+    /// Physics constants for scroll momentum
+    const SCROLL_DECEL: f32 = 5.0; // Exponential decay rate (reaches ~0.7% after 1s)
+    const SCROLL_MIN_VELOCITY: f32 = 5.0; // px/s below which momentum stops
+    const SCROLL_VELOCITY_SMOOTHING: f32 = 0.4; // EMA factor for velocity tracking
+
     pub fn update_scroll_containers(
         &mut self,
-        _enable_drag_scrolling: bool,
+        enable_drag_scrolling: bool,
         scroll_delta: Vector2,
-        _delta_time: f32,
+        delta_time: f32,
     ) {
         let pointer = self.pointer_info.position;
+        let dt = delta_time.max(0.0001); // Guard against zero/negative dt
 
         // Remove containers that weren't open this frame, reset flag for next frame
         let mut i = 0;
@@ -3481,7 +3486,113 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             i += 1;
         }
 
-        // Apply scroll delta to the deepest scroll container the pointer is over
+        // --- Drag scrolling ---
+        if enable_drag_scrolling {
+            let pointer_state = self.pointer_info.state;
+
+            match pointer_state {
+                PointerDataInteractionState::PressedThisFrame => {
+                    // Find the deepest scroll container under the pointer and start drag
+                    let mut best: Option<usize> = None;
+                    for si in 0..self.scroll_container_datas.len() {
+                        let bb = self.scroll_container_datas[si].bounding_box;
+                        if pointer.x >= bb.x
+                            && pointer.x <= bb.x + bb.width
+                            && pointer.y >= bb.y
+                            && pointer.y <= bb.y + bb.height
+                        {
+                            best = Some(si);
+                        }
+                    }
+                    if let Some(si) = best {
+                        let scd = &mut self.scroll_container_datas[si];
+                        scd.pointer_scroll_active = true;
+                        scd.pointer_origin = pointer;
+                        scd.scroll_origin = scd.scroll_position;
+                        scd.scroll_momentum = Vector2::default();
+                        scd.previous_delta = Vector2::default();
+                    }
+                }
+                PointerDataInteractionState::Pressed => {
+                    // Update drag: move scroll position to follow pointer
+                    for si in 0..self.scroll_container_datas.len() {
+                        let scd = &mut self.scroll_container_datas[si];
+                        if !scd.pointer_scroll_active {
+                            continue;
+                        }
+
+                        let drag_delta = Vector2::new(
+                            pointer.x - scd.pointer_origin.x,
+                            pointer.y - scd.pointer_origin.y,
+                        );
+                        scd.scroll_position = Vector2::new(
+                            scd.scroll_origin.x + drag_delta.x,
+                            scd.scroll_origin.y + drag_delta.y,
+                        );
+
+                        // Check if pointer actually moved this frame
+                        let frame_delta = Vector2::new(
+                            drag_delta.x - scd.previous_delta.x,
+                            drag_delta.y - scd.previous_delta.y,
+                        );
+                        let moved = frame_delta.x.abs() > 0.5 || frame_delta.y.abs() > 0.5;
+
+                        if moved {
+                            // Pointer moved — update velocity EMA and reset freshness timer
+                            let instant_velocity = Vector2::new(
+                                frame_delta.x / dt,
+                                frame_delta.y / dt,
+                            );
+                            let s = Self::SCROLL_VELOCITY_SMOOTHING;
+                            scd.scroll_momentum = Vector2::new(
+                                scd.scroll_momentum.x * (1.0 - s) + instant_velocity.x * s,
+                                scd.scroll_momentum.y * (1.0 - s) + instant_velocity.y * s,
+                            );
+                        }
+                        scd.previous_delta = drag_delta;
+                    }
+                }
+                PointerDataInteractionState::ReleasedThisFrame
+                | PointerDataInteractionState::Released => {
+                    for si in 0..self.scroll_container_datas.len() {
+                        let scd = &mut self.scroll_container_datas[si];
+                        if !scd.pointer_scroll_active {
+                            continue;
+                        }
+                        scd.pointer_scroll_active = false;
+                    }
+                }
+            }
+        }
+
+        // --- Momentum scrolling (apply when not actively dragging) ---
+        for si in 0..self.scroll_container_datas.len() {
+            let scd = &mut self.scroll_container_datas[si];
+            if scd.pointer_scroll_active {
+                // Still dragging — skip momentum
+            } else if scd.scroll_momentum.x.abs() > Self::SCROLL_MIN_VELOCITY
+                || scd.scroll_momentum.y.abs() > Self::SCROLL_MIN_VELOCITY
+            {
+                // Apply momentum
+                scd.scroll_position.x += scd.scroll_momentum.x * dt;
+                scd.scroll_position.y += scd.scroll_momentum.y * dt;
+
+                // Exponential decay (frame-rate independent)
+                let decay = (-Self::SCROLL_DECEL * dt).exp();
+                scd.scroll_momentum.x *= decay;
+                scd.scroll_momentum.y *= decay;
+
+                // Stop if below threshold
+                if scd.scroll_momentum.x.abs() < Self::SCROLL_MIN_VELOCITY {
+                    scd.scroll_momentum.x = 0.0;
+                }
+                if scd.scroll_momentum.y.abs() < Self::SCROLL_MIN_VELOCITY {
+                    scd.scroll_momentum.y = 0.0;
+                }
+            }
+        }
+
+        // --- Mouse wheel / external scroll delta ---
         if scroll_delta.x != 0.0 || scroll_delta.y != 0.0 {
             // Find the deepest (last in list) scroll container the pointer is inside
             let mut best: Option<usize> = None;
@@ -3497,17 +3608,29 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
             if let Some(si) = best {
                 let scd = &mut self.scroll_container_datas[si];
-                // macroquad mouse_wheel: positive y = scroll up → content moves down → scroll_position.y should decrease
                 scd.scroll_position.y += scroll_delta.y;
                 scd.scroll_position.x += scroll_delta.x;
+                // Kill any active momentum when mouse wheel is used
+                scd.scroll_momentum = Vector2::default();
+            }
+        }
 
-                // Clamp: scroll_position should be <= 0 (scrolling "up" means offset becomes more negative)
-                let max_scroll_y =
-                    -(scd.content_size.height - scd.bounding_box.height).max(0.0);
-                let max_scroll_x =
-                    -(scd.content_size.width - scd.bounding_box.width).max(0.0);
-                scd.scroll_position.y = scd.scroll_position.y.clamp(max_scroll_y, 0.0);
-                scd.scroll_position.x = scd.scroll_position.x.clamp(max_scroll_x, 0.0);
+        // --- Clamp all scroll positions ---
+        for si in 0..self.scroll_container_datas.len() {
+            let scd = &mut self.scroll_container_datas[si];
+            let max_scroll_y =
+                -(scd.content_size.height - scd.bounding_box.height).max(0.0);
+            let max_scroll_x =
+                -(scd.content_size.width - scd.bounding_box.width).max(0.0);
+            scd.scroll_position.y = scd.scroll_position.y.clamp(max_scroll_y, 0.0);
+            scd.scroll_position.x = scd.scroll_position.x.clamp(max_scroll_x, 0.0);
+
+            // Also kill momentum at bounds
+            if scd.scroll_position.y >= 0.0 || scd.scroll_position.y <= max_scroll_y {
+                scd.scroll_momentum.y = 0.0;
+            }
+            if scd.scroll_position.x >= 0.0 || scd.scroll_position.x <= max_scroll_x {
+                scd.scroll_momentum.x = 0.0;
             }
         }
     }

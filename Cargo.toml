@@ -1,6 +1,6 @@
 [package]
 name = "ply-engine"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "A pure Rust UI layout engine, inspired by Clay."
 keywords = ["engine", "ui", "layout", "ply"]
@@ -17,7 +17,7 @@ shader-build = ["dep:spirv-cross2"]
 built-in-shaders = []
 
 [dependencies]
-macroquad = { version = "0.4" }
+macroquad = { version = "0.4", git = "https://github.com/TheRedDeveloper/macroquad-fix" } # Temporary fix for a bug in macroquad, will switch back to the official version once it's fixed.
 tinyvg = { version = "0.2", default-features = false, optional = true }
 kurbo = { version = "0.13.0", optional = true }
 lyon = { version = "1.0", optional = true }

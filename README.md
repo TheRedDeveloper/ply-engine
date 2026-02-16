@@ -20,10 +20,11 @@ A pure Rust UI layout engine built on [macroquad](https://github.com/not-fl3/mac
 
 ```toml
 [dependencies]
-ply-engine = "0.3"
+ply-engine = "0.4"
+macroquad = { version = "0.4", git = "https://github.com/TheRedDeveloper/macroquad-fix" } # You have to this temporarily until the PR is merged to fix dragging issues
 
 # Optional features:
-# ply-engine = { version = "0.3", features = ["text-styling", "tinyvg", "built-in-shaders"] }
+# ply-engine = { version = "0.4", features = ["text-styling", "tinyvg", "built-in-shaders"] }
 ```
 
 ## Quick Start
@@ -352,8 +353,8 @@ Here is a quick bash script to bring your ply-engine app to the web, be sure to 
 # Builds a folder build/web containing
 # - assets/
 # - index.html
-# - client.wasm (built by cargo)
-# - mq_js_bundle.js (downloaded from https://github.com/not-fl3/macroquad/blob/master/js/mq_js_bundle.js)
+# - app.wasm (built by cargo)
+# - ply_bundle.js (downloaded from https://github.com/TheRedDeveloper/ply-engine/blob/main/ply_bundle.js)
 #!/bin/bash
 set -e
 cargo build --release --target wasm32-unknown-unknown
@@ -361,7 +362,7 @@ mkdir -p build/web
 cp -r assets build/web/
 cp index.html build/web/
 cp target/wasm32-unknown-unknown/release/[APPNAME].wasm build/web/app.wasm
-curl https://raw.githubusercontent.com/not-fl3/macroquad/refs/heads/master/js/mq_js_bundle.js -o build/web/mq_js_bundle.js
+curl https://raw.githubusercontent.com/TheRedDeveloper/ply-engine/refs/heads/main/ply_bundle.js -o build/web/ply_bundle.js
 ```
 
 You'll need to make an index.html:
@@ -371,7 +372,7 @@ You'll need to make an index.html:
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stratum</title>
+    <title>My App</title>
     <style>
         html,
         body,
@@ -389,7 +390,7 @@ You'll need to make an index.html:
 </head>
 <body>
     <canvas id="glcanvas"></canvas>
-    <script src="mq_js_bundle.js"></script>
+    <script src="ply_bundle.js"></script>
     <script>load("app.wasm");</script>
 </body>
 </html>
