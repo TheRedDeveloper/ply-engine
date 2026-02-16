@@ -1898,11 +1898,16 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
             }
             RenderCommandConfig::ScissorStart() => {
                 let bb = command.bounding_box;
+                // Layout coordinates are in logical pixels, but macroquad's
+                // quad_gl.scissor() passes values to glScissor which operates
+                // in physical (framebuffer) pixels.  Scale by DPI so the
+                // scissor rectangle matches on high-DPI displays (e.g. WASM).
+                let dpi = miniquad::window::dpi_scale();
                 state.clip = Some((
-                    bb.x as i32,
-                    bb.y as i32,
-                    bb.width as i32,
-                    bb.height as i32,
+                    (bb.x * dpi) as i32,
+                    (bb.y * dpi) as i32,
+                    (bb.width * dpi) as i32,
+                    (bb.height * dpi) as i32,
                 ));
                 unsafe {
                     get_internal_gl().quad_gl.scissor(state.clip);
