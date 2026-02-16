@@ -1713,7 +1713,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
             }
             RenderCommandConfig::ShaderBegin(config) => {
                 let bb = command.bounding_box;
-                let rt = render_target(bb.width as u32, bb.height as u32);
+                let rt = render_target_msaa(bb.width as u32, bb.height as u32);
                 rt.texture.set_filter(FilterMode::Linear);
                 let cam = Camera2D {
                     render_target: Some(rt.clone()),

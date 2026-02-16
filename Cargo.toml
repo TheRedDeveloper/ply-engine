@@ -14,6 +14,7 @@ default = []
 text-styling = []
 tinyvg = ["dep:tinyvg", "dep:kurbo", "dep:lyon"]
 shader-build = ["dep:spirv-cross2"]
+built-in-shaders = []
 
 [dependencies]
 macroquad = { version = "0.4" }

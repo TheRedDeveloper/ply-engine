@@ -1,7 +1,7 @@
 # Ply Engine
 
 > [!WARNING]  
-> UI breaking updates are literally being made right now, as I make changes to the core architecture. 
+> There will probably be some breaking changes soon.
 
 A pure Rust UI layout engine built on [macroquad](https://github.com/not-fl3/macroquad), inspired by [Clay](https://github.com/nicbarker/clay). Blazingly fast, safe, and ready for desktop and web.
 
@@ -20,10 +20,10 @@ A pure Rust UI layout engine built on [macroquad](https://github.com/not-fl3/mac
 
 ```toml
 [dependencies]
-ply-engine = "0.2"
+ply-engine = "0.3"
 
 # Optional features:
-# ply-engine = { version = "0.2", features = ["text-styling", "tinyvg"] }
+# ply-engine = { version = "0.3", features = ["text-styling", "tinyvg", "built-in-shaders"] }
 ```
 
 ## Quick Start
@@ -47,7 +47,7 @@ fn window_conf() -> macroquad::conf::Conf {
             high_dpi: true,
             sample_count: 4,
             platform: miniquad::conf::Platform {
-                // WebGL2 is required for TinyVG support
+                // WebGL2 is required for TinyVG and shader support
                 webgl_version: miniquad::conf::WebGLVersion::WebGL2,
                 ..Default::default()
             },
@@ -215,6 +215,20 @@ ui.element().width(fixed!(200.0)).height(fixed!(200.0))
 
 Multiple `.shader()` and `.effect()` calls chain — each stage feeds into the next.
 
+### Built-in Shaders
+
+Enable `features = ["built-in-shaders"]` for ready-to-use effects:
+
+```rust
+use ply_engine::built_in_shaders::{FOIL, HOLOGRAPHIC, DISSOLVE, GRADIENT_LINEAR};
+
+ui.element()
+    .shader(&HOLOGRAPHIC, |s| s.uniform("u_time", time).uniform("u_speed", 1.0f32).uniform("u_saturation", 0.7f32))
+    .children(|ui| { /* ... */ });
+```
+
+**Available**: `FOIL`, `HOLOGRAPHIC`, `DISSOLVE`, `GLOW`, `CRT`, `GRADIENT_LINEAR`, `GRADIENT_RADIAL`, `GRADIENT_CONIC`, add your own through a PR!
+
 ### Build Pipeline
 
 Compile shaders at build time with a one-line `build.rs`. Source files in `shaders/` are auto-detected and output as GLSL ES 1.00 to `assets/build/shaders/`:
@@ -231,7 +245,7 @@ fn main() {
 
 ```toml
 [build-dependencies]
-ply-engine = { version = "0.2", features = ["shader-build"] }
+ply-engine = { version = "0.3", features = ["shader-build"] }
 ```
 
 The `shader-build` feature bundles [spirv-cross2](https://crates.io/crates/spirv-cross2) so Slang/HLSL → GLSL conversion needs no CLI tools beyond `slangc`. Plain `.glsl` / `.frag` files are copied through with no extra tooling needed.
@@ -333,7 +347,7 @@ ply_engine::shader_build::ShaderBuild::new()
 
 ## WebAssembly
 
-Here is a quick bash script to bring your ply-engine app to the web:
+Here is a quick bash script to bring your ply-engine app to the web, be sure to replace [APPNAME] with the name of your app:
 ```bash
 # Builds a folder build/web containing
 # - assets/
@@ -346,11 +360,11 @@ cargo build --release --target wasm32-unknown-unknown
 mkdir -p build/web
 cp -r assets build/web/
 cp index.html build/web/
-cp target/wasm32-unknown-unknown/release/client.wasm build/web/client.wasm
+cp target/wasm32-unknown-unknown/release/[APPNAME].wasm build/web/app.wasm
 curl https://raw.githubusercontent.com/not-fl3/macroquad/refs/heads/master/js/mq_js_bundle.js -o build/web/mq_js_bundle.js
 ```
 
-You'll need to make an index.html, be sure to replace [APPNAME] with the name of your app:
+You'll need to make an index.html:
 ```html
 <!DOCTYPE html>
 <html lang="en">
@@ -376,7 +390,7 @@ You'll need to make an index.html, be sure to replace [APPNAME] with the name of
 <body>
     <canvas id="glcanvas"></canvas>
     <script src="mq_js_bundle.js"></script>
-    <script>load("[APPNAME].wasm");</script>
+    <script>load("app.wasm");</script>
 </body>
 </html>
 ```

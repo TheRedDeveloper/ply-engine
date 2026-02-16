@@ -12,6 +12,8 @@ pub mod text;
 pub mod renderer;
 #[cfg(feature = "text-styling")]
 pub mod text_styling;
+#[cfg(feature = "built-in-shaders")]
+pub mod built_in_shaders;
 
 use id::Id;
 use math::{Dimensions, Vector2};
