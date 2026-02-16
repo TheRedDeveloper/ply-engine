@@ -153,7 +153,7 @@ pub static MATERIAL_MANAGER: std::sync::LazyLock<std::sync::Mutex<MaterialManage
 /// Equivalent to `TextureManager` but for materials. The renderer creates and uses
 /// this to avoid recompiling shaders every frame.
 pub struct MaterialManager {
-    materials: std::collections::HashMap<String, MaterialData>,
+    materials: std::collections::HashMap<std::borrow::Cow<'static, str>, MaterialData>,
     /// How many frames a material can go unused before being evicted.
     pub max_frames_not_used: usize,
 }
@@ -174,8 +174,8 @@ impl MaterialManager {
     /// Get or create a material for the given shader config.
     /// The material is cached by fragment source string.
     pub fn get_or_create(&mut self, config: &ShaderConfig) -> &Material {
-        let key = config.fragment.clone();
-        if !self.materials.contains_key(&key) {
+        let key: &str = &config.fragment;
+        if !self.materials.contains_key(key) {
             // Derive uniform declarations from the config
             let mut uniform_decls: Vec<UniformDesc> = vec![
                 // Auto-uniforms
@@ -232,13 +232,13 @@ impl MaterialManager {
                 .unwrap()
             });
 
-            self.materials.insert(key.clone(), MaterialData {
+            self.materials.insert(config.fragment.clone(), MaterialData {
                 frames_not_used: 0,
                 material,
             });
         }
 
-        let entry = self.materials.get_mut(&key).unwrap();
+        let entry = self.materials.get_mut(key).unwrap();
         entry.frames_not_used = 0;
         &entry.material
     }
@@ -292,7 +292,12 @@ fn draw_good_rounded_rectangle(x: f32, y: f32, w: f32, h: f32, cr: &CornerRadii,
     }
 
     // Generate outline vertices for the rounded rectangle
-    let mut outline: Vec<Vec2> = Vec::new();
+    // Pre-allocate: each corner produces ~(FRAC_PI_2 * radius / PIXELS_PER_POINT).max(6) + 1 vertices
+    let est_verts = [cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right]
+        .iter()
+        .map(|&r| if r <= 0.0 { 1 } else { ((FRAC_PI_2 * r) / PIXELS_PER_POINT).max(6.0) as usize + 1 })
+        .sum::<usize>();
+    let mut outline: Vec<Vec2> = Vec::with_capacity(est_verts);
 
     let add_arc = |outline: &mut Vec<Vec2>, cx: f32, cy: f32, radius: f32, start_angle: f32, end_angle: f32| {
         if radius <= 0.0 {
@@ -300,13 +305,18 @@ fn draw_good_rounded_rectangle(x: f32, y: f32, w: f32, h: f32, cr: &CornerRadii,
             return;
         }
         let sides = ((FRAC_PI_2 * radius) / PIXELS_PER_POINT).max(6.0) as usize;
-        for i in 0..=sides {
-            let t = i as f32 / sides as f32;
-            let angle = start_angle + t * (end_angle - start_angle);
-            outline.push(Vec2::new(
-                cx + angle.cos() * radius,
-                cy + angle.sin() * radius,
-            ));
+        // Use incremental rotation to avoid per-point cos/sin
+        let step = (end_angle - start_angle) / sides as f32;
+        let step_cos = step.cos();
+        let step_sin = step.sin();
+        let mut dx = start_angle.cos() * radius;
+        let mut dy = start_angle.sin() * radius;
+        for _ in 0..=sides {
+            outline.push(Vec2::new(cx + dx, cy + dy));
+            let new_dx = dx * step_cos - dy * step_sin;
+            let new_dy = dx * step_sin + dy * step_cos;
+            dx = new_dx;
+            dy = new_dy;
         }
     };
 
@@ -405,7 +415,16 @@ fn draw_good_rotated_rounded_rectangle(
     };
 
     // Build outline in local (unrotated) space, then rotate
-    let mut outline: Vec<Vec2> = Vec::new();
+    // Pre-allocate based on expected corner vertex count
+    let est_verts = if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
+        4
+    } else {
+        [cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right]
+            .iter()
+            .map(|&r| if r <= 0.0 { 1 } else { ((FRAC_PI_2 * r) / PIXELS_PER_POINT).max(6.0) as usize + 1 })
+            .sum::<usize>()
+    };
+    let mut outline: Vec<Vec2> = Vec::with_capacity(est_verts);
 
     let add_arc = |outline: &mut Vec<Vec2>, arc_cx: f32, arc_cy: f32, radius: f32, start_angle: f32, end_angle: f32| {
         if radius <= 0.0 {
@@ -413,12 +432,18 @@ fn draw_good_rotated_rounded_rectangle(
             return;
         }
         let sides = ((FRAC_PI_2 * radius) / PIXELS_PER_POINT).max(6.0) as usize;
-        for i in 0..=sides {
-            let t = i as f32 / sides as f32;
-            let angle = start_angle + t * (end_angle - start_angle);
-            let px = arc_cx + angle.cos() * radius;
-            let py = arc_cy + angle.sin() * radius;
-            outline.push(rotate_point(px, py));
+        // Use incremental rotation to avoid per-point cos/sin
+        let step = (end_angle - start_angle) / sides as f32;
+        let step_cos = step.cos();
+        let step_sin = step.sin();
+        let mut dx = start_angle.cos() * radius;
+        let mut dy = start_angle.sin() * radius;
+        for _ in 0..=sides {
+            outline.push(rotate_point(arc_cx + dx, arc_cy + dy));
+            let new_dx = dx * step_cos - dy * step_sin;
+            let new_dy = dx * step_sin + dy * step_cos;
+            dx = new_dx;
+            dy = new_dy;
         }
     };
 

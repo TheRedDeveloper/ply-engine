@@ -3,6 +3,8 @@
 //! This module provides the types needed to define shader effects on UI elements,
 //! including shader assets, uniform configuration, and the builder API.
 
+use std::borrow::Cow;
+
 /// Represents a shader asset that can be loaded from a file path or embedded as source.
 ///
 /// `Path` is loaded from the filesystem at runtime (useful for development/hot-reloading).
@@ -26,14 +28,14 @@ pub enum ShaderAsset {
 impl ShaderAsset {
     /// Returns the fragment shader source.
     /// For `Path` variant, reads the file synchronously.
-    /// For `Source` variant, returns the embedded source.
-    pub fn fragment_source(&self) -> String {
+    /// For `Source` variant, returns a borrowed reference (zero-copy).
+    pub fn fragment_source(&self) -> Cow<'static, str> {
         match self {
             ShaderAsset::Path(path) => {
-                std::fs::read_to_string(path)
-                    .unwrap_or_else(|e| panic!("Failed to read shader file '{}': {}", path, e))
+                Cow::Owned(std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("Failed to read shader file '{}': {}", path, e)))
             }
-            ShaderAsset::Source { fragment, .. } => fragment.to_string(),
+            ShaderAsset::Source { fragment, .. } => Cow::Borrowed(fragment),
         }
     }
 
@@ -51,7 +53,7 @@ impl ShaderAsset {
 #[derive(Debug, Clone)]
 pub struct ShaderConfig {
     /// The GLSL ES 3.00 fragment shader source (resolved from ShaderAsset).
-    pub fragment: String,
+    pub fragment: Cow<'static, str>,
     /// The uniform values to set on the shader.
     pub uniforms: Vec<ShaderUniform>,
 }

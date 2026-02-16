@@ -321,44 +321,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
 }
 
 // ============================================================================
-// ElementId
+// Id is defined in crate::id — use it throughout the engine
 // ============================================================================
 
-#[derive(Debug, Clone, Default)]
-pub struct ElementId {
-    pub id: u32,
-    pub offset: u32,
-    pub base_id: u32,
-    pub string_id: StringId,
-}
-
-/// Owned string for debug/display purposes.
-#[derive(Debug, Clone, Default)]
-pub struct StringId {
-    text: String,
-}
-
-impl StringId {
-    pub fn from_str(s: &str) -> Self {
-        Self {
-            text: s.to_string(),
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
-    /// Get the string content.
-    pub fn as_str(&self) -> &str {
-        &self.text
-    }
-
-    /// Returns true if the string is empty.
-    pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
-    }
-}
+use crate::id::{Id, StringId};
 
 // ============================================================================
 // Internal engine types
@@ -417,9 +383,9 @@ struct LayoutElement {
 #[derive(Default)]
 struct LayoutElementHashMapItem {
     bounding_box: BoundingBox,
-    element_id: ElementId,
+    element_id: Id,
     layout_element_index: i32,
-    on_hover_fn: Option<Box<dyn FnMut(ElementId, PointerData)>>,
+    on_hover_fn: Option<Box<dyn FnMut(Id, PointerData)>>,
     generation: u32,
     collision: bool,
     collapsed: bool,
@@ -691,7 +657,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
 
     // Clip/scroll
     open_clip_element_stack: Vec<i32>,
-    pointer_over_ids: Vec<ElementId>,
+    pointer_over_ids: Vec<Id>,
     scroll_container_datas: Vec<ScrollContainerDataInternal>,
 
     // Visited flags for DFS
@@ -717,7 +683,7 @@ fn hash_data_scalar(data: &[u8]) -> u64 {
     hash
 }
 
-pub fn hash_string(key: &str, seed: u32) -> ElementId {
+pub fn hash_string(key: &str, seed: u32) -> Id {
     let mut hash: u32 = seed;
     for b in key.bytes() {
         hash = hash.wrapping_add(b as u32);
@@ -727,7 +693,7 @@ pub fn hash_string(key: &str, seed: u32) -> ElementId {
     hash = hash.wrapping_add(hash << 3);
     hash ^= hash >> 11;
     hash = hash.wrapping_add(hash << 15);
-    ElementId {
+    Id {
         id: hash.wrapping_add(1),
         offset: 0,
         base_id: hash.wrapping_add(1),
@@ -735,7 +701,7 @@ pub fn hash_string(key: &str, seed: u32) -> ElementId {
     }
 }
 
-pub fn hash_string_with_offset(key: &str, offset: u32, seed: u32) -> ElementId {
+pub fn hash_string_with_offset(key: &str, offset: u32, seed: u32) -> Id {
     let mut base: u32 = seed;
     for b in key.bytes() {
         base = base.wrapping_add(b as u32);
@@ -753,7 +719,7 @@ pub fn hash_string_with_offset(key: &str, offset: u32, seed: u32) -> ElementId {
     base ^= base >> 11;
     hash = hash.wrapping_add(hash << 15);
     base = base.wrapping_add(base << 15);
-    ElementId {
+    Id {
         id: hash.wrapping_add(1),
         offset,
         base_id: base.wrapping_add(1),
@@ -761,7 +727,7 @@ pub fn hash_string_with_offset(key: &str, offset: u32, seed: u32) -> ElementId {
     }
 }
 
-fn hash_number(offset: u32, seed: u32) -> ElementId {
+fn hash_number(offset: u32, seed: u32) -> Id {
     let mut hash = seed;
     hash = hash.wrapping_add(offset.wrapping_add(48));
     hash = hash.wrapping_add(hash << 10);
@@ -769,7 +735,7 @@ fn hash_number(offset: u32, seed: u32) -> ElementId {
     hash = hash.wrapping_add(hash << 3);
     hash ^= hash >> 11;
     hash = hash.wrapping_add(hash << 15);
-    ElementId {
+    Id {
         id: hash.wrapping_add(1),
         offset,
         base_id: seed,
@@ -899,7 +865,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     fn add_hash_map_item(
         &mut self,
-        element_id: &ElementId,
+        element_id: &Id,
         layout_element_index: i32,
     ) {
         let gen = self.generation;
@@ -931,7 +897,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    fn generate_id_for_anonymous_element(&mut self, open_element_index: usize) -> ElementId {
+    fn generate_id_for_anonymous_element(&mut self, open_element_index: usize) -> Id {
         let stack_len = self.open_layout_element_stack.len();
         let parent_idx = self.open_layout_element_stack[stack_len - 2] as usize;
         let parent = &self.layout_elements[parent_idx];
@@ -941,7 +907,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let element_id = hash_number(offset, parent_id);
         self.layout_elements[open_element_index].id = element_id.id;
         self.add_hash_map_item(&element_id, open_element_index as i32);
-        self.layout_element_id_strings.push(element_id.string_id.clone());
+        if self.debug_mode_enabled {
+            self.layout_element_id_strings.push(element_id.string_id.clone());
+        }
         element_id
     }
 
@@ -1061,7 +1029,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    pub fn open_element_with_id(&mut self, element_id: &ElementId) {
+    pub fn open_element_with_id(&mut self, element_id: &Id) {
         if self.boolean_warnings.max_elements_exceeded {
             return;
         }
@@ -1079,7 +1047,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
 
         self.add_hash_map_item(element_id, idx);
-        self.layout_element_id_strings.push(element_id.string_id.clone());
+        if self.debug_mode_enabled {
+            self.layout_element_id_strings.push(element_id.string_id.clone());
+        }
 
         if !self.open_clip_element_stack.is_empty() {
             let clip_id = *self.open_clip_element_stack.last().unwrap();
@@ -1559,7 +1529,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let element_id = hash_number(parent_children_count as u32, parent_id);
         self.layout_elements[text_elem_idx as usize].id = element_id.id;
         self.add_hash_map_item(&element_id, text_elem_idx);
-        self.layout_element_id_strings.push(element_id.string_id);
+        if self.debug_mode_enabled {
+            self.layout_element_id_strings.push(element_id.string_id);
+        }
 
         let text_width = text_measured.unwrapped_dimensions.width;
         let text_height = if text_config.line_height > 0 {
@@ -3546,7 +3518,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.pointer_over_ids.iter().any(|eid| eid.id == elem_id)
     }
 
-    pub fn on_hover(&mut self, callback: Box<dyn FnMut(ElementId, PointerData)>) {
+    pub fn on_hover(&mut self, callback: Box<dyn FnMut(Id, PointerData)>) {
         let open_idx = self.get_open_layout_element();
         let elem_id = self.layout_elements[open_idx].id;
         if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
@@ -3554,21 +3526,21 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    pub fn pointer_over(&self, element_id: ElementId) -> bool {
+    pub fn pointer_over(&self, element_id: Id) -> bool {
         self.pointer_over_ids.iter().any(|eid| eid.id == element_id.id)
     }
 
-    pub fn get_pointer_over_ids(&self) -> &[ElementId] {
+    pub fn get_pointer_over_ids(&self) -> &[Id] {
         &self.pointer_over_ids
     }
 
-    pub fn get_element_data(&self, id: ElementId) -> Option<BoundingBox> {
+    pub fn get_element_data(&self, id: Id) -> Option<BoundingBox> {
         self.layout_element_map
             .get(&id.id)
             .map(|item| item.bounding_box)
     }
 
-    pub fn get_scroll_container_data(&self, id: ElementId) -> ScrollContainerData {
+    pub fn get_scroll_container_data(&self, id: Id) -> ScrollContainerData {
         for scd in &self.scroll_container_datas {
             if scd.element_id == id.id {
                 return ScrollContainerData {

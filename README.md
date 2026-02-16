@@ -107,7 +107,7 @@ Layouts are built with a closure-based nesting API. The `element()` builder conf
 
 ```rust
 ui.element().width(fixed!(250.0)).height(grow!())
-    .id(ui.id("sidebar"))
+    .id("sidebar")
     .layout(|l| l
         .direction(LayoutDirection::TopToBottom)
         .gap(8)

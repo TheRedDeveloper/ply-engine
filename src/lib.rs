@@ -34,14 +34,14 @@ pub struct PlyLayoutScope<'ply, CustomElementData: Clone + Default + std::fmt::D
 
 /// Builder for creating elements with closure-based syntax.
 /// Methods return `self` by value for chaining. Finalize with `.children()` or `.empty()`.
-pub struct ElementBuilder<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    ply_ptr: *mut Ply<CustomElementData>,
+pub struct ElementBuilder<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+    ply: &'ply mut Ply<CustomElementData>,
     inner: engine::ElementDeclaration<CustomElementData>,
     id: Option<Id>,
 }
 
-impl<CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<CustomElementData>
+impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
+    ElementBuilder<'ply, CustomElementData>
 {
     /// Sets the width of the element.
     #[inline]
@@ -79,9 +79,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
     }
 
     /// Sets the element's ID.
+    ///
+    /// Accepts an `Id` or a `&'static str` label.
     #[inline]
-    pub fn id(mut self, id: Id) -> Self {
-        self.id = Some(id);
+    pub fn id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
         self
     }
 
@@ -243,24 +245,20 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
 
     /// Finalizes the element with children defined in a closure.
     pub fn children(self, f: impl FnOnce(&mut Ply<CustomElementData>)) -> Id {
-        // SAFETY: The raw pointer was obtained from a valid &mut Ply reference
-        // in element(). The Ply instance remains valid for the duration of this call.
-        unsafe {
-            let ply = &mut *self.ply_ptr;
-            if let Some(ref id) = self.id {
-                ply.context.open_element_with_id(&id.id);
-            } else {
-                ply.context.open_element();
-            }
-            ply.context.configure_open_element(&self.inner);
-            let element_id = ply.context.get_open_element_id();
-
-            f(ply);
-
-            ply.context.close_element();
-
-            Id { id: engine::ElementId { id: element_id, ..Default::default() } }
+        let ElementBuilder { ply, inner, id } = self;
+        if let Some(ref id) = id {
+            ply.context.open_element_with_id(id);
+        } else {
+            ply.context.open_element();
         }
+        ply.context.configure_open_element(&inner);
+        let element_id = ply.context.get_open_element_id();
+
+        f(ply);
+
+        ply.context.close_element();
+
+        Id { id: element_id, ..Default::default() }
     }
 
     /// Finalizes the element with no children.
@@ -323,9 +321,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
 
     /// Creates a new element builder for configuring and adding an element.
     /// Finalize with `.children(|ui| {...})` or `.empty()`.
-    pub fn element(&mut self) -> ElementBuilder<CustomElementData> {
+    pub fn element(&mut self) -> ElementBuilder<'_, CustomElementData> {
         ElementBuilder {
-            ply_ptr: self as *mut _,
+            ply: self,
             inner: engine::ElementDeclaration::default(),
             id: None,
         }
@@ -341,7 +339,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
 
     pub fn on_hover<F>(&mut self, callback: F)
     where
-        F: FnMut(engine::ElementId, engine::PointerData) + 'static,
+        F: FnMut(Id, engine::PointerData) + 'static,
     {
         self.context.on_hover(Box::new(callback));
     }
@@ -380,22 +378,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         }
     }
 
-    /// Generates a unique ID based on the given `label`.
-    ///
-    /// This ID is global and must be unique across the entire scope.
-    #[inline]
-    pub fn id(&self, label: &'static str) -> id::Id {
-        id::Id::new(label)
-    }
-
-    /// Generates a unique indexed ID based on the given `label` and `index`.
-    ///
-    /// This is useful when multiple elements share the same label but need distinct IDs.
-    #[inline]
-    pub fn id_index(&self, label: &'static str, index: u32) -> id::Id {
-        id::Id::new_index(label, index)
-    }
-
     /// Generates a locally unique ID based on the given `label`.
     ///
     /// The ID is unique within a specific local scope but not globally.
@@ -415,16 +397,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     }
 
     pub fn pointer_over(&self, cfg: Id) -> bool {
-        self.context.pointer_over(cfg.id)
+        self.context.pointer_over(cfg)
     }
 
     /// Z-sorted list of element IDs that the cursor is currently over
     pub fn pointer_over_ids(&self) -> Vec<Id> {
-        self.context
-            .get_pointer_over_ids()
-            .iter()
-            .map(|id| Id { id: id.clone() })
-            .collect()
+        self.context.get_pointer_over_ids().to_vec()
     }
 
     /// Set the callback for text measurement with user data
@@ -511,11 +489,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     }
 
     pub fn bounding_box(&self, id: Id) -> Option<math::BoundingBox> {
-        self.context.get_element_data(id.id)
+        self.context.get_element_data(id)
     }
 
     pub fn scroll_container_data(&self, id: Id) -> Option<engine::ScrollContainerData> {
-        let data = self.context.get_scroll_container_data(id.id);
+        let data = self.context.get_scroll_container_data(id);
         if data.found {
             Some(data)
         } else {
@@ -988,7 +966,7 @@ mod tests {
         let mut ui = ply.begin();
 
         ui.element()
-            .id(ui.id("parent_rect"))
+            .id("parent_rect")
             .width(Sizing::Fixed(100.0))
             .height(Sizing::Fixed(100.0))
             .layout(|l| l
