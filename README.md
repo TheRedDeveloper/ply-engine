@@ -9,6 +9,7 @@ A pure Rust UI layout engine built on [macroquad](https://github.com/not-fl3/mac
 
 - **Pure Rust**: no C bindings, no FFI, no irremovable `unsafe` code
 - **Macroquad renderer**: antialiased rounded rectangles, borders, clipping, images, and text out of the box
+- **Shader effects**: shaders directly in layout with [Slang](https://shader-slang.com/), GLSL and other languages with build pipline
 - **TextureManager**: automatic GPU texture caching with configurable eviction, supports file paths and embedded bytes
 - **TinyVG support**: render resolution-independent vector graphics via the `tinyvg` feature
 - **Text styling**: rich inline markup for color, effects (wave, jitter, gradient, …), and animations (type-in, fade, scale) via the `text-styling` feature
@@ -133,7 +134,7 @@ Sizing helpers: `fixed!(px)`, `grow!()`, `fit!()`, and `percent!(0.0..=1.0)`.
 let tex = TEXTURE_MANAGER.lock().unwrap().get_or_load("sprites/hero.png").await;
 
 // Embed bytes at compile time
-static LOGO: Asset = Asset::Bytes {
+static LOGO: GraphicAsset = GraphicAsset::Bytes {
     file_name: "logo.png",
     data: include_bytes!("../assets/logo.png"),
 };
@@ -158,13 +159,176 @@ See [text-styling.md](text-styling.md) for the full reference.
 
 ## TinyVG Support
 
-Enable with `features = ["tinyvg"]`. Reference `.tvg` files through the `Asset` enum and they render at any resolution. Convert your `.svg`s into `.tvg`s with the [official tools](https://tinyvg.tech/) and enjoy ultra-compact assets with blazingly fast rendering.
+Enable with `features = ["tinyvg"]`. Reference `.tvg` files through the `GraphicAsset` enum and they render at any resolution. Convert your `.svg`s into `.tvg`s with the [official tools](https://tinyvg.tech/) and enjoy ultra-compact assets with blazingly fast rendering.
 
 ```rust
-static ICON: Asset = Asset::Bytes {
+static ICON: GraphicAsset = GraphicAsset::Bytes {
     file_name: "icon.tvg",
     data: include_bytes!("../assets/icon.tvg"),
 };
+```
+
+## Shaders
+
+Ply supports GPU shader effects on individual elements and groups of elements. Write fragment shaders in [Slang](https://shader-slang.com/) or plain GLSL ES 1.00 and apply them declaratively.
+
+### Per-Element Effects
+
+Apply a shader to a single element with `.effect()`:
+
+```rust
+use ply_engine::shaders::ShaderAsset;
+
+static GRADIENT: ShaderAsset = ShaderAsset::Source {
+    file_name: "gradient.glsl",
+    fragment: include_str!("../assets/build/shaders/gradient.frag.glsl"),
+};
+
+ui.element().width(fixed!(150.0)).height(fixed!(100.0))
+    .corner_radius(12.0)
+    .color(0xFFFFFF)
+    .effect(&GRADIENT, |s| {
+        s.uniform("color_a", [0.2f32, 0.6, 1.0, 1.0])
+         .uniform("color_b", [1.0f32, 0.3, 0.5, 1.0]);
+    })
+    .empty();
+```
+
+### Group Shaders
+
+Apply a shader to an element **and all its children** with `.shader()`. The entire subtree is rendered to an offscreen texture, then the shader processes the result:
+
+```rust
+static WAVE: ShaderAsset = ShaderAsset::Source {
+    file_name: "wave.glsl",
+    fragment: include_str!("../assets/build/shaders/wave.frag.glsl"),
+};
+
+ui.element().width(fixed!(200.0)).height(fixed!(200.0))
+    .shader(&WAVE, |s| {
+        s.uniform("time", get_time() as f32);
+    })
+    .children(|ui| {
+        ui.text("Wobbly!", |t| t.font_size(24).color(0xFFFFFF));
+    });
+```
+
+Multiple `.shader()` and `.effect()` calls chain — each stage feeds into the next.
+
+### Build Pipeline
+
+Compile shaders at build time with a one-line `build.rs`. Source files in `shaders/` are auto-detected and output as GLSL ES 1.00 to `assets/build/shaders/`:
+
+```rust
+// build.rs
+fn main() {
+    ply_engine::shader_build::ShaderBuild::new()
+        .source_dir("shaders/")
+        .output_dir("assets/build/shaders/")
+        .build();
+}
+```
+
+```toml
+[build-dependencies]
+ply-engine = { version = "0.2", features = ["shader-build"] }
+```
+
+The `shader-build` feature bundles [spirv-cross2](https://crates.io/crates/spirv-cross2) so Slang/HLSL → GLSL conversion needs no CLI tools beyond `slangc`. Plain `.glsl` / `.frag` files are copied through with no extra tooling needed.
+
+## Let's Get Technical
+
+### Writing Fragment Shaders
+
+Fragment shaders receive these from macroquad's internal vertex shader:
+
+```glsl
+varying vec2 uv;            // UV coordinates (0–1)
+varying vec4 color;         // Vertex color
+uniform sampler2D Texture;  // Element/RT texture
+```
+
+Ply auto-injects these uniforms:
+
+| Uniform        | Type   | Description                         |
+|----------------|--------|-------------------------------------|
+| `u_resolution` | `vec2` | Element bounding box size in pixels |
+| `u_position`   | `vec2` | Element position in screen space    |
+
+User uniforms are set via `.uniform()` with these types: `f32`, `[f32; 2]`, `[f32; 3]`, `[f32; 4]`, `i32`, `[[f32; 4]; 4]`.
+
+### MaterialManager
+
+Compiled shader materials are cached on the GPU by `MaterialManager`, which lives inside the renderer. Materials are keyed by their fragment source + uniform values, so identical configurations reuse the same GPU program. Unused materials are automatically evicted after 60 frames of inactivity to keep GPU memory lean.
+
+### Getting Started with Slang
+
+[Slang](https://shader-slang.com/) is a modern shading language developed by NVIDIA. It offers modules, generics, interfaces, and a familiar C-like syntax — all of which make it a great choice for writing maintainable shader code. Slang compiles to SPIR-V, which Ply's build pipeline then cross-compiles to GLSL ES 1.00.
+
+**1. Install slangc**
+
+Download the latest release from the [Slang GitHub releases](https://github.com/shader-slang/slang/releases) and add the `bin/` directory to your PATH, or point the build pipeline to it directly:
+
+```rust
+// build.rs
+ply_engine::shader_build::ShaderBuild::new()
+    .slangc_path("/path/to/slangc")
+    .build();
+```
+
+**2. Write a `.slang` shader**
+
+Create `shaders/glow.slang`:
+
+```slang
+uniform float4 tint;
+uniform float  intensity;
+
+[shader("fragment")]
+float4 main(float2 uv : TEXCOORD0, float4 color : COLOR0) : SV_Target
+{
+    float glow = smoothstep(0.5, 0.0, length(uv - 0.5));
+    return lerp(color, tint, glow * intensity);
+}
+```
+
+**3. Use the compiled shader**
+
+The build pipeline outputs `assets/build/shaders/glow.frag.glsl`. Include it:
+
+```rust
+static GLOW: ShaderAsset = ShaderAsset::Source {
+    file_name: "glow.glsl",
+    fragment: include_str!("../assets/build/shaders/glow.frag.glsl"),
+};
+
+ui.element().width(fixed!(120.0)).height(fixed!(120.0))
+    .effect(&GLOW, |s| {
+        s.uniform("tint", [1.0f32, 0.8, 0.2, 1.0])
+         .uniform("intensity", 0.7f32);
+    })
+    .empty();
+```
+
+### Build Pipeline Details
+
+| Extension         | Pipeline                                      | External Tools |
+|-------------------|-----------------------------------------------|----------------|
+| `.slang`          | slangc → SPIR-V → spirv-cross2 → GLSL ES 1.00 | `slangc`       |
+| `.hlsl`           | slangc → SPIR-V → spirv-cross2 → GLSL ES 1.00 | `slangc`       |
+| `.glsl` / `.frag` | Copy with generated header                    | —              |
+
+Content hashes in `build/shaders/hashes.json` enable incremental builds — only changed files recompile.
+
+Custom languages can be added with `.override_file_type_handler()`:
+
+```rust
+ply_engine::shader_build::ShaderBuild::new()
+    .override_file_type_handler(".wgsl", |file_path, output_dir| {
+        my_compiler::compile(file_path, output_dir);
+        vec!["shaders/includes/**/*.wgsl".to_string()] // dependency globs
+    })
+    .build();
 ```
 
 ## WebAssembly

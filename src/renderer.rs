@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
-use crate::{math::BoundingBox, render_commands::{CornerRadii, RenderCommand, RenderCommandConfig}};
+use macroquad::miniquad::{BlendState, BlendFactor, BlendValue, Equation};
+use crate::{math::BoundingBox, render_commands::{CornerRadii, RenderCommand, RenderCommandConfig}, shaders::{ShaderConfig, ShaderUniformValue}};
 
 #[cfg(feature = "text-styling")]
 use crate::text_styling::{render_styled_text, StyledSegment};
@@ -13,15 +14,15 @@ static ANIMATION_TRACKER: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (
 
 /// Represents an asset that can be loaded as a texture. This can be either a file path or embedded bytes.
 #[derive(Debug)]
-pub enum Asset {
+pub enum GraphicAsset {
     Path(&'static str), // For external assets
     Bytes{file_name: &'static str, data: &'static [u8]}, // For embedded assets
 }
-impl Asset {
+impl GraphicAsset {
     fn get_name(&self) -> &str {
         match self {
-            Asset::Path(path) => path,
-            Asset::Bytes { file_name, .. } => file_name,
+            GraphicAsset::Path(path) => path,
+            GraphicAsset::Bytes { file_name, .. } => file_name,
         }
     }
 }
@@ -115,6 +116,161 @@ impl TextureManager {
     }
 }
 
+// ============================================================================
+// MaterialManager — caches compiled GPU materials (shaders)
+// ============================================================================
+
+/// Default passthrough vertex shader used for all shader effects.
+const DEFAULT_VERTEX_SHADER: &str = "#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+varying lowp vec2 uv;
+varying lowp vec4 color;
+uniform mat4 Model;
+uniform mat4 Projection;
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    color = color0 / 255.0;
+    uv = texcoord;
+}
+";
+
+/// Default fragment shader template prefix for effects.
+const DEFAULT_FRAGMENT_HEADER: &str = "#version 100
+precision lowp float;
+varying vec2 uv;
+varying vec4 color;
+uniform sampler2D Texture;
+";
+
+/// Global MaterialManager for caching compiled shader materials.
+pub static MATERIAL_MANAGER: std::sync::LazyLock<std::sync::Mutex<MaterialManager>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(MaterialManager::new()));
+
+/// Manages compiled GPU materials (shaders), caching them by fragment source.
+///
+/// Equivalent to `TextureManager` but for materials. The renderer creates and uses
+/// this to avoid recompiling shaders every frame.
+pub struct MaterialManager {
+    materials: std::collections::HashMap<String, MaterialData>,
+    /// How many frames a material can go unused before being evicted.
+    pub max_frames_not_used: usize,
+}
+
+struct MaterialData {
+    pub frames_not_used: usize,
+    pub material: Material,
+}
+
+impl MaterialManager {
+    pub fn new() -> Self {
+        Self {
+            materials: std::collections::HashMap::new(),
+            max_frames_not_used: 60, // Keep materials longer than textures
+        }
+    }
+
+    /// Get or create a material for the given shader config.
+    /// The material is cached by fragment source string.
+    pub fn get_or_create(&mut self, config: &ShaderConfig) -> &Material {
+        let key = config.fragment.clone();
+        if !self.materials.contains_key(&key) {
+            // Derive uniform declarations from the config
+            let mut uniform_decls: Vec<UniformDesc> = vec![
+                // Auto-uniforms
+                UniformDesc::new("u_resolution", UniformType::Float2),
+                UniformDesc::new("u_position", UniformType::Float2),
+            ];
+            for u in &config.uniforms {
+                let utype = match &u.value {
+                    ShaderUniformValue::Float(_) => UniformType::Float1,
+                    ShaderUniformValue::Vec2(_) => UniformType::Float2,
+                    ShaderUniformValue::Vec3(_) => UniformType::Float3,
+                    ShaderUniformValue::Vec4(_) => UniformType::Float4,
+                    ShaderUniformValue::Int(_) => UniformType::Int1,
+                    ShaderUniformValue::Mat4(_) => UniformType::Mat4,
+                };
+                uniform_decls.push(UniformDesc::new(&u.name, utype));
+            }
+
+            let blend_pipeline_params = PipelineParams {
+                color_blend: Some(BlendState::new(
+                    Equation::Add,
+                    BlendFactor::Value(BlendValue::SourceAlpha),
+                    BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+                )),
+                alpha_blend: Some(BlendState::new(
+                    Equation::Add,
+                    BlendFactor::Value(BlendValue::SourceAlpha),
+                    BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+                )),
+                ..Default::default()
+            };
+
+            let material = load_material(
+                ShaderSource::Glsl {
+                    vertex: DEFAULT_VERTEX_SHADER,
+                    fragment: &config.fragment,
+                },
+                MaterialParams {
+                    pipeline_params: blend_pipeline_params,
+                    uniforms: uniform_decls,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to compile shader material: {:?}", e);
+                // Fall back to default material 
+                load_material(
+                    ShaderSource::Glsl {
+                        vertex: DEFAULT_VERTEX_SHADER,
+                        fragment: &format!("{}void main() {{ gl_FragColor = color; }}", DEFAULT_FRAGMENT_HEADER),
+                    },
+                    MaterialParams::default(),
+                )
+                .unwrap()
+            });
+
+            self.materials.insert(key.clone(), MaterialData {
+                frames_not_used: 0,
+                material,
+            });
+        }
+
+        let entry = self.materials.get_mut(&key).unwrap();
+        entry.frames_not_used = 0;
+        &entry.material
+    }
+
+    /// Evict materials that haven't been used recently.
+    pub fn clean(&mut self) {
+        self.materials.retain(|_, data| data.frames_not_used <= self.max_frames_not_used);
+        for (_, data) in self.materials.iter_mut() {
+            data.frames_not_used += 1;
+        }
+    }
+}
+
+/// Apply shader uniforms to a material, including auto-uniforms.
+fn apply_shader_uniforms(material: &Material, config: &ShaderConfig, bb: &BoundingBox) {
+    // Auto-uniforms
+    material.set_uniform("u_resolution", (bb.width, bb.height));
+    material.set_uniform("u_position", (bb.x, bb.y));
+
+    // User-defined uniforms
+    for u in &config.uniforms {
+        match &u.value {
+            ShaderUniformValue::Float(v) => material.set_uniform(&u.name, *v),
+            ShaderUniformValue::Vec2(v) => material.set_uniform(&u.name, *v),
+            ShaderUniformValue::Vec3(v) => material.set_uniform(&u.name, *v),
+            ShaderUniformValue::Vec4(v) => material.set_uniform(&u.name, *v),
+            ShaderUniformValue::Int(v) => material.set_uniform(&u.name, *v),
+            ShaderUniformValue::Mat4(v) => material.set_uniform(&u.name, *v),
+        }
+    }
+}
+
 fn ply_to_macroquad_color(ply_color: &crate::color::Color) -> Color {
     Color {
         r: ply_color.r / 255.0,
@@ -124,13 +280,100 @@ fn ply_to_macroquad_color(ply_color: &crate::color::Color) -> Color {
     }
 }
 
-fn draw_good_circle(x: f32, y: f32, r: f32, color: Color) {
-    let sides = ((2.0 * std::f32::consts::PI * r) / PIXELS_PER_POINT).max(20.0);
-    draw_poly(x, y, sides.min(255.0) as u8, r, 0.0, color);
+/// Draws a rounded rectangle as a single triangle-fan mesh.
+/// This avoids the visual artifacts of multi-shape rendering (seams, separate
+/// shapes getting individual shader effects) and handles alpha correctly.
+fn draw_good_rounded_rectangle(x: f32, y: f32, w: f32, h: f32, cr: &CornerRadii, color: Color) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
+        draw_rectangle(x, y, w, h, color);
+        return;
+    }
+
+    // Generate outline vertices for the rounded rectangle
+    let mut outline: Vec<Vec2> = Vec::new();
+
+    let add_arc = |outline: &mut Vec<Vec2>, cx: f32, cy: f32, radius: f32, start_angle: f32, end_angle: f32| {
+        if radius <= 0.0 {
+            outline.push(Vec2::new(cx, cy));
+            return;
+        }
+        let sides = ((FRAC_PI_2 * radius) / PIXELS_PER_POINT).max(6.0) as usize;
+        for i in 0..=sides {
+            let t = i as f32 / sides as f32;
+            let angle = start_angle + t * (end_angle - start_angle);
+            outline.push(Vec2::new(
+                cx + angle.cos() * radius,
+                cy + angle.sin() * radius,
+            ));
+        }
+    };
+
+    // Top-left corner: arc from π to 3π/2
+    add_arc(&mut outline, x + cr.top_left, y + cr.top_left, cr.top_left,
+            PI, 3.0 * FRAC_PI_2);
+    // Top-right corner: arc from 3π/2 to 2π
+    add_arc(&mut outline, x + w - cr.top_right, y + cr.top_right, cr.top_right,
+            3.0 * FRAC_PI_2, 2.0 * PI);
+    // Bottom-right corner: arc from 0 to π/2
+    add_arc(&mut outline, x + w - cr.bottom_right, y + h - cr.bottom_right, cr.bottom_right,
+            0.0, FRAC_PI_2);
+    // Bottom-left corner: arc from π/2 to π
+    add_arc(&mut outline, x + cr.bottom_left, y + h - cr.bottom_left, cr.bottom_left,
+            FRAC_PI_2, PI);
+
+    let n = outline.len();
+    if n < 3 { return; }
+
+    let color_bytes = [
+        (color.r * 255.0) as u8,
+        (color.g * 255.0) as u8,
+        (color.b * 255.0) as u8,
+        (color.a * 255.0) as u8,
+    ];
+
+    let cx = x + w / 2.0;
+    let cy = y + h / 2.0;
+
+    let mut vertices = Vec::with_capacity(n + 1);
+    // Center vertex (index 0)
+    vertices.push(Vertex {
+        position: Vec3::new(cx, cy, 0.0),
+        uv: Vec2::new(0.5, 0.5),
+        color: color_bytes,
+        normal: Vec4::new(0.0, 0.0, 1.0, 0.0),
+    });
+    // Outline vertices (indices 1..=n)
+    for p in &outline {
+        vertices.push(Vertex {
+            position: Vec3::new(p.x, p.y, 0.0),
+            uv: Vec2::new((p.x - x) / w, (p.y - y) / h),
+            color: color_bytes,
+            normal: Vec4::new(0.0, 0.0, 1.0, 0.0),
+        });
+    }
+
+    let mut indices = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        indices.push(0u16); // center
+        indices.push((i + 1) as u16);
+        indices.push(((i + 1) % n + 1) as u16);
+    }
+
+    let mesh = Mesh {
+        vertices,
+        indices,
+        texture: None,
+    };
+    draw_mesh(&mesh);
 }
 
 struct RenderState {
     clip: Option<(i32, i32, i32, i32)>,
+    /// Render target stack for group shaders.
+    /// Each entry: (render_target, shader_config, bounding_box)
+    rt_stack: Vec<(RenderTarget, crate::shaders::ShaderConfig, BoundingBox)>,
     #[cfg(feature = "text-styling")]
     style_stack: Vec<String>,
     #[cfg(feature = "text-styling")]
@@ -141,6 +384,7 @@ impl RenderState {
     fn new() -> Self {
         Self {
             clip: None,
+            rt_stack: Vec::new(),
             #[cfg(feature = "text-styling")]
             style_stack: Vec::new(),
             #[cfg(feature = "text-styling")]
@@ -159,85 +403,7 @@ fn rounded_rectangle_texture(cr: &CornerRadii, bb: &BoundingBox, clip: &Option<(
         get_internal_gl().quad_gl.scissor(None);
     };
 
-    // Edges
-    // Top edge
-    if cr.top_left > 0.0 || cr.top_right > 0.0 {
-        draw_rectangle(
-            cr.top_left,
-            0.0,
-            bb.width - cr.top_left - cr.top_right,
-            bb.height - cr.bottom_left.max(cr.bottom_right),
-            WHITE
-        );
-    }
-    // Left edge
-    if cr.top_left > 0.0 || cr.bottom_left > 0.0 {
-        draw_rectangle(
-            0.0,
-            cr.top_left,
-            bb.width - cr.top_right.max(cr.bottom_right),
-            bb.height - cr.top_left - cr.bottom_left,
-            WHITE
-        );
-    }
-    // Bottom edge
-    if cr.bottom_left > 0.0 || cr.bottom_right > 0.0 {
-        draw_rectangle(
-            cr.bottom_left,
-            cr.top_left.max(cr.top_right),
-            bb.width - cr.bottom_left - cr.bottom_right,
-            bb.height - cr.top_left.max(cr.top_right),
-            WHITE
-        );
-    }
-    // Right edge
-    if cr.top_right > 0.0 || cr.bottom_right > 0.0 {
-        draw_rectangle(
-            bb.width - cr.top_right,
-            cr.top_right,
-            bb.width - cr.top_left.max(cr.bottom_left),
-            bb.height - cr.top_right - cr.bottom_right,
-            WHITE
-        );
-    }
-
-    // Corners
-    // Top-left corner
-    if cr.top_left > 0.0 {
-        draw_good_circle(
-            cr.top_left,
-            cr.top_left,
-            cr.top_left,
-            WHITE,
-        );
-    }
-    // Top-right corner
-    if cr.top_right > 0.0 {
-        draw_good_circle(
-            bb.width - cr.top_right,
-            cr.top_right,
-            cr.top_right,
-            WHITE,
-        );
-    }
-    // Bottom-left corner
-    if cr.bottom_left > 0.0 {
-        draw_good_circle(
-            cr.bottom_left,
-            bb.height - cr.bottom_left,
-            cr.bottom_left,
-            WHITE,
-        );
-    }
-    // Bottom-right corner
-    if cr.bottom_right > 0.0 {
-        draw_good_circle(
-            bb.width - cr.bottom_right,
-            bb.height - cr.bottom_right,
-            cr.bottom_right,
-            WHITE,
-        );
-    }
+    draw_good_rounded_rectangle(0.0, 0.0, bb.width, bb.height, cr, WHITE);
 
     set_default_camera();
     unsafe {
@@ -912,7 +1078,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
                     let texture = if !has_corner_radii {
                         match image.data {
-                            Asset::Path(path) => {
+                            GraphicAsset::Path(path) => {
                                 manager.get_or_create_async(key, async || {
                                     match load_file(path).await {
                                         Ok(tvg_bytes) => {
@@ -930,7 +1096,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                     }
                                 }).await
                             }
-                            Asset::Bytes { file_name, data: tvg_bytes } => {
+                            GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
                                 manager.get_or_create(key, || {
                                     if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
                                         tvg_texture
@@ -959,7 +1125,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                             cached
                         } else {
                             match image.data {
-                                Asset::Path(path) => {
+                                GraphicAsset::Path(path) => {
                                     match load_file(path).await {
                                         Ok(tvg_bytes) => {
                                             let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
@@ -976,7 +1142,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                         }
                                     }
                                 }
-                                Asset::Bytes { file_name, data: tvg_bytes } => {
+                                GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
                                     let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
                                         tvg_texture
                                     } else {
@@ -1017,8 +1183,8 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
 
                 if !is_tvg && cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
                     let texture = match image.data {
-                        Asset::Path(path) => manager.get_or_load(path).await,
-                        Asset::Bytes { file_name, data } => {
+                        GraphicAsset::Path(path) => manager.get_or_load(path).await,
+                        GraphicAsset::Bytes { file_name, data } => {
                             manager.get_or_create(file_name.to_string(), || {
                                 Texture2D::from_file_with_format(data, None)
                             })
@@ -1036,8 +1202,8 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     );
                 } else {
                     let source_texture = match image.data {
-                        Asset::Path(path) => manager.get_or_load(path).await.clone(),
-                        Asset::Bytes { file_name, data } => {
+                        GraphicAsset::Path(path) => manager.get_or_load(path).await.clone(),
+                        GraphicAsset::Bytes { file_name, data } => {
                             manager.get_or_create(file_name.to_string(), || {
                                 Texture2D::from_file_with_format(data, None)
                             }).clone()
@@ -1086,6 +1252,16 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 let color = ply_to_macroquad_color(&config.color);
                 let cr = &config.corner_radii;
 
+                // Activate effect material if present (Phase 1: single effect only)
+                let has_effect = !command.effects.is_empty();
+                if has_effect {
+                    let effect = &command.effects[0];
+                    let mut mat_mgr = MATERIAL_MANAGER.lock().unwrap();
+                    let material = mat_mgr.get_or_create(effect);
+                    apply_shader_uniforms(material, effect, &bb);
+                    gl_use_material(material);
+                }
+
                 if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
                     draw_rectangle(
                         bb.x,
@@ -1094,114 +1270,13 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                         bb.height,
                         color
                     );
-                } else if color.a == 1.0 {
-                    // Edges
-                    // Top edge
-                    if cr.top_left > 0.0 || cr.top_right > 0.0 {
-                        draw_rectangle(
-                            bb.x + cr.top_left,
-                            bb.y,
-                            bb.width - cr.top_left - cr.top_right,
-                            bb.height - cr.bottom_left.max(cr.bottom_right),
-                            color
-                        );
-                    }
-                    // Left edge
-                    if cr.top_left > 0.0 || cr.bottom_left > 0.0 {
-                        draw_rectangle(
-                            bb.x,
-                            bb.y + cr.top_left,
-                            bb.width - cr.top_right.max(cr.bottom_right),
-                            bb.height - cr.top_left - cr.bottom_left,
-                            color
-                        );
-                    }
-                    // Bottom edge
-                    if cr.bottom_left > 0.0 || cr.bottom_right > 0.0 {
-                        draw_rectangle(
-                            bb.x + cr.bottom_left,
-                            bb.y + cr.top_left.max(cr.top_right),
-                            bb.width - cr.bottom_left - cr.bottom_right,
-                            bb.height - cr.top_left.max(cr.top_right),
-                            color
-                        );
-                    }
-                    // Right edge
-                    if cr.top_right > 0.0 || cr.bottom_right > 0.0 {
-                        draw_rectangle(
-                            bb.x + cr.top_left.max(cr.bottom_left),
-                            bb.y + cr.top_right,
-                            bb.width - cr.top_left.max(cr.bottom_left),
-                            bb.height - cr.top_right - cr.bottom_right,
-                            color
-                        );
-                    }
-
-                    // Corners
-                    // Top-left corner
-                    if cr.top_left > 0.0 {
-                        draw_good_circle(
-                            bb.x + cr.top_left,
-                            bb.y + cr.top_left,
-                            cr.top_left,
-                            color,
-                        );
-                    }
-                    // Top-right corner
-                    if cr.top_right > 0.0 {
-                        draw_good_circle(
-                            bb.x + bb.width - cr.top_right,
-                            bb.y + cr.top_right,
-                            cr.top_right,
-                            color,
-                        );
-                    }
-                    // Bottom-left corner
-                    if cr.bottom_left > 0.0 {
-                        draw_good_circle(
-                            bb.x + cr.bottom_left,
-                            bb.y + bb.height - cr.bottom_left,
-                            cr.bottom_left,
-                            color,
-                        );
-                    }
-                    // Bottom-right corner
-                    if cr.bottom_right > 0.0 {
-                        draw_good_circle(
-                            bb.x + bb.width - cr.bottom_right,
-                            bb.y + bb.height - cr.bottom_right,
-                            cr.bottom_right,
-                            color,
-                        );
-                    }
                 } else {
-                    let mut manager = TEXTURE_MANAGER.lock().unwrap();
-                    let key = format!(
-                        "rect:{}:{}:{}:{}:{}:{}:{:?}",
-                        bb.width,
-                        bb.height,
-                        cr.top_left,
-                        cr.top_right,
-                        cr.bottom_left,
-                        cr.bottom_right,
-                        state.clip
-                    );
+                    draw_good_rounded_rectangle(bb.x, bb.y, bb.width, bb.height, cr, color);
+                }
 
-                    let texture = manager.get_or_create(key, || {
-                        rounded_rectangle_texture(cr, &bb, &state.clip)
-                    });
-
-                    draw_texture_ex(
-                        texture,
-                        bb.x,
-                        bb.y,
-                        color,
-                        DrawTextureParams {
-                            dest_size: Some(Vec2::new(bb.width, bb.height)),
-                            flip_y: true,
-                            ..Default::default()
-                        },
-                    );
+                // Deactivate effect material
+                if has_effect {
+                    gl_use_default_material();
                 }
             }
             #[cfg(feature = "text-styling")]
@@ -1210,6 +1285,16 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 let font_size = config.font_size as f32;
                 let font = Some(&fonts[config.font_id as usize]);
                 let default_color = ply_to_macroquad_color(&config.color);
+
+                // Activate effect material if present
+                let has_effect = !command.effects.is_empty();
+                if has_effect {
+                    let effect = &command.effects[0];
+                    let mut mat_mgr = MATERIAL_MANAGER.lock().unwrap();
+                    let material = mat_mgr.get_or_create(effect);
+                    apply_shader_uniforms(material, effect, &bb);
+                    gl_use_material(material);
+                }
 
                 let normal_render = || {
                     let x_scale = if config.letter_spacing > 0 {
@@ -1399,11 +1484,26 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     }
                     normal_render();
                 }
+
+                // Deactivate effect material
+                if has_effect {
+                    gl_use_default_material();
+                }
             }
             #[cfg(not(feature = "text-styling"))]
             RenderCommandConfig::Text(config) => {
                 let bb = command.bounding_box;
                 let color = ply_to_macroquad_color(&config.color);
+
+                // Activate effect material if present
+                let has_effect = !command.effects.is_empty();
+                if has_effect {
+                    let effect = &command.effects[0];
+                    let mut mat_mgr = MATERIAL_MANAGER.lock().unwrap();
+                    let material = mat_mgr.get_or_create(effect);
+                    apply_shader_uniforms(material, effect, &bb);
+                    gl_use_material(material);
+                }
 
                 let x_scale = if config.letter_spacing > 0 {
                     bb.width / measure_text(
@@ -1428,6 +1528,11 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                         color
                     }
                 );
+
+                // Deactivate effect material
+                if has_effect {
+                    gl_use_default_material();
+                }
             }
             RenderCommandConfig::Border(config) => {
                 let bb = command.bounding_box;
@@ -1606,10 +1711,62 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
             RenderCommandConfig::Custom(_) => {
                 handle_custom_command(&command);
             }
+            RenderCommandConfig::ShaderBegin(config) => {
+                let bb = command.bounding_box;
+                let rt = render_target(bb.width as u32, bb.height as u32);
+                rt.texture.set_filter(FilterMode::Linear);
+                let cam = Camera2D {
+                    render_target: Some(rt.clone()),
+                    ..Camera2D::from_display_rect(Rect::new(
+                        bb.x, bb.y, bb.width, bb.height,
+                    ))
+                };
+                set_camera(&cam);
+                clear_background(Color::new(0.0, 0.0, 0.0, 0.0));
+                state.rt_stack.push((rt, config.clone(), bb));
+            }
+            RenderCommandConfig::ShaderEnd => {
+                if let Some((rt, config, bb)) = state.rt_stack.pop() {
+                    // Restore previous camera
+                    if let Some((prev_rt, _, prev_bb)) = state.rt_stack.last() {
+                        let cam = Camera2D {
+                            render_target: Some(prev_rt.clone()),
+                            ..Camera2D::from_display_rect(Rect::new(
+                                prev_bb.x, prev_bb.y, prev_bb.width, prev_bb.height,
+                            ))
+                        };
+                        set_camera(&cam);
+                    } else {
+                        set_default_camera();
+                    }
+
+                    // Apply the shader material
+                    let mut mat_mgr = MATERIAL_MANAGER.lock().unwrap();
+                    let material = mat_mgr.get_or_create(&config);
+                    apply_shader_uniforms(material, &config, &bb);
+                    // macroquad auto-binds the texture from draw_texture_ex
+                    // to the default `Texture` sampler in the shader.
+                    gl_use_material(material);
+
+                    draw_texture_ex(
+                        &rt.texture,
+                        bb.x,
+                        bb.y,
+                        WHITE,
+                        DrawTextureParams {
+                            dest_size: Some(Vec2::new(bb.width, bb.height)),
+                            flip_y: true,
+                            ..Default::default()
+                        },
+                    );
+                    gl_use_default_material();
+                }
+            }
             RenderCommandConfig::None() => {}
         }
     }
     TEXTURE_MANAGER.lock().unwrap().clean();
+    MATERIAL_MANAGER.lock().unwrap().clean();
 }
 
 pub fn create_measure_text_function(

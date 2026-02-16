@@ -1,5 +1,4 @@
-use crate::color::Color;
-
+use crate::color::Color;use crate::shaders::{ShaderAsset, ShaderBuilder, ShaderConfig};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum TextElementConfigWrapMode {
@@ -25,7 +24,7 @@ pub enum TextAlignment {
 }
 
 /// Configuration settings for rendering text elements.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TextConfig {
     /// Internal engine user data.
     pub(crate) user_data: usize,
@@ -44,6 +43,8 @@ pub struct TextConfig {
     pub wrap_mode: TextElementConfigWrapMode,
     /// The alignment of the text.
     pub alignment: TextAlignment,
+    /// Per-element shader effects applied to this text.
+    pub(crate) effects: Vec<ShaderConfig>,
 }
 
 impl TextConfig {
@@ -100,6 +101,15 @@ impl TextConfig {
         self.alignment = alignment;
         self
     }
+
+    /// Adds a per-element shader effect to this text.
+    #[inline]
+    pub fn effect(&mut self, asset: &ShaderAsset, f: impl FnOnce(&mut ShaderBuilder<'_>)) -> &mut Self {
+        let mut builder = ShaderBuilder::new(asset);
+        f(&mut builder);
+        self.effects.push(builder.into_config());
+        self
+    }
 }
 
 impl Default for TextConfig {
@@ -113,6 +123,7 @@ impl Default for TextConfig {
             line_height: 0,
             wrap_mode: TextElementConfigWrapMode::Words,
             alignment: TextAlignment::Left,
+            effects: Vec::new(),
         }
     }
 }

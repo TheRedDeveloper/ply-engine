@@ -1,4 +1,4 @@
-use crate::{color::Color, engine, math::BoundingBox, renderer::Asset};
+use crate::{color::Color, engine, math::BoundingBox, renderer::GraphicAsset, shaders::ShaderConfig};
 
 /// Represents a rectangle with a specified color and corner radii.
 #[derive(Debug, Clone)]
@@ -73,7 +73,7 @@ pub struct Image {
     /// The corner radii for rounded border edges.
     pub corner_radii: CornerRadii,
     /// A reference to the asset data.
-    pub data: &'static Asset,
+    pub data: &'static GraphicAsset,
 }
 
 /// Represents a custom element with a background color, corner radii, and associated data.
@@ -108,6 +108,11 @@ pub enum RenderCommandConfig<CustomElementData> {
     ScissorStart(),
     ScissorEnd(),
     Custom(Custom<CustomElementData>),
+    /// Begin a group shader — renders children to an offscreen buffer,
+    /// then applies a fragment shader as a post-process.
+    ShaderBegin(ShaderConfig),
+    /// End a group shader — pops the render target and composites.
+    ShaderEnd,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug>
@@ -170,6 +175,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
             }
             engine::RenderCommandType::ScissorStart => Self::ScissorStart(),
             engine::RenderCommandType::ScissorEnd => Self::ScissorEnd(),
+            engine::RenderCommandType::ShaderBegin => {
+                // ShaderBegin uses the first effect from the render command as its config
+                if let Some(config) = value.effects.first() {
+                    Self::ShaderBegin(config.clone())
+                } else {
+                    Self::None()
+                }
+            }
+            engine::RenderCommandType::ShaderEnd => Self::ShaderEnd,
             engine::RenderCommandType::Custom => {
                 if let engine::InternalRenderData::Custom { background_color, corner_radius, custom_data } = &value.render_data {
                     Self::Custom(Custom {
@@ -197,6 +211,8 @@ pub struct RenderCommand<CustomElementData> {
     /// The z-index determines the stacking order of elements.
     /// Higher values are drawn above lower values.
     pub z_index: i16,
+    /// Per-element shader effects (chained in order).
+    pub effects: Vec<ShaderConfig>,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> RenderCommand<CustomElementData> {
@@ -206,6 +222,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> RenderCommand<CustomE
             z_index: value.z_index,
             bounding_box: value.bounding_box,
             config: RenderCommandConfig::from_engine_render_command(value),
+            effects: value.effects.clone(),
         }
     }
 }

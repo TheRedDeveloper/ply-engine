@@ -6,6 +6,8 @@ pub mod id;
 pub mod layout;
 pub mod math;
 pub mod render_commands;
+pub mod shader_build;
+pub mod shaders;
 pub mod text;
 pub mod renderer;
 #[cfg(feature = "text-styling")]
@@ -132,8 +134,56 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
 
     /// Sets the image data for this element.
     #[inline]
-    pub fn image(mut self, data: &'static renderer::Asset) -> Self {
+    pub fn image(mut self, data: &'static renderer::GraphicAsset) -> Self {
         self.inner.image_data = Some(data);
+        self
+    }
+
+    /// Adds a per-element shader effect using a closure-based uniform API.
+    ///
+    /// The shader modifies the fragment output of the element's draw call directly.
+    /// Multiple `.effect()` calls are supported — each adds to the effects list.
+    ///
+    /// # Example
+    /// ```ignore
+    /// ui.element()
+    ///     .effect(&MY_SHADER, |s| s
+    ///         .uniform("time", time)
+    ///         .uniform("intensity", 0.5f32)
+    ///     )
+    ///     .empty();
+    /// ```
+    #[inline]
+    pub fn effect(mut self, asset: &shaders::ShaderAsset, f: impl FnOnce(&mut shaders::ShaderBuilder<'_>)) -> Self {
+        let mut builder = shaders::ShaderBuilder::new(asset);
+        f(&mut builder);
+        self.inner.effects.push(builder.into_config());
+        self
+    }
+
+    /// Adds a group shader that captures all children to an offscreen buffer,
+    /// then applies a fragment shader as a post-process.
+    ///
+    /// Multiple `.shader()` calls are supported — each adds a nesting level.
+    /// The first shader is applied innermost (directly to children), subsequent
+    /// shaders wrap earlier ones.
+    ///
+    /// # Example
+    /// ```ignore
+    /// ui.element()
+    ///     .shader(&FOIL_EFFECT, |s| s
+    ///         .uniform("time", time)
+    ///         .uniform("seed", card_seed)
+    ///     )
+    ///     .children(|ui| {
+    ///         // All children captured to offscreen buffer
+    ///     });
+    /// ```
+    #[inline]
+    pub fn shader(mut self, asset: &shaders::ShaderAsset, f: impl FnOnce(&mut shaders::ShaderBuilder<'_>)) -> Self {
+        let mut builder = shaders::ShaderBuilder::new(asset);
+        f(&mut builder);
+        self.inner.shaders.push(builder.into_config());
         self
     }
 
@@ -899,5 +949,194 @@ mod tests {
             });
 
         let _items = ui.eval();
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_shader_begin_end() {
+        use shaders::ShaderAsset;
+
+        let test_shader = ShaderAsset::Source {
+            file_name: "test_effect.glsl",
+            fragment: "#version 100\nprecision lowp float;\nvarying vec2 uv;\nuniform sampler2D Texture;\nvoid main() { gl_FragColor = texture2D(Texture, uv); }",
+        };
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        ply.set_measure_text_function(|_, _| Dimensions::new(100.0, 24.0));
+
+        let mut ui = ply.begin();
+
+        // Element with a group shader containing children
+        ui.element()
+            .width(fixed!(200.0)).height(fixed!(200.0))
+            .background_color(0xFF0000)
+            .shader(&test_shader, |s| {
+                s.uniform("time", 1.0f32);
+            })
+            .children(|ui| {
+                ui.element()
+                    .width(fixed!(100.0)).height(fixed!(100.0))
+                    .background_color(0x00FF00)
+                    .empty();
+            });
+
+        let items = ui.eval();
+
+        for (i, item) in items.iter().enumerate() {
+            println!(
+                "[{}] config: {:?}, bbox: {:?}",
+                i, item.config, item.bounding_box,
+            );
+        }
+
+        // Expected order (ShaderBegin now wraps the entire element group):
+        // 0: ShaderBegin
+        // 1: Rectangle (parent background)
+        // 2: Rectangle (child)
+        // 3: ShaderEnd
+        assert!(items.len() >= 4, "Expected at least 4 items, got {}", items.len());
+
+        match &items[0].config {
+            render_commands::RenderCommandConfig::ShaderBegin(config) => {
+                assert!(!config.fragment.is_empty(), "ShaderBegin should have fragment source");
+                assert_eq!(config.uniforms.len(), 1);
+                assert_eq!(config.uniforms[0].name, "time");
+            }
+            other => panic!("Expected ShaderBegin for item 0, got {:?}", other),
+        }
+
+        match &items[1].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 255.0);
+                assert_eq!(rect.color.g, 0.0);
+                assert_eq!(rect.color.b, 0.0);
+            }
+            other => panic!("Expected Rectangle for item 1, got {:?}", other),
+        }
+
+        match &items[2].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.color.r, 0.0);
+                assert_eq!(rect.color.g, 255.0);
+                assert_eq!(rect.color.b, 0.0);
+            }
+            other => panic!("Expected Rectangle for item 2, got {:?}", other),
+        }
+
+        match &items[3].config {
+            render_commands::RenderCommandConfig::ShaderEnd => {}
+            other => panic!("Expected ShaderEnd for item 3, got {:?}", other),
+        }
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_multiple_shaders_nested() {
+        use shaders::ShaderAsset;
+
+        let shader_a = ShaderAsset::Source {
+            file_name: "shader_a.glsl",
+            fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
+        };
+        let shader_b = ShaderAsset::Source {
+            file_name: "shader_b.glsl",
+            fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(0.5); }",
+        };
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        ply.set_measure_text_function(|_, _| Dimensions::new(100.0, 24.0));
+
+        let mut ui = ply.begin();
+
+        // Element with two group shaders
+        ui.element()
+            .width(fixed!(200.0)).height(fixed!(200.0))
+            .background_color(0xFFFFFF)
+            .shader(&shader_a, |s| { s.uniform("val", 1.0f32); })
+            .shader(&shader_b, |s| { s.uniform("val", 2.0f32); })
+            .children(|ui| {
+                ui.element()
+                    .width(fixed!(50.0)).height(fixed!(50.0))
+                    .background_color(0x0000FF)
+                    .empty();
+            });
+
+        let items = ui.eval();
+
+        for (i, item) in items.iter().enumerate() {
+            println!("[{}] config: {:?}", i, item.config);
+        }
+
+        // Expected order (ShaderBegin wraps before element drawing):
+        // 0: ShaderBegin(shader_b) — outermost, wraps everything
+        // 1: ShaderBegin(shader_a) — innermost, wraps element + children
+        // 2: Rectangle (parent)
+        // 3: Rectangle (child)
+        // 4: ShaderEnd — closes shader_a
+        // 5: ShaderEnd — closes shader_b
+        assert!(items.len() >= 6, "Expected at least 6 items, got {}", items.len());
+
+        match &items[0].config {
+            render_commands::RenderCommandConfig::ShaderBegin(config) => {
+                // shader_b is outermost
+                assert!(config.fragment.contains("0.5"), "Expected shader_b fragment");
+            }
+            other => panic!("Expected ShaderBegin(shader_b) for item 0, got {:?}", other),
+        }
+        match &items[1].config {
+            render_commands::RenderCommandConfig::ShaderBegin(config) => {
+                // shader_a is innermost
+                assert!(config.fragment.contains("1.0"), "Expected shader_a fragment");
+            }
+            other => panic!("Expected ShaderBegin(shader_a) for item 1, got {:?}", other),
+        }
+        match &items[2].config {
+            render_commands::RenderCommandConfig::Rectangle(_) => {}
+            other => panic!("Expected Rectangle for item 2, got {:?}", other),
+        }
+        match &items[3].config {
+            render_commands::RenderCommandConfig::Rectangle(_) => {}
+            other => panic!("Expected Rectangle for item 3, got {:?}", other),
+        }
+        match &items[4].config {
+            render_commands::RenderCommandConfig::ShaderEnd => {}
+            other => panic!("Expected ShaderEnd for item 4, got {:?}", other),
+        }
+        match &items[5].config {
+            render_commands::RenderCommandConfig::ShaderEnd => {}
+            other => panic!("Expected ShaderEnd for item 5, got {:?}", other),
+        }
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_effect_on_render_command() {
+        use shaders::ShaderAsset;
+
+        let effect_shader = ShaderAsset::Source {
+            file_name: "gradient.glsl",
+            fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
+        };
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(200.0)).height(fixed!(100.0))
+            .background_color(0xFF0000)
+            .effect(&effect_shader, |s| {
+                s.uniform("color_a", [1.0f32, 0.0, 0.0, 1.0])
+                 .uniform("color_b", [0.0f32, 0.0, 1.0, 1.0]);
+            })
+            .empty();
+
+        let items = ui.eval();
+
+        assert_eq!(items.len(), 1, "Expected 1 item, got {}", items.len());
+        assert_eq!(items[0].effects.len(), 1, "Expected 1 effect");
+        assert_eq!(items[0].effects[0].uniforms.len(), 2);
+        assert_eq!(items[0].effects[0].uniforms[0].name, "color_a");
+        assert_eq!(items[0].effects[0].uniforms[1].name, "color_b");
     }
 }

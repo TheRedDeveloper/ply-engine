@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use crate::color::Color;
-use crate::renderer::Asset;
+use crate::renderer::GraphicAsset;
+use crate::shaders::ShaderConfig;
 use crate::elements::{
     FloatingAttachPointType, FloatingAttachToElement, FloatingClipToElement, PointerCaptureMode,
 };
@@ -47,6 +48,8 @@ pub enum RenderCommandType {
     ScissorStart,
     ScissorEnd,
     Custom,
+    ShaderBegin,
+    ShaderEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -216,12 +219,14 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub background_color: Color,
     pub corner_radius: CornerRadius,
     pub aspect_ratio: f32,
-    pub image_data: Option<&'static Asset>,
+    pub image_data: Option<&'static GraphicAsset>,
     pub floating: FloatingConfig,
     pub custom_data: Option<CustomElementData>,
     pub clip: ClipConfig,
     pub border: BorderConfig,
     pub user_data: usize,
+    pub effects: Vec<ShaderConfig>,
+    pub shaders: Vec<ShaderConfig>,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDeclaration<CustomElementData> {
@@ -237,6 +242,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
             clip: ClipConfig::default(),
             border: BorderConfig::default(),
             user_data: 0,
+            effects: Vec::new(),
+            shaders: Vec::new(),
         }
     }
 }
@@ -439,6 +446,7 @@ pub struct InternalRenderCommand<CustomElementData: Clone + Default + std::fmt::
     pub user_data: usize,
     pub id: u32,
     pub z_index: i16,
+    pub effects: Vec<ShaderConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -459,7 +467,7 @@ pub enum InternalRenderData<CustomElementData: Clone + Default + std::fmt::Debug
     Image {
         background_color: Color,
         corner_radius: CornerRadius,
-        image_data: &'static Asset,
+        image_data: &'static GraphicAsset,
     },
     Custom {
         background_color: Color,
@@ -492,6 +500,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for InternalR
             user_data: 0,
             id: 0,
             z_index: 0,
+            effects: Vec::new(),
         }
     }
 }
@@ -566,12 +575,17 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     element_configs: Vec<ElementConfig>,
     text_element_configs: Vec<TextConfig>,
     aspect_ratio_configs: Vec<f32>,
-    image_element_configs: Vec<&'static Asset>,
+    image_element_configs: Vec<&'static GraphicAsset>,
     floating_element_configs: Vec<FloatingConfig>,
     clip_element_configs: Vec<ClipConfig>,
     custom_element_configs: Vec<CustomElementData>,
     border_element_configs: Vec<BorderConfig>,
     shared_element_configs: Vec<SharedElementConfig>,
+
+    // Per-element shader effects (indexed by layout element index)
+    element_effects: Vec<Vec<ShaderConfig>>,
+    // Per-element group shaders (indexed by layout element index)
+    element_shaders: Vec<Vec<ShaderConfig>>,
 
     // String IDs for debug
     layout_element_id_strings: Vec<StringId>,
@@ -756,6 +770,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             custom_element_configs: Vec::new(),
             border_element_configs: Vec::new(),
             shared_element_configs: Vec::new(),
+            element_effects: Vec::new(),
+            element_shaders: Vec::new(),
             layout_element_id_strings: Vec::new(),
             wrapped_text_lines: Vec::new(),
             tree_node_array: Vec::new(),
@@ -1164,6 +1180,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             let idx = self.border_element_configs.len() - 1;
             self.attach_element_config(ElementConfigType::Border, idx);
         }
+
+        // Store per-element shader effects
+        // Ensure element_effects is large enough for open_idx
+        while self.element_effects.len() <= open_idx {
+            self.element_effects.push(Vec::new());
+        }
+        self.element_effects[open_idx] = declaration.effects.clone();
+
+        // Store per-element group shaders
+        while self.element_shaders.len() <= open_idx {
+            self.element_shaders.push(Vec::new());
+        }
+        self.element_shaders[open_idx] = declaration.shaders.clone();
     }
 
     pub fn close_element(&mut self) {
@@ -1390,7 +1419,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.layout_element_children_buffer.push(text_elem_idx);
 
         // Measure text
-        let text_config = self.text_element_configs[text_config_index];
+        let text_config = self.text_element_configs[text_config_index].clone();
         let text_measured =
             self.measure_text_cached(text, &text_config);
 
@@ -1701,6 +1730,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.custom_element_configs.clear();
         self.border_element_configs.clear();
         self.shared_element_configs.clear();
+        self.element_effects.clear();
+        self.element_shaders.clear();
         self.layout_element_id_strings.clear();
         self.wrapped_text_lines.clear();
         self.tree_node_array.clear();
@@ -2202,7 +2233,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             let text_config_idx = self
                 .find_element_config_index(elem_index, ElementConfigType::Text)
                 .unwrap_or(0);
-            let text_config = self.text_element_configs[text_config_idx];
+            let text_config = self.text_element_configs[text_config_idx].clone();
 
             let measured = self.measure_text_cached(&text, &text_config);
 
@@ -2226,7 +2257,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             // Multi-line wrapping
             let measure_fn = self.measure_text_fn.as_ref().unwrap();
             let space_width = {
-                let space_config = text_config;
+                let space_config = text_config.clone();
                 measure_fn(" ", &space_config).width
             };
 
@@ -2586,6 +2617,23 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     let offscreen = self.element_is_offscreen(&current_bbox);
                     let should_render_base = !offscreen;
 
+                    // Get per-element shader effects
+                    let elem_effects = self.element_effects.get(current_elem_idx).cloned().unwrap_or_default();
+
+                    // Emit ShaderBegin commands for group shaders BEFORE element drawing
+                    // so that the element's background, children, and border are all captured.
+                    let elem_shaders = self.element_shaders.get(current_elem_idx).cloned().unwrap_or_default();
+                    for shader in elem_shaders.iter().rev() {
+                        self.add_render_command(InternalRenderCommand {
+                            bounding_box: current_bbox,
+                            command_type: RenderCommandType::ShaderBegin,
+                            effects: vec![shader.clone()],
+                            id: elem_id,
+                            z_index: root.z_index,
+                            ..Default::default()
+                        });
+                    }
+
                     // Process each config
                     let configs_start = self.layout_elements[current_elem_idx].element_configs.start;
                     let configs_length =
@@ -2613,6 +2661,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         user_data: 0,
                                         id: elem_id,
                                         z_index: root.z_index,
+                                        effects: Vec::new(),
                                     });
                                 }
                             }
@@ -2631,6 +2680,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         user_data: shared.user_data,
                                         id: elem_id,
                                         z_index: root.z_index,
+                                        effects: elem_effects.clone(),
                                     });
                                 }
                                 emit_rectangle = false;
@@ -2640,7 +2690,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     continue;
                                 }
                                 let text_config =
-                                    self.text_element_configs[config.config_index];
+                                    self.text_element_configs[config.config_index].clone();
                                 let text_data_idx =
                                     self.layout_elements[current_elem_idx].text_data_index;
                                 if text_data_idx < 0 {
@@ -2705,6 +2755,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         user_data: text_config.user_data,
                                         id: hash_number(line_index as u32, elem_id).id,
                                         z_index: root.z_index,
+                                        effects: text_config.effects.clone(),
                                     });
                                     y_position += final_line_height;
                                 }
@@ -2724,6 +2775,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         user_data: shared.user_data,
                                         id: elem_id,
                                         z_index: root.z_index,
+                                        effects: elem_effects.clone(),
                                     });
                                 }
                                 emit_rectangle = false;
@@ -2742,6 +2794,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             user_data: shared.user_data,
                             id: elem_id,
                             z_index: root.z_index,
+                            effects: elem_effects.clone(),
                         });
                     }
 
@@ -2822,6 +2875,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     }
                 } else {
                     // Returning upward in DFS
+
                     let mut close_clip = false;
 
                     if self.element_has_config(current_elem_idx, ElementConfigType::Clip) {
@@ -2879,6 +2933,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     )
                                     .id,
                                     z_index: root.z_index,
+                                    effects: Vec::new(),
                                 });
 
                                 // between-children borders
@@ -2923,6 +2978,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     )
                                                     .id,
                                                     z_index: root.z_index,
+                                                    effects: Vec::new(),
                                                 });
                                             }
                                             border_offset_x +=
@@ -2958,6 +3014,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     )
                                                     .id,
                                                     z_index: root.z_index,
+                                                    effects: Vec::new(),
                                                 });
                                             }
                                             border_offset_y +=
@@ -2979,6 +3036,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 root_elem.children_length as u32 + 11,
                             )
                             .id,
+                            ..Default::default()
+                        });
+                    }
+
+                    // Emit ShaderEnd commands AFTER border and scissor (innermost first, outermost last)
+                    let elem_shaders = self.element_shaders.get(current_elem_idx).cloned().unwrap_or_default();
+                    for _shader in elem_shaders.iter() {
+                        self.add_render_command(InternalRenderCommand {
+                            command_type: RenderCommandType::ShaderEnd,
+                            id: self.layout_elements[current_elem_idx].id,
+                            z_index: root.z_index,
                             ..Default::default()
                         });
                     }
@@ -3876,7 +3944,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 ..Default::default()
                             })
                         } else {
-                            self.store_text_element_config(name_text_config)
+                            self.store_text_element_config(name_text_config.clone())
                         };
                         self.debug_raw_text(id_string.as_str(), tc);
                     }
@@ -3985,7 +4053,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ..Default::default()
                         })
                     } else {
-                        self.store_text_element_config(name_text_config)
+                        self.store_text_element_config(name_text_config.clone())
                     };
                     self.debug_open(&ElementDeclaration {
                         layout: LayoutConfig {
@@ -4671,7 +4739,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         self.close_element();
                     }
                     ElementConfigType::Text => {
-                        let text_config = self.text_element_configs[ec.config_index];
+                        let text_config = self.text_element_configs[ec.config_index].clone();
                         self.debug_open(&ElementDeclaration {
                             layout: LayoutConfig {
                                 padding: attr_padding,
