@@ -10,11 +10,12 @@ license-file = "LICENSE.md"
 exclude = ["scripts/*", ".vscode/*", ".github/*", ".cargo/*"]
 
 [features]
-default = []
+default = ["native-a11y"]
 text-styling = []
 tinyvg = ["dep:tinyvg", "dep:kurbo", "dep:lyon"]
 shader-build = ["dep:spirv-cross2"]
 built-in-shaders = []
+native-a11y = ["dep:accesskit", "dep:accesskit_unix", "dep:accesskit_macos", "dep:accesskit_windows"]
 
 [dependencies]
 macroquad = { version = "0.4", git = "https://github.com/TheRedDeveloper/macroquad-fix" } # Temporary fix for a bug in macroquad, will switch back to the official version once it's fixed.
@@ -22,3 +23,15 @@ tinyvg = { version = "0.2", default-features = false, optional = true }
 kurbo = { version = "0.13.0", optional = true }
 lyon = { version = "1.0", optional = true }
 spirv-cross2 = { version = "0.6", optional = true, default-features = false, features = ["glsl"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+accesskit = { version = "0.24", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+accesskit_unix = { version = "0.20", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accesskit_macos = { version = "0.25", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+accesskit_windows = { version = "0.32", optional = true }

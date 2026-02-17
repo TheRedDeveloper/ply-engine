@@ -3876,6 +3876,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
+    /// Fire the on_press callback for the element with the given u32 ID.
+    /// Used by screen reader action handling.
+    pub(crate) fn fire_press(&mut self, element_id: u32) {
+        if let Some(item) = self.layout_element_map.get_mut(&element_id) {
+            let id_copy = item.element_id.clone();
+            if let Some(ref mut callback) = item.on_press_fn {
+                callback(id_copy);
+            }
+        }
+    }
+
     pub fn set_focus_callbacks(
         &mut self,
         on_focus: Option<Box<dyn FnMut(Id)>>,

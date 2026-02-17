@@ -1,6 +1,8 @@
 pub mod accessibility;
 #[cfg(target_arch = "wasm32")]
 pub mod accessibility_web;
+#[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+pub mod accessibility_native;
 pub mod color;
 pub mod elements;
 pub mod engine;
@@ -31,6 +33,8 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     headless: bool,
     #[cfg(target_arch = "wasm32")]
     web_a11y_state: accessibility_web::WebAccessibilityState,
+    #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+    native_a11y_state: accessibility_native::NativeAccessibilityState,
 }
 
 pub struct PlyLayoutScope<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
@@ -467,6 +471,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             headless: false,
             #[cfg(target_arch = "wasm32")]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
+            #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+            native_a11y_state: accessibility_native::NativeAccessibilityState::default(),
         };
         ply.set_measure_text_function(renderer::create_measure_text_function(fonts));
         ply
@@ -482,6 +488,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             headless: true,
             #[cfg(target_arch = "wasm32")]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
+            #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+            native_a11y_state: accessibility_native::NativeAccessibilityState::default(),
         }
     }
 
@@ -651,6 +659,27 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 &self.context.accessibility_element_order,
                 self.context.focused_element_id,
             );
+        }
+
+        // Sync accessibility tree via AccessKit (native platforms)
+        #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+        {
+            let a11y_actions = accessibility_native::sync_accessibility_tree(
+                &mut self.native_a11y_state,
+                &self.context.accessibility_configs,
+                &self.context.accessibility_element_order,
+                self.context.focused_element_id,
+            );
+            for action in a11y_actions {
+                match action {
+                    accessibility_native::PendingA11yAction::Focus(target_id) => {
+                        self.context.change_focus(target_id);
+                    }
+                    accessibility_native::PendingA11yAction::Click(target_id) => {
+                        self.context.fire_press(target_id);
+                    }
+                }
+            }
         }
 
         result
