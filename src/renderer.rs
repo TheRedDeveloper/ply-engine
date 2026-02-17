@@ -19,7 +19,7 @@ pub enum GraphicAsset {
     Bytes{file_name: &'static str, data: &'static [u8]}, // For embedded assets
 }
 impl GraphicAsset {
-    fn get_name(&self) -> &str {
+    pub fn get_name(&self) -> &str {
         match self {
             GraphicAsset::Path(path) => path,
             GraphicAsset::Bytes { file_name, .. } => file_name,

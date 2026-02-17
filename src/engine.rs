@@ -3763,6 +3763,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.open_text_element(&s, config_index);
     }
 
+    /// Helper: format a float with 2 decimal places and emit a text element.
+    fn debug_float_text(&mut self, value: f32, config_index: usize) {
+        let s = format!("{:.2}", value);
+        self.open_text_element(&s, config_index);
+    }
+
     /// Helper: open an element, configure, return nothing. Caller must close_element().
     fn debug_open(&mut self, decl: &ElementDeclaration<CustomElementData>) {
         self.open_element();
@@ -3828,11 +3834,21 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     /// Render a config type header in the selected element detail panel.
     fn render_debug_view_element_config_header(
         &mut self,
-        _element_id_string: StringId,
+        element_id_string: StringId,
         config_type: ElementConfigType,
         _info_title_config: usize,
     ) {
         let (label, label_color) = Self::debug_get_config_type_label(config_type);
+        self.render_debug_view_category_header(label, label_color, element_id_string);
+    }
+
+    /// Render a category header badge with arbitrary label and color.
+    fn render_debug_view_category_header(
+        &mut self,
+        label: &str,
+        label_color: Color,
+        element_id_string: StringId,
+    ) {
         let bg = Color::rgba(label_color.r, label_color.g, label_color.b, 90.0);
         self.debug_open(&ElementDeclaration {
             layout: LayoutConfig {
@@ -3872,7 +3888,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     font_size: 16,
                     ..Default::default()
                 });
-                self.debug_text(label, tc);
+                self.debug_raw_text(label, tc);
             }
             self.close_element();
             // Spacer
@@ -3894,8 +3910,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 wrap_mode: TextElementConfigWrapMode::None,
                 ..Default::default()
             });
-            if !_element_id_string.is_empty() {
-                self.debug_raw_text(_element_id_string.as_str(), tc);
+            if !element_id_string.is_empty() {
+                self.debug_raw_text(element_id_string.as_str(), tc);
             }
         }
         self.close_element();
@@ -3988,6 +4004,49 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             self.debug_text(" }", config_index);
         }
         self.close_element();
+    }
+
+    /// Render a shader uniform value in the debug view.
+    fn render_debug_shader_uniform_value(&mut self, value: &crate::shaders::ShaderUniformValue, config_index: usize) {
+        use crate::shaders::ShaderUniformValue;
+        match value {
+            ShaderUniformValue::Float(v) => {
+                self.debug_float_text(*v, config_index);
+            }
+            ShaderUniformValue::Vec2(v) => {
+                self.debug_text("(", config_index);
+                self.debug_float_text(v[0], config_index);
+                self.debug_text(", ", config_index);
+                self.debug_float_text(v[1], config_index);
+                self.debug_text(")", config_index);
+            }
+            ShaderUniformValue::Vec3(v) => {
+                self.debug_text("(", config_index);
+                self.debug_float_text(v[0], config_index);
+                self.debug_text(", ", config_index);
+                self.debug_float_text(v[1], config_index);
+                self.debug_text(", ", config_index);
+                self.debug_float_text(v[2], config_index);
+                self.debug_text(")", config_index);
+            }
+            ShaderUniformValue::Vec4(v) => {
+                self.debug_text("(", config_index);
+                self.debug_float_text(v[0], config_index);
+                self.debug_text(", ", config_index);
+                self.debug_float_text(v[1], config_index);
+                self.debug_text(", ", config_index);
+                self.debug_float_text(v[2], config_index);
+                self.debug_text(", ", config_index);
+                self.debug_float_text(v[3], config_index);
+                self.debug_text(")", config_index);
+            }
+            ShaderUniformValue::Int(v) => {
+                self.debug_int_text(*v as f32, config_index);
+            }
+            ShaderUniformValue::Mat4(_) => {
+                self.debug_text("[mat4]", config_index);
+            }
+        }
     }
 
     /// Render the debug layout elements tree list. Returns (row_count, selected_element_row_index).
@@ -5059,35 +5118,101 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
             self.close_element(); // layout config details
 
-            // Per-config type detail sections
+            // ── Collect data for grouped categories ──
             let configs_start = self.layout_elements[layout_elem_idx].element_configs.start;
             let configs_len = self.layout_elements[layout_elem_idx].element_configs.length;
+            let elem_id_string = selected_item.element_id.string_id.clone();
+
+            // Shared data (split into Color + Shape)
+            let mut shared_bg_color: Option<Color> = None;
+            let mut shared_corner_radius: Option<CornerRadius> = None;
             for ci in 0..configs_len {
                 let ec = self.element_configs[configs_start + ci as usize];
-                let elem_id_string = selected_item.element_id.string_id.clone();
-                self.render_debug_view_element_config_header(elem_id_string, ec.config_type, info_title_config);
+                if ec.config_type == ElementConfigType::Shared {
+                    let shared = self.shared_element_configs[ec.config_index];
+                    shared_bg_color = Some(shared.background_color);
+                    shared_corner_radius = Some(shared.corner_radius);
+                }
+            }
 
-                match ec.config_type {
-                    ElementConfigType::Shared => {
-                        let shared = self.shared_element_configs[ec.config_index];
-                        self.debug_open(&ElementDeclaration {
-                            layout: LayoutConfig {
-                                padding: attr_padding,
-                                child_gap: 8,
-                                layout_direction: LayoutDirection::TopToBottom,
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        });
-                        {
-                            self.debug_text("Background Color", info_title_config);
-                            self.render_debug_view_color(shared.background_color, info_text_config);
+            // Per-element data (not in element_configs system)
+            let shape_rot = self.element_shape_rotations.get(layout_elem_idx).copied().flatten();
+            let visual_rot = self.element_visual_rotations.get(layout_elem_idx).cloned().flatten();
+            let effects = self.element_effects.get(layout_elem_idx).cloned().unwrap_or_default();
+            let shaders = self.element_shaders.get(layout_elem_idx).cloned().unwrap_or_default();
+
+            // ── [Color] section ──
+            let has_color = shared_bg_color.map_or(false, |c| c.a > 0.0);
+            if has_color {
+                let color_label_color = Color::rgba(243.0, 134.0, 48.0, 255.0);
+                self.render_debug_view_category_header("Color", color_label_color, elem_id_string.clone());
+                self.debug_open(&ElementDeclaration {
+                    layout: LayoutConfig {
+                        padding: attr_padding,
+                        child_gap: 8,
+                        layout_direction: LayoutDirection::TopToBottom,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+                {
+                    self.debug_text("Background Color", info_title_config);
+                    self.render_debug_view_color(shared_bg_color.unwrap(), info_text_config);
+                }
+                self.close_element();
+            }
+
+            // ── [Shape] section (Corner Radius + Shape Rotation) ──
+            let has_corner_radius = shared_corner_radius.map_or(false, |cr| !cr.is_zero());
+            let has_shape_rot = shape_rot.is_some();
+            if has_corner_radius || has_shape_rot {
+                let shape_label_color = Color::rgba(26.0, 188.0, 156.0, 255.0);
+                self.render_debug_view_category_header("Shape", shape_label_color, elem_id_string.clone());
+                self.debug_open(&ElementDeclaration {
+                    layout: LayoutConfig {
+                        padding: attr_padding,
+                        child_gap: 8,
+                        layout_direction: LayoutDirection::TopToBottom,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+                {
+                    if let Some(cr) = shared_corner_radius {
+                        if !cr.is_zero() {
                             self.debug_text("Corner Radius", info_title_config);
-                            self.render_debug_view_corner_radius(shared.corner_radius, info_text_config);
+                            self.render_debug_view_corner_radius(cr, info_text_config);
+                        }
+                    }
+                    if let Some(sr) = shape_rot {
+                        self.debug_text("Shape Rotation", info_title_config);
+                        self.debug_open(&ElementDeclaration::default());
+                        {
+                            self.debug_text("angle: ", info_text_config);
+                            self.debug_float_text(sr.rotation_radians, info_text_config);
+                            self.debug_text(" rad", info_text_config);
+                        }
+                        self.close_element();
+                        self.debug_open(&ElementDeclaration::default());
+                        {
+                            self.debug_text("flip_x: ", info_text_config);
+                            self.debug_text(if sr.flip_x { "true" } else { "false" }, info_text_config);
+                            self.debug_text(", flip_y: ", info_text_config);
+                            self.debug_text(if sr.flip_y { "true" } else { "false" }, info_text_config);
                         }
                         self.close_element();
                     }
+                }
+                self.close_element();
+            }
+
+            // ── Config-type sections (Text, Image, Floating, Clip, Border, etc.) ──
+            for ci in 0..configs_len {
+                let ec = self.element_configs[configs_start + ci as usize];
+                match ec.config_type {
+                    ElementConfigType::Shared => {} // handled above as [Color] + [Shape]
                     ElementConfigType::Text => {
+                        self.render_debug_view_element_config_header(elem_id_string.clone(), ec.config_type, info_title_config);
                         let text_config = self.text_element_configs[ec.config_index].clone();
                         self.debug_open(&ElementDeclaration {
                             layout: LayoutConfig {
@@ -5130,7 +5255,28 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                         self.close_element();
                     }
+                    ElementConfigType::Image => {
+                        let image_label_color = Color::rgba(121.0, 189.0, 154.0, 255.0);
+                        self.render_debug_view_category_header("Image", image_label_color, elem_id_string.clone());
+                        let image_data = self.image_element_configs[ec.config_index];
+                        self.debug_open(&ElementDeclaration {
+                            layout: LayoutConfig {
+                                padding: attr_padding,
+                                child_gap: 8,
+                                layout_direction: LayoutDirection::TopToBottom,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        });
+                        {
+                            self.debug_text("File", info_title_config);
+                            let name = image_data.get_name();
+                            self.debug_raw_text(name, info_text_config);
+                        }
+                        self.close_element();
+                    }
                     ElementConfigType::Clip => {
+                        self.render_debug_view_element_config_header(elem_id_string.clone(), ec.config_type, info_title_config);
                         let clip_config = self.clip_element_configs[ec.config_index];
                         self.debug_open(&ElementDeclaration {
                             layout: LayoutConfig {
@@ -5150,6 +5296,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         self.close_element();
                     }
                     ElementConfigType::Floating => {
+                        self.render_debug_view_element_config_header(elem_id_string.clone(), ec.config_type, info_title_config);
                         let float_config = self.floating_element_configs[ec.config_index];
                         self.debug_open(&ElementDeclaration {
                             layout: LayoutConfig {
@@ -5236,6 +5383,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         self.close_element();
                     }
                     ElementConfigType::Border => {
+                        self.render_debug_view_element_config_header(elem_id_string.clone(), ec.config_type, info_title_config);
                         let border_config = self.border_element_configs[ec.config_index];
                         self.debug_open_id("Ply__DebugViewElementInfoBorderBody", &ElementDeclaration {
                             layout: LayoutConfig {
@@ -5268,6 +5416,96 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     }
                     _ => {}
                 }
+            }
+
+            // ── [Effects] section (Visual Rotation + Shaders + Effects) ──
+            let has_visual_rot = visual_rot.is_some();
+            let has_effects = !effects.is_empty();
+            let has_shaders = !shaders.is_empty();
+            if has_visual_rot || has_effects || has_shaders {
+                let effects_label_color = Color::rgba(155.0, 89.0, 182.0, 255.0);
+                self.render_debug_view_category_header("Effects", effects_label_color, elem_id_string.clone());
+                self.debug_open(&ElementDeclaration {
+                    layout: LayoutConfig {
+                        padding: attr_padding,
+                        child_gap: 8,
+                        layout_direction: LayoutDirection::TopToBottom,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+                {
+                    if let Some(vr) = visual_rot {
+                        self.debug_text("Visual Rotation", info_title_config);
+                        self.debug_open(&ElementDeclaration::default());
+                        {
+                            self.debug_text("angle: ", info_text_config);
+                            self.debug_float_text(vr.rotation_radians, info_text_config);
+                            self.debug_text(" rad", info_text_config);
+                        }
+                        self.close_element();
+                        self.debug_open(&ElementDeclaration::default());
+                        {
+                            self.debug_text("pivot: (", info_text_config);
+                            self.debug_float_text(vr.pivot_x, info_text_config);
+                            self.debug_text(", ", info_text_config);
+                            self.debug_float_text(vr.pivot_y, info_text_config);
+                            self.debug_text(")", info_text_config);
+                        }
+                        self.close_element();
+                        self.debug_open(&ElementDeclaration::default());
+                        {
+                            self.debug_text("flip_x: ", info_text_config);
+                            self.debug_text(if vr.flip_x { "true" } else { "false" }, info_text_config);
+                            self.debug_text(", flip_y: ", info_text_config);
+                            self.debug_text(if vr.flip_y { "true" } else { "false" }, info_text_config);
+                        }
+                        self.close_element();
+                    }
+                    for (i, effect) in effects.iter().enumerate() {
+                        let label = format!("Effect {}", i + 1);
+                        self.debug_text("Effect", info_title_config);
+                        self.debug_open(&ElementDeclaration::default());
+                        {
+                            self.debug_raw_text(&label, info_text_config);
+                            self.debug_text(": ", info_text_config);
+                            self.debug_raw_text(&effect.name, info_text_config);
+                        }
+                        self.close_element();
+                        for uniform in &effect.uniforms {
+                            self.debug_open(&ElementDeclaration::default());
+                            {
+                                self.debug_text("  ", info_text_config);
+                                self.debug_raw_text(&uniform.name, info_text_config);
+                                self.debug_text(": ", info_text_config);
+                                self.render_debug_shader_uniform_value(&uniform.value, info_text_config);
+                            }
+                            self.close_element();
+                        }
+                    }
+                    for (i, shader) in shaders.iter().enumerate() {
+                        let label = format!("Shader {}", i + 1);
+                        self.debug_text("Shader", info_title_config);
+                        self.debug_open(&ElementDeclaration::default());
+                        {
+                            self.debug_raw_text(&label, info_text_config);
+                            self.debug_text(": ", info_text_config);
+                            self.debug_raw_text(&shader.name, info_text_config);
+                        }
+                        self.close_element();
+                        for uniform in &shader.uniforms {
+                            self.debug_open(&ElementDeclaration::default());
+                            {
+                                self.debug_text("  ", info_text_config);
+                                self.debug_raw_text(&uniform.name, info_text_config);
+                                self.debug_text(": ", info_text_config);
+                                self.render_debug_shader_uniform_value(&uniform.value, info_text_config);
+                            }
+                            self.close_element();
+                        }
+                    }
+                }
+                self.close_element();
             }
         }
         self.close_element(); // detail panel

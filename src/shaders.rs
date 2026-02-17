@@ -56,6 +56,8 @@ pub struct ShaderConfig {
     pub fragment: Cow<'static, str>,
     /// The uniform values to set on the shader.
     pub uniforms: Vec<ShaderUniform>,
+    /// Debug-friendly name derived from the shader asset (file name or path).
+    pub name: String,
 }
 
 /// A single shader uniform with a name and typed value.
@@ -152,6 +154,7 @@ impl<'a> ShaderBuilder<'a> {
         ShaderConfig {
             fragment: self.source.fragment_source(),
             uniforms: std::mem::take(&mut self.uniforms),
+            name: self.source.cache_key().to_string(),
         }
     }
 }
