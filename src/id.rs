@@ -60,3 +60,47 @@ impl From<&'static str> for Id {
         Id::new(label)
     }
 }
+
+impl From<(&str, u32)> for Id {
+    fn from((label, offset): (&str, u32)) -> Self {
+        engine::hash_string_with_offset(label, offset, 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_str_matches_new() {
+        let a = Id::from("hello");
+        let b = Id::new("hello");
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.base_id, b.base_id);
+    }
+
+    #[test]
+    fn from_tuple_matches_new_index() {
+        let a = Id::from(("my_button", 3));
+        let b = Id::new_index("my_button", 3);
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.offset, b.offset);
+        assert_eq!(a.base_id, b.base_id);
+    }
+
+    #[test]
+    fn from_tuple_zero_offset_matches_from_str() {
+        let a = Id::from(("test", 0));
+        let b = Id::from("test");
+        assert_eq!(a.id, b.id);
+    }
+
+    #[test]
+    fn different_offsets_produce_different_ids() {
+        let a = Id::from(("item", 0));
+        let b = Id::from(("item", 1));
+        assert_ne!(a.id, b.id);
+        // But base_id should be the same (pre-offset hash)
+        assert_eq!(a.base_id, b.base_id);
+    }
+}

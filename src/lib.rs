@@ -1,3 +1,4 @@
+pub mod accessibility;
 pub mod color;
 pub mod elements;
 pub mod engine;
@@ -38,6 +39,10 @@ pub struct ElementBuilder<'ply, CustomElementData: Clone + Default + std::fmt::D
     ply: &'ply mut Ply<CustomElementData>,
     inner: engine::ElementDeclaration<CustomElementData>,
     id: Option<Id>,
+    on_press_fn: Option<Box<dyn FnMut(Id) + 'static>>,
+    on_release_fn: Option<Box<dyn FnMut(Id) + 'static>>,
+    on_focus_fn: Option<Box<dyn FnMut(Id) + 'static>>,
+    on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'static>>,
 }
 
 impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
@@ -243,9 +248,75 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
+    /// Configures accessibility properties using a closure.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// ui.element()
+    ///     .id("submit_btn")
+    ///     .accessibility(|a| a
+    ///         .button("Submit")
+    ///         .tab_index(1)
+    ///     )
+    ///     .empty();
+    /// ```
+    #[inline]
+    pub fn accessibility(
+        mut self,
+        f: impl for<'a> FnOnce(&'a mut accessibility::AccessibilityBuilder) -> &'a mut accessibility::AccessibilityBuilder,
+    ) -> Self {
+        let mut builder = accessibility::AccessibilityBuilder::new();
+        f(&mut builder);
+        self.inner.accessibility = Some(builder.config);
+        self
+    }
+
+    /// Registers a callback that fires once when the element is pressed
+    /// (pointer click or Enter/Space on focused element).
+    #[inline]
+    pub fn on_press<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(Id) + 'static,
+    {
+        self.on_press_fn = Some(Box::new(callback));
+        self
+    }
+
+    /// Registers a callback that fires once when the element is released
+    /// (pointer release or key release on focused element).
+    #[inline]
+    pub fn on_release<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(Id) + 'static,
+    {
+        self.on_release_fn = Some(Box::new(callback));
+        self
+    }
+
+    /// Registers a callback that fires when this element receives focus
+    /// (via Tab navigation, arrow keys, or programmatic `set_focus`).
+    #[inline]
+    pub fn on_focus<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(Id) + 'static,
+    {
+        self.on_focus_fn = Some(Box::new(callback));
+        self
+    }
+
+    /// Registers a callback that fires when this element loses focus.
+    #[inline]
+    pub fn on_unfocus<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(Id) + 'static,
+    {
+        self.on_unfocus_fn = Some(Box::new(callback));
+        self
+    }
+
     /// Finalizes the element with children defined in a closure.
     pub fn children(self, f: impl FnOnce(&mut Ply<CustomElementData>)) -> Id {
-        let ElementBuilder { ply, inner, id } = self;
+        let ElementBuilder { ply, inner, id, on_press_fn, on_release_fn, on_focus_fn, on_unfocus_fn } = self;
         if let Some(ref id) = id {
             ply.context.open_element_with_id(id);
         } else {
@@ -253,6 +324,13 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         }
         ply.context.configure_open_element(&inner);
         let element_id = ply.context.get_open_element_id();
+
+        if on_press_fn.is_some() || on_release_fn.is_some() {
+            ply.context.set_press_callbacks(on_press_fn, on_release_fn);
+        }
+        if on_focus_fn.is_some() || on_unfocus_fn.is_some() {
+            ply.context.set_focus_callbacks(on_focus_fn, on_unfocus_fn);
+        }
 
         f(ply);
 
@@ -311,6 +389,23 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 Vector2::new(scroll_x * SCROLL_SPEED, scroll_y * SCROLL_SPEED),
                 macroquad::prelude::get_frame_time(),
             );
+
+            // Keyboard navigation
+            use macroquad::prelude::{is_key_pressed, is_key_down, is_key_released, KeyCode};
+
+            if is_key_pressed(KeyCode::Tab) {
+                let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+                self.context.cycle_focus(shift);
+            }
+
+            if is_key_pressed(KeyCode::Right) { self.context.arrow_focus(engine::ArrowDirection::Right); }
+            if is_key_pressed(KeyCode::Left)  { self.context.arrow_focus(engine::ArrowDirection::Left); }
+            if is_key_pressed(KeyCode::Up)    { self.context.arrow_focus(engine::ArrowDirection::Up); }
+            if is_key_pressed(KeyCode::Down)  { self.context.arrow_focus(engine::ArrowDirection::Down); }
+
+            let activate_pressed = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space);
+            let activate_released = is_key_released(KeyCode::Enter) || is_key_released(KeyCode::Space);
+            self.context.handle_keyboard_activation(activate_pressed, activate_released);
         }
 
         self.context.begin_layout();
@@ -326,6 +421,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             ply: self,
             inner: engine::ElementDeclaration::default(),
             id: None,
+            on_press_fn: None,
+            on_release_fn: None,
+            on_focus_fn: None,
+            on_unfocus_fn: None,
         }
     }
 
@@ -486,6 +585,32 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     /// Returns if the current element you are creating is hovered
     pub fn hovered(&self) -> bool {
         self.context.hovered()
+    }
+
+    /// Returns if the current element you are creating is pressed
+    /// (pointer held down on it, or Enter/Space held on focused element)
+    pub fn pressed(&self) -> bool {
+        self.context.pressed()
+    }
+
+    /// Returns if the current element you are creating has focus.
+    pub fn focused(&self) -> bool {
+        self.context.focused()
+    }
+
+    /// Returns the ID of the currently focused element, or None.
+    pub fn focused_element(&self) -> Option<u32> {
+        self.context.focused_element()
+    }
+
+    /// Sets focus to the element with the given ID.
+    pub fn set_focus(&mut self, id: Id) {
+        self.context.set_focus(id.id);
+    }
+
+    /// Clears focus (no element is focused).
+    pub fn clear_focus(&mut self) {
+        self.context.clear_focus();
     }
 
     pub fn bounding_box(&self, id: Id) -> Option<math::BoundingBox> {
@@ -1662,5 +1787,386 @@ mod tests {
         let expected = 80.0 * 2.0_f32.sqrt() + 20.0; // ~133.14
         assert!((w - expected).abs() < 0.5, "w should be ~{}, got {}", expected, w);
         assert!((h - expected).abs() < 0.5, "h should be ~{}, got {}", expected, h);
+    }
+
+    #[test]
+    fn test_on_press_callback_fires() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let press_count = Rc::new(RefCell::new(0u32));
+        let release_count = Rc::new(RefCell::new(0u32));
+
+        // Frame 1: lay out a 100x100 element and eval to establish bounding boxes
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Frame 2: add press callbacks
+        {
+            let pc = press_count.clone();
+            let rc = release_count.clone();
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .on_press(move |_| { *pc.borrow_mut() += 1; })
+                .on_release(move |_| { *rc.borrow_mut() += 1; })
+                .empty();
+            ui.eval();
+        }
+
+        // Simulate pointer press at (50, 50) — inside the element
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        assert_eq!(*press_count.borrow(), 1, "on_press should fire once");
+        assert_eq!(*release_count.borrow(), 0, "on_release should not fire yet");
+
+        // Simulate pointer release
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
+        assert_eq!(*release_count.borrow(), 1, "on_release should fire once");
+    }
+
+    #[test]
+    fn test_pressed_query() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        // Frame 1: layout
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Simulate pointer press at (50, 50)
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+
+        // Frame 2: check pressed() during layout
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(ui.pressed(), "element should report as pressed");
+                });
+            ui.eval();
+        }
+    }
+
+    #[test]
+    fn test_tab_navigation_cycles_focus() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        // Frame 1: create 3 focusable elements
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("A"))
+                .empty();
+            ui.element()
+                .id("b")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("B"))
+                .empty();
+            ui.element()
+                .id("c")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("C"))
+                .empty();
+            ui.eval();
+        }
+
+        let id_a = Id::from("a").id;
+        let id_b = Id::from("b").id;
+        let id_c = Id::from("c").id;
+
+        // No focus initially
+        assert_eq!(ply.focused_element(), None);
+
+        // Tab → focus A
+        ply.context.cycle_focus(false);
+        assert_eq!(ply.context.focused_element_id, id_a);
+
+        // Tab → focus B
+        ply.context.cycle_focus(false);
+        assert_eq!(ply.context.focused_element_id, id_b);
+
+        // Tab → focus C
+        ply.context.cycle_focus(false);
+        assert_eq!(ply.context.focused_element_id, id_c);
+
+        // Tab → wrap to A
+        ply.context.cycle_focus(false);
+        assert_eq!(ply.context.focused_element_id, id_a);
+
+        // Shift+Tab → wrap to C
+        ply.context.cycle_focus(true);
+        assert_eq!(ply.context.focused_element_id, id_c);
+    }
+
+    #[test]
+    fn test_tab_index_ordering() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        // Frame 1: create elements with explicit tab indices (reverse order)
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("third")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("Third").tab_index(3))
+                .empty();
+            ui.element()
+                .id("first")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("First").tab_index(1))
+                .empty();
+            ui.element()
+                .id("second")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("Second").tab_index(2))
+                .empty();
+            ui.eval();
+        }
+
+        let id_first = Id::from("first").id;
+        let id_second = Id::from("second").id;
+        let id_third = Id::from("third").id;
+
+        // Tab ordering should follow tab_index, not insertion order
+        ply.context.cycle_focus(false);
+        assert_eq!(ply.context.focused_element_id, id_first);
+        ply.context.cycle_focus(false);
+        assert_eq!(ply.context.focused_element_id, id_second);
+        ply.context.cycle_focus(false);
+        assert_eq!(ply.context.focused_element_id, id_third);
+    }
+
+    #[test]
+    fn test_arrow_key_navigation() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        use engine::ArrowDirection;
+
+        let id_a = Id::from("a").id;
+        let id_b = Id::from("b").id;
+
+        // Frame 1: create two elements with arrow overrides
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("A").focus_right("b"))
+                .empty();
+            ui.element()
+                .id("b")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("B").focus_left("a"))
+                .empty();
+            ui.eval();
+        }
+
+        // Focus A first
+        ply.context.set_focus(id_a);
+        assert_eq!(ply.context.focused_element_id, id_a);
+
+        // Arrow right → B
+        ply.context.arrow_focus(ArrowDirection::Right);
+        assert_eq!(ply.context.focused_element_id, id_b);
+
+        // Arrow left → A
+        ply.context.arrow_focus(ArrowDirection::Left);
+        assert_eq!(ply.context.focused_element_id, id_a);
+
+        // Arrow up → no override, stays on A
+        ply.context.arrow_focus(ArrowDirection::Up);
+        assert_eq!(ply.context.focused_element_id, id_a);
+    }
+
+    #[test]
+    fn test_focused_query() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        let id_a = Id::from("a").id;
+
+        // Frame 1: layout + set focus
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("A"))
+                .empty();
+            ui.eval();
+        }
+
+        ply.context.set_focus(id_a);
+
+        // Frame 2: check focused() during layout
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("A"))
+                .children(|ui| {
+                    assert!(ui.focused(), "element should report as focused");
+                });
+            ui.eval();
+        }
+    }
+
+    #[test]
+    fn test_on_focus_callback_fires_on_tab() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let focus_a = Rc::new(RefCell::new(0u32));
+        let unfocus_a = Rc::new(RefCell::new(0u32));
+        let focus_b = Rc::new(RefCell::new(0u32));
+
+        // Frame 1: create focusable elements with on_focus/on_unfocus
+        {
+            let fa = focus_a.clone();
+            let ua = unfocus_a.clone();
+            let fb = focus_b.clone();
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("A"))
+                .on_focus(move |_| { *fa.borrow_mut() += 1; })
+                .on_unfocus(move |_| { *ua.borrow_mut() += 1; })
+                .empty();
+            ui.element()
+                .id("b")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("B"))
+                .on_focus(move |_| { *fb.borrow_mut() += 1; })
+                .empty();
+            ui.eval();
+        }
+
+        // Tab → focus A
+        ply.context.cycle_focus(false);
+        assert_eq!(*focus_a.borrow(), 1, "on_focus should fire for A");
+        assert_eq!(*unfocus_a.borrow(), 0, "on_unfocus should not fire yet");
+
+        // Tab → focus B (unfocus A)
+        ply.context.cycle_focus(false);
+        assert_eq!(*unfocus_a.borrow(), 1, "on_unfocus should fire for A");
+        assert_eq!(*focus_b.borrow(), 1, "on_focus should fire for B");
+    }
+
+    #[test]
+    fn test_on_focus_callback_fires_on_set_focus() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let focus_count = Rc::new(RefCell::new(0u32));
+        let unfocus_count = Rc::new(RefCell::new(0u32));
+
+        let id_a = Id::from("a").id;
+
+        // Frame 1
+        {
+            let fc = focus_count.clone();
+            let uc = unfocus_count.clone();
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("A"))
+                .on_focus(move |_| { *fc.borrow_mut() += 1; })
+                .on_unfocus(move |_| { *uc.borrow_mut() += 1; })
+                .empty();
+            ui.eval();
+        }
+
+        // Programmatic set_focus
+        ply.context.set_focus(id_a);
+        assert_eq!(*focus_count.borrow(), 1, "on_focus should fire on set_focus");
+
+        // clear_focus
+        ply.context.clear_focus();
+        assert_eq!(*unfocus_count.borrow(), 1, "on_unfocus should fire on clear_focus");
+    }
+
+    #[test]
+    fn test_focus_ring_render_command() {
+        use render_commands::RenderCommandConfig;
+
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let id_a = Id::from("a").id;
+
+        // Frame 1: layout
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .corner_radius(8.0)
+                .accessibility(|a| a.button("A"))
+                .empty();
+            ui.eval();
+        }
+
+        // Set focus
+        ply.context.set_focus(id_a);
+
+        // Frame 2: eval to get render commands with focus ring
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .corner_radius(8.0)
+                .accessibility(|a| a.button("A"))
+                .empty();
+            let items = ui.eval();
+
+            // Look for a border render command with z_index 32764 (the focus ring)
+            let focus_ring = items.iter().find(|cmd| {
+                cmd.z_index == 32764 && matches!(cmd.config, RenderCommandConfig::Border(_))
+            });
+            assert!(focus_ring.is_some(), "Focus ring border should be in render commands");
+
+            let ring = focus_ring.unwrap();
+            // Focus ring should be expanded by 2px per side
+            assert!(ring.bounding_box.width > 100.0, "Focus ring should be wider than element");
+            assert!(ring.bounding_box.height > 50.0, "Focus ring should be taller than element");
+        }
     }
 }

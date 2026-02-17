@@ -63,6 +63,14 @@ pub enum PointerDataInteractionState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrowDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ElementConfigType {
     Shared,
@@ -297,6 +305,7 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub shaders: Vec<ShaderConfig>,
     pub visual_rotation: Option<VisualRotationConfig>,
     pub shape_rotation: Option<ShapeRotationConfig>,
+    pub accessibility: Option<crate::accessibility::AccessibilityConfig>,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDeclaration<CustomElementData> {
@@ -316,6 +325,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
             shaders: Vec::new(),
             visual_rotation: None,
             shape_rotation: None,
+            accessibility: None,
         }
     }
 }
@@ -386,6 +396,10 @@ struct LayoutElementHashMapItem {
     element_id: Id,
     layout_element_index: i32,
     on_hover_fn: Option<Box<dyn FnMut(Id, PointerData)>>,
+    on_press_fn: Option<Box<dyn FnMut(Id)>>,
+    on_release_fn: Option<Box<dyn FnMut(Id)>>,
+    on_focus_fn: Option<Box<dyn FnMut(Id)>>,
+    on_unfocus_fn: Option<Box<dyn FnMut(Id)>>,
     generation: u32,
     collision: bool,
     collapsed: bool,
@@ -398,6 +412,10 @@ impl Clone for LayoutElementHashMapItem {
             element_id: self.element_id.clone(),
             layout_element_index: self.layout_element_index,
             on_hover_fn: None, // Callbacks are not cloneable
+            on_press_fn: None,
+            on_release_fn: None,
+            on_focus_fn: None,
+            on_unfocus_fn: None,
             generation: self.generation,
             collision: self.collision,
             collapsed: self.collapsed,
@@ -454,6 +472,13 @@ struct LayoutElementTreeRoot {
     clip_element_id: u32,
     z_index: i16,
     pointer_offset: Vector2,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FocusableEntry {
+    element_id: u32,
+    tab_index: Option<i32>,
+    insertion_order: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -657,7 +682,13 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     // Clip/scroll
     open_clip_element_stack: Vec<i32>,
     pointer_over_ids: Vec<Id>,
+    pressed_element_id: Option<u32>,
     scroll_container_datas: Vec<ScrollContainerDataInternal>,
+
+    // Accessibility / focus
+    pub focused_element_id: u32, // 0 = no focus
+    focusable_elements: Vec<FocusableEntry>,
+    accessibility_configs: HashMap<u32, crate::accessibility::AccessibilityConfig>,
 
     // Visited flags for DFS
     tree_node_visited: Vec<bool>,
@@ -834,7 +865,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             measured_words_free_list: Vec::new(),
             open_clip_element_stack: Vec::new(),
             pointer_over_ids: Vec::new(),
+            pressed_element_id: None,
             scroll_container_datas: Vec::new(),
+            focused_element_id: 0,
+            focusable_elements: Vec::new(),
+            accessibility_configs: HashMap::new(),
             tree_node_visited: Vec::new(),
             dynamic_string_data: Vec::new(),
         };
@@ -877,6 +912,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     item.layout_element_index = layout_element_index;
                     item.collision = false;
                     item.on_hover_fn = None;
+                    item.on_press_fn = None;
+                    item.on_release_fn = None;
+                    item.on_focus_fn = None;
+                    item.on_unfocus_fn = None;
                 } else {
                     // Duplicate ID
                     item.collision = true;
@@ -889,6 +928,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     generation: gen + 1,
                     bounding_box: BoundingBox::default(),
                     on_hover_fn: None,
+                    on_press_fn: None,
+                    on_release_fn: None,
+                    on_focus_fn: None,
+                    on_unfocus_fn: None,
                     collision: false,
                     collapsed: false,
                 });
@@ -1261,6 +1304,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             self.element_shape_rotations.push(None);
         }
         self.element_shape_rotations[open_idx] = declaration.shape_rotation;
+
+        // Accessibility config
+        if let Some(ref a11y) = declaration.accessibility {
+            let elem_id = self.layout_elements[open_idx].id;
+            if a11y.focusable {
+                self.focusable_elements.push(FocusableEntry {
+                    element_id: elem_id,
+                    tab_index: a11y.tab_index,
+                    insertion_order: self.focusable_elements.len() as u32,
+                });
+            }
+            self.accessibility_configs.insert(elem_id, a11y.clone());
+        }
     }
 
     pub fn close_element(&mut self) {
@@ -1853,6 +1909,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.reusable_element_index_buffer.clear();
         self.layout_element_clip_element_ids.clear();
         self.dynamic_string_data.clear();
+        self.focusable_elements.clear();
+        self.accessibility_configs.clear();
     }
 
     // ========================================================================
@@ -3330,6 +3388,52 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 });
             }
         }
+
+        // Focus ring: render a red border around the focused element
+        if self.focused_element_id != 0 {
+            if let Some(item) = self.layout_element_map.get(&self.focused_element_id) {
+                let bbox = item.bounding_box;
+                if !self.element_is_offscreen(&bbox) {
+                    let elem_idx = item.layout_element_index as usize;
+                    let corner_radius = self
+                        .find_element_config_index(elem_idx, ElementConfigType::Shared)
+                        .map(|idx| self.shared_element_configs[idx].corner_radius)
+                        .unwrap_or_default();
+                    let ring_width = 2u16;
+                    let ring_color = Color::rgba(255.0, 60.0, 40.0, 255.0);
+                    // Expand bounding box outward by ring width so the ring doesn't overlap content
+                    let expanded_bbox = BoundingBox::new(
+                        bbox.x - ring_width as f32,
+                        bbox.y - ring_width as f32,
+                        bbox.width + ring_width as f32 * 2.0,
+                        bbox.height + ring_width as f32 * 2.0,
+                    );
+                    self.add_render_command(InternalRenderCommand {
+                        bounding_box: expanded_bbox,
+                        command_type: RenderCommandType::Border,
+                        render_data: InternalRenderData::Border {
+                            color: ring_color,
+                            corner_radius: CornerRadius {
+                                top_left: corner_radius.top_left + ring_width as f32,
+                                top_right: corner_radius.top_right + ring_width as f32,
+                                bottom_left: corner_radius.bottom_left + ring_width as f32,
+                                bottom_right: corner_radius.bottom_right + ring_width as f32,
+                            },
+                            width: BorderWidth {
+                                left: ring_width,
+                                right: ring_width,
+                                top: ring_width,
+                                bottom: ring_width,
+                                between_children: 0,
+                            },
+                        },
+                        id: hash_number(self.focused_element_id, 0xF0C5).id,
+                        z_index: 32764, // just below debug panel
+                        ..Default::default()
+                    });
+                }
+            }
+        }
     }
 
     // ========================================================================
@@ -3458,6 +3562,38 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 }
                 _ => {}
             }
+        }
+
+        // Fire on_press / on_release callbacks and track pressed element
+        match self.pointer_info.state {
+            PointerDataInteractionState::PressedThisFrame => {
+                // Clear keyboard focus when the user clicks with the mouse
+                if self.focused_element_id != 0 {
+                    self.change_focus(0);
+                }
+
+                // Press the topmost hovered element (last in pointer_over_ids)
+                if let Some(top) = self.pointer_over_ids.last().cloned() {
+                    self.pressed_element_id = Some(top.id);
+                    if let Some(item) = self.layout_element_map.get_mut(&top.id) {
+                        if let Some(ref mut callback) = item.on_press_fn {
+                            callback(top);
+                        }
+                    }
+                }
+            }
+            PointerDataInteractionState::ReleasedThisFrame => {
+                // Fire on_release for the element that was pressed
+                if let Some(elem_id) = self.pressed_element_id.take() {
+                    if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+                        let id_copy = item.element_id.clone();
+                        if let Some(ref mut callback) = item.on_release_fn {
+                            callback(id_copy);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -3646,6 +3782,182 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let elem_id = self.layout_elements[open_idx].id;
         if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
             item.on_hover_fn = Some(callback);
+        }
+    }
+
+    pub fn pressed(&self) -> bool {
+        let open_idx = self.get_open_layout_element();
+        let elem_id = self.layout_elements[open_idx].id;
+        self.pressed_element_id == Some(elem_id)
+    }
+
+    pub fn set_press_callbacks(
+        &mut self,
+        on_press: Option<Box<dyn FnMut(Id)>>,
+        on_release: Option<Box<dyn FnMut(Id)>>,
+    ) {
+        let open_idx = self.get_open_layout_element();
+        let elem_id = self.layout_elements[open_idx].id;
+        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+            item.on_press_fn = on_press;
+            item.on_release_fn = on_release;
+        }
+    }
+
+    /// Returns true if the currently open element has focus.
+    pub fn focused(&self) -> bool {
+        let open_idx = self.get_open_layout_element();
+        let elem_id = self.layout_elements[open_idx].id;
+        self.focused_element_id == elem_id && elem_id != 0
+    }
+
+    /// Returns the currently focused element's ID, or None.
+    pub fn focused_element(&self) -> Option<u32> {
+        if self.focused_element_id != 0 {
+            Some(self.focused_element_id)
+        } else {
+            None
+        }
+    }
+
+    /// Sets focus to the element with the given ID, firing on_unfocus/on_focus callbacks.
+    pub fn set_focus(&mut self, element_id: u32) {
+        self.change_focus(element_id);
+    }
+
+    /// Clears focus (no element is focused).
+    pub fn clear_focus(&mut self) {
+        self.change_focus(0);
+    }
+
+    /// Internal: changes focus, firing on_unfocus on old and on_focus on new.
+    fn change_focus(&mut self, new_id: u32) {
+        let old_id = self.focused_element_id;
+        if old_id == new_id {
+            return;
+        }
+        self.focused_element_id = new_id;
+
+        // Fire on_unfocus on old element
+        if old_id != 0 {
+            if let Some(item) = self.layout_element_map.get_mut(&old_id) {
+                let id_copy = item.element_id.clone();
+                if let Some(ref mut callback) = item.on_unfocus_fn {
+                    callback(id_copy);
+                }
+            }
+        }
+
+        // Fire on_focus on new element
+        if new_id != 0 {
+            if let Some(item) = self.layout_element_map.get_mut(&new_id) {
+                let id_copy = item.element_id.clone();
+                if let Some(ref mut callback) = item.on_focus_fn {
+                    callback(id_copy);
+                }
+            }
+        }
+    }
+
+    pub fn set_focus_callbacks(
+        &mut self,
+        on_focus: Option<Box<dyn FnMut(Id)>>,
+        on_unfocus: Option<Box<dyn FnMut(Id)>>,
+    ) {
+        let open_idx = self.get_open_layout_element();
+        let elem_id = self.layout_elements[open_idx].id;
+        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+            item.on_focus_fn = on_focus;
+            item.on_unfocus_fn = on_unfocus;
+        }
+    }
+
+    /// Cycle focus to the next (or previous, if `reverse` is true) focusable element.
+    /// This is called when Tab (or Shift+Tab) is pressed.
+    pub fn cycle_focus(&mut self, reverse: bool) {
+        if self.focusable_elements.is_empty() {
+            return;
+        }
+
+        // Sort: explicit tab_index first (ascending), then insertion order
+        let mut sorted: Vec<FocusableEntry> = self.focusable_elements.clone();
+        sorted.sort_by(|a, b| {
+            match (a.tab_index, b.tab_index) {
+                (Some(ai), Some(bi)) => ai.cmp(&bi).then(a.insertion_order.cmp(&b.insertion_order)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.insertion_order.cmp(&b.insertion_order),
+            }
+        });
+
+        // Find current focus position
+        let current_pos = sorted
+            .iter()
+            .position(|e| e.element_id == self.focused_element_id);
+
+        let next_pos = match current_pos {
+            Some(pos) => {
+                if reverse {
+                    if pos == 0 { sorted.len() - 1 } else { pos - 1 }
+                } else {
+                    if pos + 1 >= sorted.len() { 0 } else { pos + 1 }
+                }
+            }
+            None => {
+                // No current focus — go to first (or last if reverse)
+                if reverse { sorted.len() - 1 } else { 0 }
+            }
+        };
+
+        self.change_focus(sorted[next_pos].element_id);
+    }
+
+    /// Move focus based on arrow key direction, using `focus_left/right/up/down` overrides.
+    pub fn arrow_focus(&mut self, direction: ArrowDirection) {
+        if self.focused_element_id == 0 {
+            return;
+        }
+        if let Some(config) = self.accessibility_configs.get(&self.focused_element_id) {
+            let target = match direction {
+                ArrowDirection::Left => config.focus_left,
+                ArrowDirection::Right => config.focus_right,
+                ArrowDirection::Up => config.focus_up,
+                ArrowDirection::Down => config.focus_down,
+            };
+            if let Some(target_id) = target {
+                self.change_focus(target_id);
+            }
+        }
+    }
+
+    /// Handle keyboard activation (Enter/Space) on the focused element.
+    pub fn handle_keyboard_activation(&mut self, pressed: bool, released: bool) {
+        if self.focused_element_id == 0 {
+            return;
+        }
+        if pressed {
+            self.pressed_element_id = Some(self.focused_element_id);
+            let id_copy = self
+                .layout_element_map
+                .get(&self.focused_element_id)
+                .map(|item| item.element_id.clone());
+            if let Some(id) = id_copy {
+                if let Some(item) = self.layout_element_map.get_mut(&self.focused_element_id) {
+                    if let Some(ref mut callback) = item.on_press_fn {
+                        callback(id);
+                    }
+                }
+            }
+        }
+        if released {
+            if let Some(elem_id) = self.pressed_element_id.take() {
+                if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+                    let id_copy = item.element_id.clone();
+                    if let Some(ref mut callback) = item.on_release_fn {
+                        callback(id_copy);
+                    }
+                }
+            }
         }
     }
 
@@ -4699,14 +5011,16 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         // Determine scroll offset for the debug scroll pane
         let scroll_id = hash_string("Ply__DebugViewOuterScrollPane", 0);
         let mut scroll_y_offset: f32 = 0.0;
-        let mut pointer_in_debug_view = self.pointer_info.position.y < self.layout_dimensions.height - 300.0;
+        // Only exclude the bottom 300px from tree interaction when the detail panel is shown
+        let detail_panel_height = if self.debug_selected_element_id != 0 { 300.0 } else { 0.0 };
+        let mut pointer_in_debug_view = self.pointer_info.position.y < self.layout_dimensions.height - detail_panel_height;
         for scd in &self.scroll_container_datas {
             if scd.element_id == scroll_id.id {
                 if !self.external_scroll_handling_enabled {
                     scroll_y_offset = scd.scroll_position.y;
                 } else {
                     pointer_in_debug_view = self.pointer_info.position.y + scd.scroll_position.y
-                        < self.layout_dimensions.height - 300.0;
+                        < self.layout_dimensions.height - detail_panel_height;
                 }
                 break;
             }
