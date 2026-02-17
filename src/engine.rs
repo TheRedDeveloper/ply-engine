@@ -688,7 +688,8 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     // Accessibility / focus
     pub focused_element_id: u32, // 0 = no focus
     focusable_elements: Vec<FocusableEntry>,
-    accessibility_configs: HashMap<u32, crate::accessibility::AccessibilityConfig>,
+    pub(crate) accessibility_configs: HashMap<u32, crate::accessibility::AccessibilityConfig>,
+    pub(crate) accessibility_element_order: Vec<u32>,
 
     // Visited flags for DFS
     tree_node_visited: Vec<bool>,
@@ -870,6 +871,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             focused_element_id: 0,
             focusable_elements: Vec::new(),
             accessibility_configs: HashMap::new(),
+            accessibility_element_order: Vec::new(),
             tree_node_visited: Vec::new(),
             dynamic_string_data: Vec::new(),
         };
@@ -1316,6 +1318,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 });
             }
             self.accessibility_configs.insert(elem_id, a11y.clone());
+            self.accessibility_element_order.push(elem_id);
         }
     }
 
@@ -1586,6 +1589,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.add_hash_map_item(&element_id, text_elem_idx);
         if self.debug_mode_enabled {
             self.layout_element_id_strings.push(element_id.string_id);
+        }
+
+        // If the text element is marked accessible, register it in the
+        // accessibility tree with a StaticText role and the text content
+        // as the label.
+        if text_config.accessible {
+            let a11y = crate::accessibility::AccessibilityConfig {
+                role: crate::accessibility::AccessibilityRole::StaticText,
+                label: text.to_string(),
+                ..Default::default()
+            };
+            self.accessibility_configs.insert(element_id.id, a11y);
+            self.accessibility_element_order.push(element_id.id);
         }
 
         let text_width = text_measured.unwrapped_dimensions.width;
@@ -1911,6 +1927,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.dynamic_string_data.clear();
         self.focusable_elements.clear();
         self.accessibility_configs.clear();
+        self.accessibility_element_order.clear();
     }
 
     // ========================================================================
@@ -3831,7 +3848,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     }
 
     /// Internal: changes focus, firing on_unfocus on old and on_focus on new.
-    fn change_focus(&mut self, new_id: u32) {
+    pub(crate) fn change_focus(&mut self, new_id: u32) {
         let old_id = self.focused_element_id;
         if old_id == new_id {
             return;

@@ -354,7 +354,7 @@ Here is a quick bash script to bring your ply-engine app to the web, be sure to 
 # - assets/
 # - index.html
 # - app.wasm (built by cargo)
-# - ply_bundle.js (downloaded from https://github.com/TheRedDeveloper/ply-engine/blob/main/ply_bundle.js)
+# - ply_bundle.js (downloaded from https://github.com/TheRedDeveloper/ply-engine/blob/main/js/ply_bundle.js)
 #!/bin/bash
 set -e
 cargo build --release --target wasm32-unknown-unknown
@@ -362,7 +362,7 @@ mkdir -p build/web
 cp -r assets build/web/
 cp index.html build/web/
 cp target/wasm32-unknown-unknown/release/[APPNAME].wasm build/web/app.wasm
-curl https://raw.githubusercontent.com/TheRedDeveloper/ply-engine/refs/heads/main/ply_bundle.js -o build/web/ply_bundle.js
+curl https://raw.githubusercontent.com/TheRedDeveloper/ply-engine/refs/heads/main/js/ply_bundle.js -o build/web/ply_bundle.js
 ```
 
 You'll need to make an index.html:
@@ -389,7 +389,7 @@ You'll need to make an index.html:
     </style>
 </head>
 <body>
-    <canvas id="glcanvas"></canvas>
+    <canvas id="glcanvas" tabindex="0"></canvas>
     <script src="ply_bundle.js"></script>
     <script>load("app.wasm");</script>
 </body>

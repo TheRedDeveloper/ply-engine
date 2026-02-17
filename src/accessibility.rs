@@ -132,6 +132,36 @@ impl AccessibilityBuilder {
         self
     }
 
+    /// Sets role = StaticText and label. For read-only informational text.
+    pub fn static_text(&mut self, label: &str) -> &mut Self {
+        self.config.role = AccessibilityRole::StaticText;
+        self.config.label = label.to_string();
+        self
+    }
+
+    /// Sets role = Checkbox, label, and focusable.
+    pub fn checkbox(&mut self, label: &str) -> &mut Self {
+        self.config.role = AccessibilityRole::Checkbox;
+        self.config.label = label.to_string();
+        self.config.focusable = true;
+        self
+    }
+
+    /// Sets role = Slider, label, and focusable.
+    pub fn slider(&mut self, label: &str) -> &mut Self {
+        self.config.role = AccessibilityRole::Slider;
+        self.config.label = label.to_string();
+        self.config.focusable = true;
+        self
+    }
+
+    /// Sets role = Image with an alt-text label.
+    pub fn image(&mut self, alt: &str) -> &mut Self {
+        self.config.role = AccessibilityRole::Image;
+        self.config.label = alt.to_string();
+        self
+    }
+
     /// Sets the role explicitly.
     pub fn role(&mut self, role: AccessibilityRole) -> &mut Self {
         self.config.role = role;

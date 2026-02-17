@@ -1,4 +1,6 @@
 pub mod accessibility;
+#[cfg(target_arch = "wasm32")]
+pub mod accessibility_web;
 pub mod color;
 pub mod elements;
 pub mod engine;
@@ -27,6 +29,8 @@ pub use color::Color;
 pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     context: engine::PlyContext<CustomElementData>,
     headless: bool,
+    #[cfg(target_arch = "wasm32")]
+    web_a11y_state: accessibility_web::WebAccessibilityState,
 }
 
 pub struct PlyLayoutScope<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
@@ -461,6 +465,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         let mut ply = Self {
             context: engine::PlyContext::new(dimensions),
             headless: false,
+            #[cfg(target_arch = "wasm32")]
+            web_a11y_state: accessibility_web::WebAccessibilityState::default(),
         };
         ply.set_measure_text_function(renderer::create_measure_text_function(fonts));
         ply
@@ -474,6 +480,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         Self {
             context: engine::PlyContext::new(dimensions),
             headless: true,
+            #[cfg(target_arch = "wasm32")]
+            web_a11y_state: accessibility_web::WebAccessibilityState::default(),
         }
     }
 
@@ -633,6 +641,18 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         for cmd in commands {
             result.push(RenderCommand::from_engine_render_command(cmd));
         }
+
+        // Sync the hidden DOM accessibility tree (web/WASM only)
+        #[cfg(target_arch = "wasm32")]
+        {
+            accessibility_web::sync_accessibility_tree(
+                &mut self.web_a11y_state,
+                &self.context.accessibility_configs,
+                &self.context.accessibility_element_order,
+                self.context.focused_element_id,
+            );
+        }
+
         result
     }
 }

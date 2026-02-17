@@ -45,6 +45,8 @@ pub struct TextConfig {
     pub alignment: TextAlignment,
     /// Per-element shader effects applied to this text.
     pub(crate) effects: Vec<ShaderConfig>,
+    /// When true, the text content is exposed to screen readers as static text.
+    pub(crate) accessible: bool,
 }
 
 impl TextConfig {
@@ -110,6 +112,20 @@ impl TextConfig {
         self.effects.push(builder.into_config());
         self
     }
+
+    /// Makes this text element visible to screen readers.
+    ///
+    /// The text content is automatically used as the accessible label
+    /// with a `StaticText` role. No wrapper element is needed.
+    ///
+    /// ```ignore
+    /// ui.text("Hello world", |t| t.font_size(16).accessible());
+    /// ```
+    #[inline]
+    pub fn accessible(&mut self) -> &mut Self {
+        self.accessible = true;
+        self
+    }
 }
 
 impl Default for TextConfig {
@@ -124,6 +140,7 @@ impl Default for TextConfig {
             wrap_mode: TextElementConfigWrapMode::Words,
             alignment: TextAlignment::Left,
             effects: Vec::new(),
+            accessible: false,
         }
     }
 }
