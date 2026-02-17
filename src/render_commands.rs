@@ -1,4 +1,4 @@
-use crate::{color::Color, engine::{self, ShapeRotationConfig, VisualRotationConfig}, math::BoundingBox, renderer::GraphicAsset, shaders::ShaderConfig};
+use crate::{color::Color, engine::{self, ShapeRotationConfig, VisualRotationConfig}, math::BoundingBox, renderer::ImageSource, shaders::ShaderConfig};
 
 /// Represents a rectangle with a specified color and corner radii.
 #[derive(Debug, Clone)]
@@ -72,8 +72,8 @@ pub struct Image {
     pub background_color: Color,
     /// The corner radii for rounded border edges.
     pub corner_radii: CornerRadii,
-    /// A reference to the asset data.
-    pub data: &'static GraphicAsset,
+    /// A reference to the image source data.
+    pub data: ImageSource,
 }
 
 /// Represents a custom element with a background color, corner radii, and associated data.
@@ -170,7 +170,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
             engine::RenderCommandType::Image => {
                 if let engine::InternalRenderData::Image { background_color, corner_radius, image_data } = &value.render_data {
                     Self::Image(Image {
-                        data: *image_data,
+                        data: image_data.clone(),
                         corner_radii: (*corner_radius).into(),
                         background_color: *background_color,
                     })

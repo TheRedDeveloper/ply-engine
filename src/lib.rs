@@ -150,9 +150,14 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 
     /// Sets the image data for this element.
+    ///
+    /// Accepts anything that implements `Into<ImageSource>`:
+    /// - `&'static GraphicAsset` — static file path or embedded bytes
+    /// - `Texture2D` — pre-existing GPU texture handle
+    /// - `tinyvg::format::Image` — procedural TinyVG scene graph (requires `tinyvg` feature)
     #[inline]
-    pub fn image(mut self, data: &'static renderer::GraphicAsset) -> Self {
-        self.inner.image_data = Some(data);
+    pub fn image(mut self, data: impl Into<renderer::ImageSource>) -> Self {
+        self.inner.image_data = Some(data.into());
         self
     }
 

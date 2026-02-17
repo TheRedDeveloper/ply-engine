@@ -27,6 +27,50 @@ impl GraphicAsset {
     }
 }
 
+/// Represents the source of image data for an element. Accepts static assets,
+/// runtime GPU textures, or procedural TinyVG scene graphs.
+#[derive(Debug, Clone)]
+pub enum ImageSource {
+    /// Static asset: file path or embedded bytes (existing behavior).
+    Asset(&'static GraphicAsset),
+    /// Pre-existing GPU texture handle (lightweight, Copy).
+    Texture(Texture2D),
+    /// Procedural TinyVG scene graph, rasterized at the element's layout size each frame.
+    #[cfg(feature = "tinyvg")]
+    TinyVg(tinyvg::format::Image),
+}
+
+impl ImageSource {
+    /// Returns a human-readable name for debug/logging purposes.
+    pub fn get_name(&self) -> &str {
+        match self {
+            ImageSource::Asset(ga) => ga.get_name(),
+            ImageSource::Texture(_) => "[Texture2D]",
+            #[cfg(feature = "tinyvg")]
+            ImageSource::TinyVg(_) => "[TinyVG procedural]",
+        }
+    }
+}
+
+impl From<&'static GraphicAsset> for ImageSource {
+    fn from(asset: &'static GraphicAsset) -> Self {
+        ImageSource::Asset(asset)
+    }
+}
+
+impl From<Texture2D> for ImageSource {
+    fn from(tex: Texture2D) -> Self {
+        ImageSource::Texture(tex)
+    }
+}
+
+#[cfg(feature = "tinyvg")]
+impl From<tinyvg::format::Image> for ImageSource {
+    fn from(img: tinyvg::format::Image) -> Self {
+        ImageSource::TinyVg(img)
+    }
+}
+
 /// Global TextureManager. Can also be used outside the renderer to manage your own macroquad textures.
 pub static TEXTURE_MANAGER: std::sync::LazyLock<std::sync::Mutex<TextureManager>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(TextureManager::new()));
 
@@ -590,6 +634,7 @@ fn rounded_rectangle_texture(cr: &CornerRadii, bb: &BoundingBox, clip: &Option<(
 }
 
 /// Render a TinyVG image to a Texture2D, scaled to fit the given dimensions.
+/// Decodes from raw bytes, then delegates to `render_tinyvg_image`.
 #[cfg(feature = "tinyvg")]
 fn render_tinyvg_texture(
     tvg_data: &[u8],
@@ -597,7 +642,24 @@ fn render_tinyvg_texture(
     dest_height: f32,
     clip: &Option<(i32, i32, i32, i32)>,
 ) -> Option<Texture2D> {
-    use tinyvg::{Decoder, format::{Command, Style, Segment, SegmentCommandKind, Point as TvgPoint, Color as TvgColor}};
+    use tinyvg::Decoder;
+    let decoder = Decoder::new(std::io::Cursor::new(tvg_data));
+    let image = match decoder.decode() {
+        Ok(img) => img,
+        Err(_) => return None,
+    };
+    render_tinyvg_image(&image, dest_width, dest_height, clip)
+}
+
+/// Render a decoded `tinyvg::format::Image` to a Texture2D, scaled to fit the given dimensions.
+#[cfg(feature = "tinyvg")]
+fn render_tinyvg_image(
+    image: &tinyvg::format::Image,
+    dest_width: f32,
+    dest_height: f32,
+    clip: &Option<(i32, i32, i32, i32)>,
+) -> Option<Texture2D> {
+    use tinyvg::format::{Command, Style, Segment, SegmentCommandKind, Point as TvgPoint, Color as TvgColor};
     use kurbo::{BezPath, Point as KurboPoint, Vec2 as KurboVec2, ParamCurve, SvgArc, Arc as KurboArc, PathEl};
     use lyon::tessellation::{FillTessellator, FillOptions, VertexBuffers, BuffersBuilder, FillVertex, FillRule};
     use lyon::path::Path as LyonPath;
@@ -606,12 +668,6 @@ fn render_tinyvg_texture(
     fn tvg_to_kurbo(p: TvgPoint) -> KurboPoint {
         KurboPoint::new(p.x, p.y)
     }
-    
-    let decoder = Decoder::new(std::io::Cursor::new(tvg_data));
-    let image = match decoder.decode() {
-        Ok(img) => img,
-        Err(_) => return None,
-    };
     
     let tvg_width = image.header.width as f32;
     let tvg_height = image.header.height as f32;
@@ -1231,197 +1287,256 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 if tint == Color::new(0.0, 0.0, 0.0, 0.0) {
                     tint = Color::new(1.0, 1.0, 1.0, 1.0);
                 }
-                
-                let mut manager = TEXTURE_MANAGER.lock().unwrap();
 
-                #[cfg(feature = "tinyvg")]
-                let is_tvg = image.data.get_name().to_lowercase().ends_with(".tvg");
-                #[cfg(not(feature = "tinyvg"))]
-                let is_tvg = false;
+                match &image.data {
+                    ImageSource::Texture(tex) => {
+                        // Direct GPU texture — draw immediately, no TextureManager
+                        let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
+                        if !has_corner_radii {
+                            draw_texture_ex(
+                                tex,
+                                bb.x,
+                                bb.y,
+                                tint,
+                                DrawTextureParams {
+                                    dest_size: Some(Vec2::new(bb.width, bb.height)),
+                                    ..Default::default()
+                                },
+                            );
+                        } else {
+                            let mut manager = TEXTURE_MANAGER.lock().unwrap();
+                            // Use texture raw pointer as a unique key for the corner-radii variant
+                            let key = format!(
+                                "tex-proc:{:?}:{}:{}:{}:{}:{}:{}:{:?}",
+                                tex.raw_miniquad_id(),
+                                bb.width, bb.height,
+                                cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right,
+                                state.clip
+                            );
+                            let texture = manager.get_or_create(key, || {
+                                let mut resized_image: Image = resize(tex, bb.height, bb.width, &state.clip).get_texture_data();
+                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                                for i in 0..resized_image.bytes.len()/4 {
+                                    let this_alpha = resized_image.bytes[i * 4 + 3] as f32 / 255.0;
+                                    let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
+                                    resized_image.bytes[i * 4 + 3] = (this_alpha * mask_alpha * 255.0) as u8;
+                                }
+                                Texture2D::from_image(&resized_image)
+                            });
+                            draw_texture_ex(
+                                texture,
+                                bb.x,
+                                bb.y,
+                                tint,
+                                DrawTextureParams {
+                                    dest_size: Some(Vec2::new(bb.width, bb.height)),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    }
+                    #[cfg(feature = "tinyvg")]
+                    ImageSource::TinyVg(tvg_image) => {
+                        // Procedural TinyVG — rasterize every frame (no caching, content may change)
+                        let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
+                        if let Some(tvg_texture) = render_tinyvg_image(tvg_image, bb.width, bb.height, &state.clip) {
+                            let final_texture = if has_corner_radii {
+                                let mut tvg_img: Image = tvg_texture.get_texture_data();
+                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                                for i in 0..tvg_img.bytes.len()/4 {
+                                    let this_alpha = tvg_img.bytes[i * 4 + 3] as f32 / 255.0;
+                                    let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
+                                    tvg_img.bytes[i * 4 + 3] = (this_alpha * mask_alpha * 255.0) as u8;
+                                }
+                                Texture2D::from_image(&tvg_img)
+                            } else {
+                                tvg_texture
+                            };
+                            draw_texture_ex(
+                                &final_texture,
+                                bb.x,
+                                bb.y,
+                                tint,
+                                DrawTextureParams {
+                                    dest_size: Some(Vec2::new(bb.width, bb.height)),
+                                    flip_y: true,
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    }
+                    ImageSource::Asset(ga) => {
+                        // Static asset — existing behavior
+                        let mut manager = TEXTURE_MANAGER.lock().unwrap();
 
-                #[cfg(feature = "tinyvg")]
-                if is_tvg {
-                    let key = format!(
-                        "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                        image.data.get_name(),
-                        bb.width,
-                        bb.height,
-                        cr.top_left,
-                        cr.top_right,
-                        cr.bottom_left,
-                        cr.bottom_right,
-                        state.clip
-                    );
-                    let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
-                    let texture = if !has_corner_radii {
-                        match image.data {
-                            GraphicAsset::Path(path) => {
-                                manager.get_or_create_async(key, async || {
-                                    match load_file(path).await {
-                                        Ok(tvg_bytes) => {
-                                            if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                        #[cfg(feature = "tinyvg")]
+                        let is_tvg = ga.get_name().to_lowercase().ends_with(".tvg");
+                        #[cfg(not(feature = "tinyvg"))]
+                        let is_tvg = false;
+
+                        #[cfg(feature = "tinyvg")]
+                        if is_tvg {
+                            let key = format!(
+                                "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
+                                ga.get_name(),
+                                bb.width, bb.height,
+                                cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right,
+                                state.clip
+                            );
+                            let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
+                            let texture = if !has_corner_radii {
+                                match ga {
+                                    GraphicAsset::Path(path) => {
+                                        manager.get_or_create_async(key, async || {
+                                            match load_file(path).await {
+                                                Ok(tvg_bytes) => {
+                                                    if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                        tvg_texture
+                                                    } else {
+                                                        warn!("Failed to load TinyVG image: {}", path);
+                                                        Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                                    }
+                                                }
+                                                Err(error) => {
+                                                    warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
+                                                    Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                                }
+                                            }
+                                        }).await
+                                    }
+                                    GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
+                                        manager.get_or_create(key, || {
+                                            if let Some(tvg_texture) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &state.clip) {
                                                 tvg_texture
                                             } else {
-                                                warn!("Failed to load TinyVG image: {}", path);
+                                                warn!("Failed to load TinyVG image: {}", file_name);
                                                 Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
                                             }
-                                        }
-                                        Err(error) => {
-                                            warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
-                                            Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
-                                        }
+                                        })
                                     }
-                                }).await
-                            }
-                            GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
-                                manager.get_or_create(key, || {
-                                    if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
-                                        tvg_texture
-                                    } else {
-                                        warn!("Failed to load TinyVG image: {}", file_name);
-                                        Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
-                                    }
-                                })
-                            }
-                        }
-                        
-                    } else {
-                        let zerocr_key = format!(
-                            "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                            image.data.get_name(),
-                            bb.width,
-                            bb.height,
-                            0.0,
-                            0.0,
-                            0.0,
-                            0.0,
-                            state.clip
-                        );
-                        
-                        let base_texture = if let Some(cached) = manager.get(&zerocr_key) {
-                            cached
-                        } else {
-                            match image.data {
-                                GraphicAsset::Path(path) => {
-                                    match load_file(path).await {
-                                        Ok(tvg_bytes) => {
-                                            let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                }
+                            } else {
+                                let zerocr_key = format!(
+                                    "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
+                                    ga.get_name(),
+                                    bb.width, bb.height,
+                                    0.0, 0.0, 0.0, 0.0,
+                                    state.clip
+                                );
+                                let base_texture = if let Some(cached) = manager.get(&zerocr_key) {
+                                    cached
+                                } else {
+                                    match ga {
+                                        GraphicAsset::Path(path) => {
+                                            match load_file(path).await {
+                                                Ok(tvg_bytes) => {
+                                                    let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                        tvg_texture
+                                                    } else {
+                                                        warn!("Failed to load TinyVG image: {}", path);
+                                                        Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                                    };
+                                                    manager.cache(zerocr_key.clone(), texture)
+                                                }
+                                                Err(error) => {
+                                                    warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
+                                                    manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
+                                                }
+                                            }
+                                        }
+                                        GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
+                                            let texture = if let Some(tvg_texture) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &state.clip) {
                                                 tvg_texture
                                             } else {
-                                                warn!("Failed to load TinyVG image: {}", path);
+                                                warn!("Failed to load TinyVG image: {}", file_name);
                                                 Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
                                             };
                                             manager.cache(zerocr_key.clone(), texture)
                                         }
-                                        Err(error) => {
-                                            warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
-                                            manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
-                                        }
                                     }
+                                }.clone();
+                                manager.get_or_create(key, || {
+                                    let mut tvg_image: Image = base_texture.get_texture_data();
+                                    let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                                    for i in 0..tvg_image.bytes.len()/4 {
+                                        let this_alpha = tvg_image.bytes[i * 4 + 3] as f32 / 255.0;
+                                        let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
+                                        tvg_image.bytes[i * 4 + 3] = (this_alpha * mask_alpha * 255.0) as u8;
+                                    }
+                                    Texture2D::from_image(&tvg_image)
+                                })
+                            };
+                            draw_texture_ex(
+                                texture,
+                                bb.x,
+                                bb.y,
+                                tint,
+                                DrawTextureParams {
+                                    dest_size: Some(Vec2::new(bb.width, bb.height)),
+                                    flip_y: true,
+                                    ..Default::default()
+                                },
+                            );
+                            continue;
+                        }
+
+                        if !is_tvg && cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
+                            let texture = match ga {
+                                GraphicAsset::Path(path) => manager.get_or_load(path).await,
+                                GraphicAsset::Bytes { file_name, data } => {
+                                    manager.get_or_create(file_name.to_string(), || {
+                                        Texture2D::from_file_with_format(data, None)
+                                    })
                                 }
-                                GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
-                                    let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
-                                        tvg_texture
-                                    } else {
-                                        warn!("Failed to load TinyVG image: {}", file_name);
-                                        Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
-                                    };
-                                    manager.cache(zerocr_key.clone(), texture)
+                            };
+                            draw_texture_ex(
+                                texture,
+                                bb.x,
+                                bb.y,
+                                tint,
+                                DrawTextureParams {
+                                    dest_size: Some(Vec2::new(bb.width, bb.height)),
+                                    ..Default::default()
+                                },
+                            );
+                        } else {
+                            let source_texture = match ga {
+                                GraphicAsset::Path(path) => manager.get_or_load(path).await.clone(),
+                                GraphicAsset::Bytes { file_name, data } => {
+                                    manager.get_or_create(file_name.to_string(), || {
+                                        Texture2D::from_file_with_format(data, None)
+                                    }).clone()
                                 }
-                            }
-                        }.clone();
-                        
-                        manager.get_or_create(key, || {
-                            let mut tvg_image: Image = base_texture.get_texture_data();
-                            let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
-                            
-                            for i in 0..tvg_image.bytes.len()/4 {
-                                let this_alpha = tvg_image.bytes[i * 4 + 3] as f32 / 255.0;
-                                let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
-                                tvg_image.bytes[i * 4 + 3] = (this_alpha * mask_alpha * 255.0) as u8;
-                            }
-                            Texture2D::from_image(&tvg_image)
-                        })
-                    };
-                    
-                    draw_texture_ex(
-                        texture,
-                        bb.x,
-                        bb.y,
-                        tint,
-                        DrawTextureParams {
-                            dest_size: Some(Vec2::new(bb.width, bb.height)),
-                            flip_y: true,
-                            ..Default::default()
-                        },
-                    );
-                    continue;
-                }
-
-                if !is_tvg && cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
-                    let texture = match image.data {
-                        GraphicAsset::Path(path) => manager.get_or_load(path).await,
-                        GraphicAsset::Bytes { file_name, data } => {
-                            manager.get_or_create(file_name.to_string(), || {
-                                Texture2D::from_file_with_format(data, None)
-                            })
+                            };
+                            let key = format!(
+                                "image:{}:{}:{}:{}:{}:{}:{}:{:?}",
+                                ga.get_name(),
+                                bb.width, bb.height,
+                                cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right,
+                                state.clip
+                            );
+                            let texture = manager.get_or_create(key, || {
+                                let mut resized_image: Image = resize(&source_texture, bb.height, bb.width, &state.clip).get_texture_data();
+                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                                for i in 0..resized_image.bytes.len()/4 {
+                                    let this_alpha = resized_image.bytes[i * 4 + 3] as f32 / 255.0;
+                                    let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
+                                    resized_image.bytes[i * 4 + 3] = (this_alpha * mask_alpha * 255.0) as u8;
+                                }
+                                Texture2D::from_image(&resized_image)
+                            });
+                            draw_texture_ex(
+                                texture,
+                                bb.x,
+                                bb.y,
+                                tint,
+                                DrawTextureParams {
+                                    dest_size: Some(Vec2::new(bb.width, bb.height)),
+                                    ..Default::default()
+                                },
+                            );
                         }
-                    };
-                    draw_texture_ex(
-                        texture,
-                        bb.x,
-                        bb.y,
-                        tint,
-                        DrawTextureParams {
-                            dest_size: Some(Vec2::new(bb.width, bb.height)),
-                            ..Default::default()
-                        },
-                    );
-                } else {
-                    let source_texture = match image.data {
-                        GraphicAsset::Path(path) => manager.get_or_load(path).await.clone(),
-                        GraphicAsset::Bytes { file_name, data } => {
-                            manager.get_or_create(file_name.to_string(), || {
-                                Texture2D::from_file_with_format(data, None)
-                            }).clone()
-                        }
-                    };
-                    
-                    let key = format!(
-                        "image:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                        image.data.get_name(),
-                        bb.width,
-                        bb.height,
-                        cr.top_left,
-                        cr.top_right,
-                        cr.bottom_left,
-                        cr.bottom_right,
-                        state.clip
-                    );
-
-                    let texture = manager.get_or_create(key, || {
-                        let mut resized_image: Image = resize(&source_texture, bb.height, bb.width, &state.clip).get_texture_data();
-                        let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
-
-                        for i in 0..resized_image.bytes.len()/4 {
-                            let this_alpha = resized_image.bytes[i * 4 + 3] as f32 / 255.0;
-                            let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
-                            resized_image.bytes[i * 4 + 3] = (this_alpha * mask_alpha * 255.0) as u8;
-                        }
-
-                        Texture2D::from_image(&resized_image)
-                    });
-
-                    draw_texture_ex(
-                        texture,
-                        bb.x,
-                        bb.y,
-                        tint,
-                        DrawTextureParams {
-                            dest_size: Some(Vec2::new(bb.width, bb.height)),
-                            ..Default::default()
-                        },
-                    );
+                    }
                 }
             }
             RenderCommandConfig::Rectangle(config) => {

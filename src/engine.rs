@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use crate::color::Color;
-use crate::renderer::GraphicAsset;
+use crate::renderer::ImageSource;
 use crate::shaders::ShaderConfig;
 use crate::elements::{
     FloatingAttachPointType, FloatingAttachToElement, FloatingClipToElement, PointerCaptureMode,
@@ -295,7 +295,7 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub background_color: Color,
     pub corner_radius: CornerRadius,
     pub aspect_ratio: f32,
-    pub image_data: Option<&'static GraphicAsset>,
+    pub image_data: Option<ImageSource>,
     pub floating: FloatingConfig,
     pub custom_data: Option<CustomElementData>,
     pub clip: ClipConfig,
@@ -531,7 +531,7 @@ pub enum InternalRenderData<CustomElementData: Clone + Default + std::fmt::Debug
     Image {
         background_color: Color,
         corner_radius: CornerRadius,
-        image_data: &'static GraphicAsset,
+        image_data: ImageSource,
     },
     Custom {
         background_color: Color,
@@ -641,7 +641,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     element_configs: Vec<ElementConfig>,
     text_element_configs: Vec<TextConfig>,
     aspect_ratio_configs: Vec<f32>,
-    image_element_configs: Vec<&'static GraphicAsset>,
+    image_element_configs: Vec<ImageSource>,
     floating_element_configs: Vec<FloatingConfig>,
     clip_element_configs: Vec<ClipConfig>,
     custom_element_configs: Vec<CustomElementData>,
@@ -1152,7 +1152,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
 
         // Image config
-        if let Some(image_data) = declaration.image_data {
+        if let Some(image_data) = declaration.image_data.clone() {
             self.image_element_configs.push(image_data);
             let idx = self.image_element_configs.len() - 1;
             self.attach_element_config(ElementConfigType::Image, idx);
@@ -2898,7 +2898,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ElementConfigType::Image => {
                                 if should_render {
                                     let image_data =
-                                        self.image_element_configs[config.config_index];
+                                        self.image_element_configs[config.config_index].clone();
                                     self.add_render_command(InternalRenderCommand {
                                         bounding_box: shape_draw_bbox,
                                         command_type: RenderCommandType::Image,
@@ -5600,7 +5600,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     ElementConfigType::Image => {
                         let image_label_color = Color::rgba(121.0, 189.0, 154.0, 255.0);
                         self.render_debug_view_category_header("Image", image_label_color, elem_id_string.clone());
-                        let image_data = self.image_element_configs[ec.config_index];
+                        let image_data = self.image_element_configs[ec.config_index].clone();
                         self.debug_open(&ElementDeclaration {
                             layout: LayoutConfig {
                                 padding: attr_padding,
@@ -5611,7 +5611,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ..Default::default()
                         });
                         {
-                            self.debug_text("File", info_title_config);
+                            self.debug_text("Source", info_title_config);
                             let name = image_data.get_name();
                             self.debug_raw_text(name, info_text_config);
                         }
