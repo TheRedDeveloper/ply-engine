@@ -70,6 +70,28 @@ pub enum ArrowDirection {
     Down,
 }
 
+/// Actions that can be performed on a focused text input.
+#[derive(Debug, Clone)]
+pub enum TextInputAction {
+    MoveLeft { shift: bool },
+    MoveRight { shift: bool },
+    MoveWordLeft { shift: bool },
+    MoveWordRight { shift: bool },
+    MoveHome { shift: bool },
+    MoveEnd { shift: bool },
+    MoveUp { shift: bool },
+    MoveDown { shift: bool },
+    Backspace,
+    Delete,
+    BackspaceWord,
+    DeleteWord,
+    SelectAll,
+    Copy,
+    Cut,
+    Paste { text: String },
+    Submit,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ElementConfigType {
@@ -81,6 +103,7 @@ pub enum ElementConfigType {
     Clip,
     Border,
     Aspect,
+    TextInput,
 }
 
 // ============================================================================
@@ -306,6 +329,7 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub visual_rotation: Option<VisualRotationConfig>,
     pub shape_rotation: Option<ShapeRotationConfig>,
     pub accessibility: Option<crate::accessibility::AccessibilityConfig>,
+    pub text_input: Option<crate::text_input::TextInputConfig>,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDeclaration<CustomElementData> {
@@ -326,6 +350,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
             visual_rotation: None,
             shape_rotation: None,
             accessibility: None,
+            text_input: None,
         }
     }
 }
@@ -400,6 +425,9 @@ struct LayoutElementHashMapItem {
     on_release_fn: Option<Box<dyn FnMut(Id)>>,
     on_focus_fn: Option<Box<dyn FnMut(Id)>>,
     on_unfocus_fn: Option<Box<dyn FnMut(Id)>>,
+    on_text_changed_fn: Option<Box<dyn FnMut(&str)>>,
+    on_text_submit_fn: Option<Box<dyn FnMut(&str)>>,
+    is_text_input: bool,
     generation: u32,
     collision: bool,
     collapsed: bool,
@@ -416,6 +444,9 @@ impl Clone for LayoutElementHashMapItem {
             on_release_fn: None,
             on_focus_fn: None,
             on_unfocus_fn: None,
+            on_text_changed_fn: None,
+            on_text_submit_fn: None,
+            is_text_input: self.is_text_input,
             generation: self.generation,
             collision: self.collision,
             collapsed: self.collapsed,
@@ -691,6 +722,23 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     pub(crate) accessibility_configs: HashMap<u32, crate::accessibility::AccessibilityConfig>,
     pub(crate) accessibility_element_order: Vec<u32>,
 
+    // Text input
+    pub(crate) text_edit_states: HashMap<u32, crate::text_input::TextEditState>,
+    text_input_configs: Vec<crate::text_input::TextInputConfig>,
+    /// Set of element IDs that are text inputs this frame.
+    pub(crate) text_input_element_ids: Vec<u32>,
+    /// Pending click on a text input: (element_id, click_x_relative, click_y_relative, shift_held)
+    pub(crate) pending_text_click: Option<(u32, f32, f32, bool)>,
+    /// Text input drag-scroll state (mobile-first: drag scrolls, doesn't select).
+    pub(crate) text_input_drag_active: bool,
+    pub(crate) text_input_drag_origin: crate::math::Vector2,
+    pub(crate) text_input_drag_scroll_origin: crate::math::Vector2,
+    pub(crate) text_input_drag_element_id: u32,
+    /// Current absolute time in seconds (set by lib.rs each frame).
+    pub(crate) current_time: f64,
+    /// Delta time for the current frame in seconds (set by lib.rs each frame).
+    pub(crate) frame_delta_time: f32,
+
     // Visited flags for DFS
     tree_node_visited: Vec<bool>,
 
@@ -872,6 +920,16 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             focusable_elements: Vec::new(),
             accessibility_configs: HashMap::new(),
             accessibility_element_order: Vec::new(),
+            text_edit_states: HashMap::new(),
+            text_input_configs: Vec::new(),
+            text_input_element_ids: Vec::new(),
+            pending_text_click: None,
+            text_input_drag_active: false,
+            text_input_drag_origin: Vector2::default(),
+            text_input_drag_scroll_origin: Vector2::default(),
+            text_input_drag_element_id: 0,
+            current_time: 0.0,
+            frame_delta_time: 0.0,
             tree_node_visited: Vec::new(),
             dynamic_string_data: Vec::new(),
         };
@@ -918,6 +976,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     item.on_release_fn = None;
                     item.on_focus_fn = None;
                     item.on_unfocus_fn = None;
+                    item.on_text_changed_fn = None;
+                    item.on_text_submit_fn = None;
+                    item.is_text_input = false;
                 } else {
                     // Duplicate ID
                     item.collision = true;
@@ -934,6 +995,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     on_release_fn: None,
                     on_focus_fn: None,
                     on_unfocus_fn: None,
+                    on_text_changed_fn: None,
+                    on_text_submit_fn: None,
+                    is_text_input: false,
                     collision: false,
                     collapsed: false,
                 });
@@ -1319,6 +1383,144 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
             self.accessibility_configs.insert(elem_id, a11y.clone());
             self.accessibility_element_order.push(elem_id);
+        }
+
+        // Text input config
+        if let Some(ref ti_config) = declaration.text_input {
+            let elem_id = self.layout_elements[open_idx].id;
+            self.text_input_configs.push(ti_config.clone());
+            let idx = self.text_input_configs.len() - 1;
+            self.attach_element_config(ElementConfigType::TextInput, idx);
+            self.text_input_element_ids.push(elem_id);
+
+            // Mark the element as a text input in the layout map
+            if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+                item.is_text_input = true;
+            }
+
+            // Ensure a TextEditState exists for this element
+            self.text_edit_states.entry(elem_id)
+                .or_insert_with(crate::text_input::TextEditState::default);
+
+            // Process any pending click on this text input
+            if let Some((click_elem, click_x, click_y, click_shift)) = self.pending_text_click.take() {
+                if click_elem == elem_id {
+                    if let Some(ref measure_fn) = self.measure_text_fn {
+                        let state = self.text_edit_states.get(&elem_id).cloned()
+                            .unwrap_or_default();
+                        let disp_text = crate::text_input::display_text(
+                            &state.text,
+                            &ti_config.placeholder,
+                            ti_config.is_password,
+                        );
+                        // Only position cursor in actual text, not placeholder
+                        if !state.text.is_empty() {
+                            // Double-click detection
+                            let is_double_click = state.last_click_element == elem_id
+                                && (self.current_time - state.last_click_time) < 0.4;
+
+                            if ti_config.is_multiline {
+                                // Multiline: determine which visual line was clicked
+                                let elem_width = self.layout_element_map.get(&elem_id)
+                                    .map(|item| item.bounding_box.width)
+                                    .unwrap_or(200.0);
+                                let visual_lines = crate::text_input::wrap_lines(
+                                    &disp_text,
+                                    elem_width,
+                                    ti_config.font_id,
+                                    ti_config.font_size,
+                                    measure_fn.as_ref(),
+                                );
+                                let font_height = {
+                                    let config = crate::text::TextConfig {
+                                        font_id: ti_config.font_id,
+                                        font_size: ti_config.font_size,
+                                        ..Default::default()
+                                    };
+                                    measure_fn(&"Mg", &config).height
+                                };
+                                let adjusted_y = click_y + state.scroll_offset_y;
+                                let clicked_line = (adjusted_y / font_height).floor().max(0.0) as usize;
+                                let clicked_line = clicked_line.min(visual_lines.len().saturating_sub(1));
+
+                                let vl = &visual_lines[clicked_line];
+                                let line_char_x_positions = crate::text_input::compute_char_x_positions(
+                                    &vl.text,
+                                    ti_config.font_id,
+                                    ti_config.font_size,
+                                    measure_fn.as_ref(),
+                                );
+                                let col = crate::text_input::find_nearest_char_boundary(
+                                    click_x, &line_char_x_positions,
+                                );
+                                let global_pos = vl.global_char_start + col;
+
+                                if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
+                                    if is_double_click {
+                                        state.select_word_at(global_pos);
+                                    } else {
+                                        if click_shift {
+                                            if state.selection_anchor.is_none() {
+                                                state.selection_anchor = Some(state.cursor_pos);
+                                            }
+                                        } else {
+                                            state.selection_anchor = None;
+                                        }
+                                        state.cursor_pos = global_pos;
+                                        state.reset_blink();
+                                    }
+                                    state.last_click_time = self.current_time;
+                                    state.last_click_element = elem_id;
+                                }
+                            } else {
+                                // Single-line: existing behavior
+                                let char_x_positions = crate::text_input::compute_char_x_positions(
+                                    &disp_text,
+                                    ti_config.font_id,
+                                    ti_config.font_size,
+                                    measure_fn.as_ref(),
+                                );
+                                let adjusted_x = click_x + state.scroll_offset;
+
+                                if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
+                                    if is_double_click {
+                                        let click_pos = crate::text_input::find_nearest_char_boundary(
+                                            adjusted_x, &char_x_positions,
+                                        );
+                                        state.select_word_at(click_pos);
+                                    } else {
+                                        state.click_to_cursor(adjusted_x, &char_x_positions, click_shift);
+                                    }
+                                    state.last_click_time = self.current_time;
+                                    state.last_click_element = elem_id;
+                                }
+                            }
+                        } else if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
+                            state.cursor_pos = 0;
+                            state.selection_anchor = None;
+                            state.last_click_time = self.current_time;
+                            state.last_click_element = elem_id;
+                            state.reset_blink();
+                        }
+                    }
+                } else {
+                    // Wasn't for this element, put it back
+                    self.pending_text_click = Some((click_elem, click_x, click_y, click_shift));
+                }
+            }
+
+            // Auto-register as focusable if not already done via accessibility
+            if declaration.accessibility.is_none() || !declaration.accessibility.as_ref().unwrap().focusable {
+                // Check it's not already registered
+                let already = self.focusable_elements.iter().any(|e| e.element_id == elem_id);
+                if !already {
+                    self.focusable_elements.push(FocusableEntry {
+                        element_id: elem_id,
+                        tab_index: None,
+                        insertion_order: self.focusable_elements.len() as u32,
+                    });
+                }
+            }
         }
     }
 
@@ -1928,6 +2130,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.focusable_elements.clear();
         self.accessibility_configs.clear();
         self.accessibility_element_order.clear();
+        self.text_input_configs.clear();
+        self.text_input_element_ids.clear();
     }
 
     // ========================================================================
@@ -3016,6 +3220,338 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 }
                                 emit_rectangle = false;
                             }
+                            ElementConfigType::TextInput => {
+                                if should_render {
+                                    let ti_config = self.text_input_configs[config.config_index].clone();
+                                    let is_focused = self.focused_element_id == elem_id;
+
+                                    // Emit background rectangle FIRST so text renders on top
+                                    if shared.background_color.a > 0.0 || shared.corner_radius.bottom_left > 0.0 {
+                                        self.add_render_command(InternalRenderCommand {
+                                            bounding_box: shape_draw_bbox,
+                                            command_type: RenderCommandType::Rectangle,
+                                            render_data: InternalRenderData::Rectangle {
+                                                background_color: shared.background_color,
+                                                corner_radius: shared.corner_radius,
+                                            },
+                                            user_data: shared.user_data,
+                                            id: elem_id,
+                                            z_index: root.z_index,
+                                            visual_rotation: None,
+                                            shape_rotation: elem_shape_rotation,
+                                            effects: elem_effects.clone(),
+                                        });
+                                    }
+
+                                    // Get or create edit state
+                                    let state = self.text_edit_states
+                                        .entry(elem_id)
+                                        .or_insert_with(crate::text_input::TextEditState::default)
+                                        .clone();
+
+                                    let disp_text = crate::text_input::display_text(
+                                        &state.text,
+                                        &ti_config.placeholder,
+                                        ti_config.is_password && !ti_config.is_multiline,
+                                    );
+
+                                    let is_placeholder = state.text.is_empty();
+                                    let text_color = if is_placeholder {
+                                        ti_config.placeholder_color
+                                    } else {
+                                        ti_config.text_color
+                                    };
+
+                                    // Measure font height for cursor
+                                    let font_height = if let Some(ref measure_fn) = self.measure_text_fn {
+                                        let config = crate::text::TextConfig {
+                                            font_id: ti_config.font_id,
+                                            font_size: ti_config.font_size,
+                                            ..Default::default()
+                                        };
+                                        measure_fn("Mg", &config).height
+                                    } else {
+                                        ti_config.font_size as f32
+                                    };
+
+                                    // Clip text content to the element's bounding box
+                                    self.add_render_command(InternalRenderCommand {
+                                        bounding_box: current_bbox,
+                                        command_type: RenderCommandType::ScissorStart,
+                                        render_data: InternalRenderData::Clip {
+                                            horizontal: true,
+                                            vertical: true,
+                                        },
+                                        user_data: 0,
+                                        id: hash_number(1000, elem_id).id,
+                                        z_index: root.z_index,
+                                        visual_rotation: None,
+                                        shape_rotation: None,
+                                        effects: Vec::new(),
+                                    });
+
+                                    if ti_config.is_multiline {
+                                        // ── Multiline rendering (with word wrapping) ──
+                                        let scroll_offset_x = state.scroll_offset;
+                                        let scroll_offset_y = state.scroll_offset_y;
+
+                                        let visual_lines = if let Some(ref measure_fn) = self.measure_text_fn {
+                                            crate::text_input::wrap_lines(
+                                                &disp_text,
+                                                current_bbox.width,
+                                                ti_config.font_id,
+                                                ti_config.font_size,
+                                                measure_fn.as_ref(),
+                                            )
+                                        } else {
+                                            vec![crate::text_input::VisualLine {
+                                                text: disp_text.clone(),
+                                                global_char_start: 0,
+                                                char_count: disp_text.chars().count(),
+                                            }]
+                                        };
+
+                                        let (cursor_line, cursor_col) = if is_placeholder {
+                                            (0, 0)
+                                        } else {
+                                            crate::text_input::cursor_to_visual_pos(&visual_lines, state.cursor_pos)
+                                        };
+
+                                        // Compute per-line char positions
+                                        let line_positions: Vec<Vec<f32>> = if let Some(ref measure_fn) = self.measure_text_fn {
+                                            visual_lines.iter().map(|vl| {
+                                                crate::text_input::compute_char_x_positions(
+                                                    &vl.text,
+                                                    ti_config.font_id,
+                                                    ti_config.font_size,
+                                                    measure_fn.as_ref(),
+                                                )
+                                            }).collect()
+                                        } else {
+                                            visual_lines.iter().map(|_| vec![0.0]).collect()
+                                        };
+
+                                        // Selection rendering (multiline)
+                                        if is_focused {
+                                            if let Some((sel_start, sel_end)) = state.selection_range() {
+                                                let (sel_start_line, sel_start_col) = crate::text_input::cursor_to_visual_pos(&visual_lines, sel_start);
+                                                let (sel_end_line, sel_end_col) = crate::text_input::cursor_to_visual_pos(&visual_lines, sel_end);
+                                                for (line_idx, vl) in visual_lines.iter().enumerate() {
+                                                    if line_idx < sel_start_line || line_idx > sel_end_line {
+                                                        continue;
+                                                    }
+                                                    let positions = &line_positions[line_idx];
+                                                    let col_start = if line_idx == sel_start_line { sel_start_col } else { 0 };
+                                                    let col_end = if line_idx == sel_end_line { sel_end_col } else { vl.char_count };
+                                                    let x_start = positions.get(col_start).copied().unwrap_or(0.0);
+                                                    let x_end = positions.get(col_end).copied().unwrap_or(
+                                                        positions.last().copied().unwrap_or(0.0)
+                                                    );
+                                                    let sel_width = x_end - x_start;
+                                                    if sel_width > 0.0 {
+                                                        let sel_y = current_bbox.y + line_idx as f32 * font_height - scroll_offset_y;
+                                                        self.add_render_command(InternalRenderCommand {
+                                                            bounding_box: BoundingBox::new(
+                                                                current_bbox.x - scroll_offset_x + x_start,
+                                                                sel_y,
+                                                                sel_width,
+                                                                font_height,
+                                                            ),
+                                                            command_type: RenderCommandType::Rectangle,
+                                                            render_data: InternalRenderData::Rectangle {
+                                                                background_color: ti_config.selection_color,
+                                                                corner_radius: CornerRadius::default(),
+                                                            },
+                                                            user_data: 0,
+                                                            id: hash_number(1001 + line_idx as u32, elem_id).id,
+                                                            z_index: root.z_index,
+                                                            visual_rotation: None,
+                                                            shape_rotation: None,
+                                                            effects: Vec::new(),
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Render each visual line of text
+                                        for (line_idx, vl) in visual_lines.iter().enumerate() {
+                                            if !vl.text.is_empty() {
+                                                let positions = &line_positions[line_idx];
+                                                let text_width = positions.last().copied().unwrap_or(0.0);
+                                                let line_y = current_bbox.y + line_idx as f32 * font_height - scroll_offset_y;
+                                                self.add_render_command(InternalRenderCommand {
+                                                    bounding_box: BoundingBox::new(
+                                                        current_bbox.x - scroll_offset_x,
+                                                        line_y,
+                                                        text_width,
+                                                        font_height,
+                                                    ),
+                                                    command_type: RenderCommandType::Text,
+                                                    render_data: InternalRenderData::Text {
+                                                        text: vl.text.clone(),
+                                                        text_color,
+                                                        font_id: ti_config.font_id,
+                                                        font_size: ti_config.font_size,
+                                                        letter_spacing: 0,
+                                                        line_height: 0,
+                                                    },
+                                                    user_data: 0,
+                                                    id: hash_number(2000 + line_idx as u32, elem_id).id,
+                                                    z_index: root.z_index,
+                                                    visual_rotation: None,
+                                                    shape_rotation: None,
+                                                    effects: Vec::new(),
+                                                });
+                                            }
+                                        }
+
+                                        // Cursor (multiline)
+                                        if is_focused && state.cursor_visible() {
+                                            let cursor_positions = &line_positions[cursor_line.min(line_positions.len() - 1)];
+                                            let cursor_x_pos = cursor_positions.get(cursor_col).copied().unwrap_or(0.0);
+                                            let cursor_y = current_bbox.y + cursor_line as f32 * font_height - scroll_offset_y;
+                                            self.add_render_command(InternalRenderCommand {
+                                                bounding_box: BoundingBox::new(
+                                                    current_bbox.x - scroll_offset_x + cursor_x_pos,
+                                                    cursor_y,
+                                                    2.0,
+                                                    font_height,
+                                                ),
+                                                command_type: RenderCommandType::Rectangle,
+                                                render_data: InternalRenderData::Rectangle {
+                                                    background_color: ti_config.cursor_color,
+                                                    corner_radius: CornerRadius::default(),
+                                                },
+                                                user_data: 0,
+                                                id: hash_number(1003, elem_id).id,
+                                                z_index: root.z_index,
+                                                visual_rotation: None,
+                                                shape_rotation: None,
+                                                effects: Vec::new(),
+                                            });
+                                        }
+                                    } else {
+                                        // ── Single-line rendering ──
+                                        let char_x_positions = if let Some(ref measure_fn) = self.measure_text_fn {
+                                            crate::text_input::compute_char_x_positions(
+                                                &disp_text,
+                                                ti_config.font_id,
+                                                ti_config.font_size,
+                                                measure_fn.as_ref(),
+                                            )
+                                        } else {
+                                            vec![0.0]
+                                        };
+
+                                        let scroll_offset = state.scroll_offset;
+                                        let text_x = current_bbox.x - scroll_offset;
+
+                                        // Selection highlight
+                                        if is_focused {
+                                            if let Some((sel_start, sel_end)) = state.selection_range() {
+                                                let sel_start_x = char_x_positions.get(sel_start).copied().unwrap_or(0.0);
+                                                let sel_end_x = char_x_positions.get(sel_end).copied().unwrap_or(0.0);
+                                                let sel_width = sel_end_x - sel_start_x;
+                                                if sel_width > 0.0 {
+                                                    let sel_y = current_bbox.y + (current_bbox.height - font_height) / 2.0;
+                                                    self.add_render_command(InternalRenderCommand {
+                                                        bounding_box: BoundingBox::new(
+                                                            text_x + sel_start_x,
+                                                            sel_y,
+                                                            sel_width,
+                                                            font_height,
+                                                        ),
+                                                        command_type: RenderCommandType::Rectangle,
+                                                        render_data: InternalRenderData::Rectangle {
+                                                            background_color: ti_config.selection_color,
+                                                            corner_radius: CornerRadius::default(),
+                                                        },
+                                                        user_data: 0,
+                                                        id: hash_number(1001, elem_id).id,
+                                                        z_index: root.z_index,
+                                                        visual_rotation: None,
+                                                        shape_rotation: None,
+                                                        effects: Vec::new(),
+                                                    });
+                                                }
+                                            }
+                                        }
+
+                                        // Text
+                                        if !disp_text.is_empty() {
+                                            let text_width = char_x_positions.last().copied().unwrap_or(0.0);
+                                            let text_y = current_bbox.y + (current_bbox.height - font_height) / 2.0;
+                                            self.add_render_command(InternalRenderCommand {
+                                                bounding_box: BoundingBox::new(
+                                                    text_x,
+                                                    text_y,
+                                                    text_width,
+                                                    font_height,
+                                                ),
+                                                command_type: RenderCommandType::Text,
+                                                render_data: InternalRenderData::Text {
+                                                    text: disp_text,
+                                                    text_color,
+                                                    font_id: ti_config.font_id,
+                                                    font_size: ti_config.font_size,
+                                                    letter_spacing: 0,
+                                                    line_height: 0,
+                                                },
+                                                user_data: 0,
+                                                id: hash_number(1002, elem_id).id,
+                                                z_index: root.z_index,
+                                                visual_rotation: None,
+                                                shape_rotation: None,
+                                                effects: Vec::new(),
+                                            });
+                                        }
+
+                                        // Cursor
+                                        if is_focused && state.cursor_visible() {
+                                            let cursor_x_pos = char_x_positions
+                                                .get(if is_placeholder { 0 } else { state.cursor_pos })
+                                                .copied()
+                                                .unwrap_or(0.0);
+                                            let cursor_y = current_bbox.y + (current_bbox.height - font_height) / 2.0;
+                                            self.add_render_command(InternalRenderCommand {
+                                                bounding_box: BoundingBox::new(
+                                                    text_x + cursor_x_pos,
+                                                    cursor_y,
+                                                    2.0,
+                                                    font_height,
+                                                ),
+                                                command_type: RenderCommandType::Rectangle,
+                                                render_data: InternalRenderData::Rectangle {
+                                                    background_color: ti_config.cursor_color,
+                                                    corner_radius: CornerRadius::default(),
+                                                },
+                                                user_data: 0,
+                                                id: hash_number(1003, elem_id).id,
+                                                z_index: root.z_index,
+                                                visual_rotation: None,
+                                                shape_rotation: None,
+                                                effects: Vec::new(),
+                                            });
+                                        }
+                                    }
+
+                                    // End clipping
+                                    self.add_render_command(InternalRenderCommand {
+                                        bounding_box: current_bbox,
+                                        command_type: RenderCommandType::ScissorEnd,
+                                        render_data: InternalRenderData::None,
+                                        user_data: 0,
+                                        id: hash_number(1004, elem_id).id,
+                                        z_index: root.z_index,
+                                        visual_rotation: None,
+                                        shape_rotation: None,
+                                        effects: Vec::new(),
+                                    });
+                                }
+                                // Background already emitted above; skip the default rectangle
+                                emit_rectangle = false;
+                            }
                         }
                     }
 
@@ -3584,17 +4120,41 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         // Fire on_press / on_release callbacks and track pressed element
         match self.pointer_info.state {
             PointerDataInteractionState::PressedThisFrame => {
-                // Clear keyboard focus when the user clicks with the mouse
-                if self.focused_element_id != 0 {
-                    self.change_focus(0);
-                }
+                // Check if clicked element is a text input
+                let clicked_text_input = self.pointer_over_ids.last()
+                    .and_then(|top| self.layout_element_map.get(&top.id))
+                    .map(|item| item.is_text_input)
+                    .unwrap_or(false);
 
-                // Press the topmost hovered element (last in pointer_over_ids)
-                if let Some(top) = self.pointer_over_ids.last().cloned() {
-                    self.pressed_element_id = Some(top.id);
-                    if let Some(item) = self.layout_element_map.get_mut(&top.id) {
-                        if let Some(ref mut callback) = item.on_press_fn {
-                            callback(top);
+                if clicked_text_input {
+                    // Focus the text input (or keep focus if already focused)
+                    if let Some(top) = self.pointer_over_ids.last().cloned() {
+                        if self.focused_element_id != top.id {
+                            self.change_focus(top.id);
+                        }
+                        // Compute click x,y relative to the element's bounding box
+                        if let Some(item) = self.layout_element_map.get(&top.id) {
+                            let click_x = self.pointer_info.position.x - item.bounding_box.x;
+                            let click_y = self.pointer_info.position.y - item.bounding_box.y;
+                            // We can't check shift from here (no keyboard state);
+                            // lib.rs will set shift via a dedicated method if needed.
+                            self.pending_text_click = Some((top.id, click_x, click_y, false));
+                        }
+                        self.pressed_element_id = Some(top.id);
+                    }
+                } else {
+                    // Clear keyboard focus when the user clicks with the mouse
+                    if self.focused_element_id != 0 {
+                        self.change_focus(0);
+                    }
+
+                    // Press the topmost hovered element (last in pointer_over_ids)
+                    if let Some(top) = self.pointer_over_ids.last().cloned() {
+                        self.pressed_element_id = Some(top.id);
+                        if let Some(item) = self.layout_element_map.get_mut(&top.id) {
+                            if let Some(ref mut callback) = item.on_press_fn {
+                                callback(top);
+                            }
                         }
                     }
                 }
@@ -3900,6 +4460,525 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
+    /// Sets text input callbacks for the currently open element.
+    pub fn set_text_input_callbacks(
+        &mut self,
+        on_changed: Option<Box<dyn FnMut(&str)>>,
+        on_submit: Option<Box<dyn FnMut(&str)>>,
+    ) {
+        let open_idx = self.get_open_layout_element();
+        let elem_id = self.layout_elements[open_idx].id;
+        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+            item.on_text_changed_fn = on_changed;
+            item.on_text_submit_fn = on_submit;
+        }
+    }
+
+    /// Returns true if the currently focused element is a text input.
+    pub fn is_text_input_focused(&self) -> bool {
+        if self.focused_element_id == 0 {
+            return false;
+        }
+        self.text_edit_states.contains_key(&self.focused_element_id)
+    }
+
+    /// Returns true if the currently focused text input is multiline.
+    pub fn is_focused_text_input_multiline(&self) -> bool {
+        if self.focused_element_id == 0 {
+            return false;
+        }
+        self.text_input_element_ids.iter()
+            .position(|&id| id == self.focused_element_id)
+            .and_then(|idx| self.text_input_configs.get(idx))
+            .map_or(false, |cfg| cfg.is_multiline)
+    }
+
+    /// Returns the text value for a text input element, or empty string if not found.
+    pub fn get_text_value(&self, element_id: u32) -> &str {
+        self.text_edit_states
+            .get(&element_id)
+            .map(|state| state.text.as_str())
+            .unwrap_or("")
+    }
+
+    /// Sets the text value for a text input element.
+    pub fn set_text_value(&mut self, element_id: u32, value: &str) {
+        if let Some(state) = self.text_edit_states.get_mut(&element_id) {
+            state.text = value.to_string();
+            let char_count = state.text.chars().count();
+            if state.cursor_pos > char_count {
+                state.cursor_pos = char_count;
+            }
+            state.selection_anchor = None;
+            state.reset_blink();
+        }
+    }
+
+    /// Returns true if the given element ID is currently pressed.
+    pub fn is_element_pressed(&self, element_id: u32) -> bool {
+        self.pressed_element_id == Some(element_id)
+    }
+
+    /// Process a character input event for the focused text input.
+    /// Returns true if the character was consumed by a text input.
+    pub fn process_text_input_char(&mut self, ch: char) -> bool {
+        if !self.is_text_input_focused() {
+            return false;
+        }
+        let elem_id = self.focused_element_id;
+
+        // Get max_length from current config (if available this frame)
+        let max_length = self.text_input_element_ids.iter()
+            .position(|&id| id == elem_id)
+            .and_then(|idx| self.text_input_configs.get(idx))
+            .and_then(|cfg| cfg.max_length);
+
+        if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
+            let old_text = state.text.clone();
+            state.insert_text(&ch.to_string(), max_length);
+            if state.text != old_text {
+                let new_text = state.text.clone();
+                // Fire on_changed callback
+                if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+                    if let Some(ref mut callback) = item.on_text_changed_fn {
+                        callback(&new_text);
+                    }
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Process a key event for the focused text input.
+    /// `action` specifies which editing action to perform.
+    /// Returns true if the key was consumed.
+    pub fn process_text_input_action(&mut self, action: TextInputAction) -> bool {
+        if !self.is_text_input_focused() {
+            return false;
+        }
+        let elem_id = self.focused_element_id;
+
+        // Get config for the focused element
+        let config_idx = self.text_input_element_ids.iter()
+            .position(|&id| id == elem_id);
+        let (max_length, is_multiline, font_id, font_size) = config_idx
+            .and_then(|idx| self.text_input_configs.get(idx))
+            .map(|cfg| (cfg.max_length, cfg.is_multiline, cfg.font_id, cfg.font_size))
+            .unwrap_or((None, false, 0, 16));
+
+        // For multiline visual navigation, compute visual lines
+        let visual_lines_opt = if is_multiline {
+            let visible_width = self.layout_element_map
+                .get(&elem_id)
+                .map(|item| item.bounding_box.width)
+                .unwrap_or(0.0);
+            if visible_width > 0.0 {
+                if let Some(state) = self.text_edit_states.get(&elem_id) {
+                    if let Some(ref measure_fn) = self.measure_text_fn {
+                        Some(crate::text_input::wrap_lines(
+                            &state.text,
+                            visible_width,
+                            font_id,
+                            font_size,
+                            measure_fn.as_ref(),
+                        ))
+                    } else { None }
+                } else { None }
+            } else { None }
+        } else { None };
+
+        if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
+            let old_text = state.text.clone();
+            match action {
+                TextInputAction::MoveLeft { shift } => state.move_left(shift),
+                TextInputAction::MoveRight { shift } => state.move_right(shift),
+                TextInputAction::MoveWordLeft { shift } => state.move_word_left(shift),
+                TextInputAction::MoveWordRight { shift } => state.move_word_right(shift),
+                TextInputAction::MoveHome { shift } => {
+                    if let Some(ref vl) = visual_lines_opt {
+                        let new_pos = crate::text_input::visual_line_home(vl, state.cursor_pos);
+                        if shift && state.selection_anchor.is_none() {
+                            state.selection_anchor = Some(state.cursor_pos);
+                        }
+                        state.cursor_pos = new_pos;
+                        if !shift { state.selection_anchor = None; }
+                        else if state.selection_anchor == Some(state.cursor_pos) { state.selection_anchor = None; }
+                        state.reset_blink();
+                    } else {
+                        state.move_home(shift);
+                    }
+                }
+                TextInputAction::MoveEnd { shift } => {
+                    if let Some(ref vl) = visual_lines_opt {
+                        let new_pos = crate::text_input::visual_line_end(vl, state.cursor_pos);
+                        if shift && state.selection_anchor.is_none() {
+                            state.selection_anchor = Some(state.cursor_pos);
+                        }
+                        state.cursor_pos = new_pos;
+                        if !shift { state.selection_anchor = None; }
+                        else if state.selection_anchor == Some(state.cursor_pos) { state.selection_anchor = None; }
+                        state.reset_blink();
+                    } else {
+                        state.move_end(shift);
+                    }
+                }
+                TextInputAction::MoveUp { shift } => {
+                    if let Some(ref vl) = visual_lines_opt {
+                        let new_pos = crate::text_input::visual_move_up(vl, state.cursor_pos);
+                        if shift && state.selection_anchor.is_none() {
+                            state.selection_anchor = Some(state.cursor_pos);
+                        }
+                        state.cursor_pos = new_pos;
+                        if !shift { state.selection_anchor = None; }
+                        else if state.selection_anchor == Some(state.cursor_pos) { state.selection_anchor = None; }
+                        state.reset_blink();
+                    } else {
+                        state.move_up(shift);
+                    }
+                }
+                TextInputAction::MoveDown { shift } => {
+                    if let Some(ref vl) = visual_lines_opt {
+                        let text_len = state.text.chars().count();
+                        let new_pos = crate::text_input::visual_move_down(vl, state.cursor_pos, text_len);
+                        if shift && state.selection_anchor.is_none() {
+                            state.selection_anchor = Some(state.cursor_pos);
+                        }
+                        state.cursor_pos = new_pos;
+                        if !shift { state.selection_anchor = None; }
+                        else if state.selection_anchor == Some(state.cursor_pos) { state.selection_anchor = None; }
+                        state.reset_blink();
+                    } else {
+                        state.move_down(shift);
+                    }
+                }
+                TextInputAction::Backspace => state.backspace(),
+                TextInputAction::Delete => state.delete_forward(),
+                TextInputAction::BackspaceWord => state.backspace_word(),
+                TextInputAction::DeleteWord => state.delete_word_forward(),
+                TextInputAction::SelectAll => state.select_all(),
+                TextInputAction::Copy => {
+                    // Copying doesn't modify state; handled by lib.rs
+                }
+                TextInputAction::Cut => {
+                    state.delete_selection();
+                }
+                TextInputAction::Paste { text } => {
+                    state.insert_text(&text, max_length);
+                }
+                TextInputAction::Submit => {
+                    if is_multiline {
+                        // In multiline mode, Enter inserts a newline
+                        state.insert_text("\n", max_length);
+                    } else {
+                        let text = state.text.clone();
+                        // Fire on_submit callback
+                        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+                            if let Some(ref mut callback) = item.on_text_submit_fn {
+                                callback(&text);
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+            if state.text != old_text {
+                let new_text = state.text.clone();
+                if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+                    if let Some(ref mut callback) = item.on_text_changed_fn {
+                        callback(&new_text);
+                    }
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Update blink timers for all text input states.
+    pub fn update_text_input_blink_timers(&mut self) {
+        let dt = self.frame_delta_time as f64;
+        for state in self.text_edit_states.values_mut() {
+            state.cursor_blink_timer += dt;
+        }
+    }
+
+    /// Update scroll offsets for text inputs to ensure cursor visibility.
+    pub fn update_text_input_scroll(&mut self) {
+        let focused = self.focused_element_id;
+        if focused == 0 {
+            return;
+        }
+        // Get bounding box for the focused text input
+        let (visible_width, visible_height) = self.layout_element_map
+            .get(&focused)
+            .map(|item| (item.bounding_box.width, item.bounding_box.height))
+            .unwrap_or((0.0, 0.0));
+        if visible_width <= 0.0 {
+            return;
+        }
+
+        // Get cursor x-position
+        if let Some(state) = self.text_edit_states.get(&focused) {
+            let config_idx = self.text_input_element_ids.iter()
+                .position(|&id| id == focused);
+            if let Some(idx) = config_idx {
+                if let Some(cfg) = self.text_input_configs.get(idx) {
+                    if let Some(ref measure_fn) = self.measure_text_fn {
+                        let disp_text = crate::text_input::display_text(
+                            &state.text,
+                            &cfg.placeholder,
+                            cfg.is_password && !cfg.is_multiline,
+                        );
+                        if !state.text.is_empty() {
+                            if cfg.is_multiline {
+                                // Multiline: use visual lines with word wrapping
+                                let visual_lines = crate::text_input::wrap_lines(
+                                    &disp_text,
+                                    visible_width,
+                                    cfg.font_id,
+                                    cfg.font_size,
+                                    measure_fn.as_ref(),
+                                );
+                                let (cursor_line, cursor_col) = crate::text_input::cursor_to_visual_pos(&visual_lines, state.cursor_pos);
+                                let vl_text = visual_lines.get(cursor_line).map(|vl| vl.text.as_str()).unwrap_or("");
+                                let line_positions = crate::text_input::compute_char_x_positions(
+                                    vl_text,
+                                    cfg.font_id,
+                                    cfg.font_size,
+                                    measure_fn.as_ref(),
+                                );
+                                let cursor_x = line_positions.get(cursor_col).copied().unwrap_or(0.0);
+                                let font_config = crate::text::TextConfig {
+                                    font_id: cfg.font_id,
+                                    font_size: cfg.font_size,
+                                    ..Default::default()
+                                };
+                                let line_height = measure_fn("Mg", &font_config).height;
+                                if let Some(state_mut) = self.text_edit_states.get_mut(&focused) {
+                                    state_mut.ensure_cursor_visible(cursor_x, visible_width);
+                                    state_mut.ensure_cursor_visible_vertical(cursor_line, line_height, visible_height);
+                                }
+                            } else {
+                                let char_x_positions = crate::text_input::compute_char_x_positions(
+                                    &disp_text,
+                                    cfg.font_id,
+                                    cfg.font_size,
+                                    measure_fn.as_ref(),
+                                );
+                                let cursor_x = char_x_positions
+                                    .get(state.cursor_pos)
+                                    .copied()
+                                    .unwrap_or(0.0);
+                                if let Some(state_mut) = self.text_edit_states.get_mut(&focused) {
+                                    state_mut.ensure_cursor_visible(cursor_x, visible_width);
+                                }
+                            }
+                        } else if let Some(state_mut) = self.text_edit_states.get_mut(&focused) {
+                            state_mut.scroll_offset = 0.0;
+                            state_mut.scroll_offset_y = 0.0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle pointer-based scrolling for text inputs: scroll wheel and drag-to-scroll.
+    /// Mobile-first: dragging scrolls the content rather than selecting text.
+    /// `scroll_delta` contains (x, y) scroll wheel deltas. For single-line, both axes
+    /// map to horizontal scroll. For multiline, y scrolls vertically.
+    pub fn update_text_input_pointer_scroll(&mut self, scroll_delta: Vector2) -> bool {
+        let mut consumed_scroll = false;
+
+        let focused = self.focused_element_id;
+        if focused == 0 {
+            // Still handle drag release
+            if self.text_input_drag_active {
+                let pointer_state = self.pointer_info.state;
+                if matches!(pointer_state, PointerDataInteractionState::ReleasedThisFrame | PointerDataInteractionState::Released) {
+                    self.text_input_drag_active = false;
+                }
+            }
+            return false;
+        }
+
+        // Determine if focused element is a text input and whether it's multiline
+        let ti_info = self.text_input_element_ids.iter()
+            .position(|&id| id == focused)
+            .and_then(|idx| self.text_input_configs.get(idx).map(|cfg| cfg.is_multiline));
+        let is_text_input = ti_info.is_some();
+        let is_multiline = ti_info.unwrap_or(false);
+
+        if !is_text_input {
+            if self.text_input_drag_active {
+                let pointer_state = self.pointer_info.state;
+                if matches!(pointer_state, PointerDataInteractionState::ReleasedThisFrame | PointerDataInteractionState::Released) {
+                    self.text_input_drag_active = false;
+                }
+            }
+            return false;
+        }
+
+        // Check if pointer is over the focused text input
+        let pointer_over_focused = self.layout_element_map.get(&focused)
+            .map(|item| {
+                let bb = item.bounding_box;
+                let p = self.pointer_info.position;
+                p.x >= bb.x && p.x <= bb.x + bb.width
+                    && p.y >= bb.y && p.y <= bb.y + bb.height
+            })
+            .unwrap_or(false);
+
+        // --- Scroll wheel ---
+        let has_scroll = scroll_delta.x.abs() > 0.01 || scroll_delta.y.abs() > 0.01;
+        if has_scroll && pointer_over_focused {
+            if let Some(state) = self.text_edit_states.get_mut(&focused) {
+                if is_multiline {
+                    // Vertical scroll for multiline (y axis)
+                    if scroll_delta.y.abs() > 0.01 {
+                        state.scroll_offset_y -= scroll_delta.y;
+                        if state.scroll_offset_y < 0.0 {
+                            state.scroll_offset_y = 0.0;
+                        }
+                    }
+                } else {
+                    // Horizontal scroll for single-line (use both y and x — y for regular scroll, x for shift+scroll)
+                    let h_delta = if scroll_delta.x.abs() > scroll_delta.y.abs() {
+                        scroll_delta.x
+                    } else {
+                        scroll_delta.y
+                    };
+                    if h_delta.abs() > 0.01 {
+                        state.scroll_offset -= h_delta;
+                        if state.scroll_offset < 0.0 {
+                            state.scroll_offset = 0.0;
+                        }
+                    }
+                }
+                consumed_scroll = true;
+            }
+        }
+
+        // --- Drag scrolling ---
+        let pointer = self.pointer_info.position;
+        let pointer_state = self.pointer_info.state;
+
+        match pointer_state {
+            PointerDataInteractionState::PressedThisFrame => {
+                if pointer_over_focused {
+                    let (scroll_x, scroll_y) = self.text_edit_states.get(&focused)
+                        .map(|s| (s.scroll_offset, s.scroll_offset_y))
+                        .unwrap_or((0.0, 0.0));
+                    self.text_input_drag_active = true;
+                    self.text_input_drag_origin = pointer;
+                    self.text_input_drag_scroll_origin = Vector2::new(scroll_x, scroll_y);
+                    self.text_input_drag_element_id = focused;
+                }
+            }
+            PointerDataInteractionState::Pressed => {
+                if self.text_input_drag_active {
+                    if let Some(state) = self.text_edit_states.get_mut(&self.text_input_drag_element_id) {
+                        if is_multiline {
+                            let drag_delta_y = self.text_input_drag_origin.y - pointer.y;
+                            state.scroll_offset_y = (self.text_input_drag_scroll_origin.y + drag_delta_y).max(0.0);
+                        } else {
+                            let drag_delta_x = self.text_input_drag_origin.x - pointer.x;
+                            state.scroll_offset = (self.text_input_drag_scroll_origin.x + drag_delta_x).max(0.0);
+                        }
+                    }
+                }
+            }
+            PointerDataInteractionState::ReleasedThisFrame
+            | PointerDataInteractionState::Released => {
+                self.text_input_drag_active = false;
+            }
+        }
+        consumed_scroll
+    }
+
+    /// Clamp text input scroll offsets to valid ranges.
+    /// For multiline: clamp scroll_offset_y to [0, total_height - visible_height].
+    /// For single-line: clamp scroll_offset to [0, total_width - visible_width].
+    pub fn clamp_text_input_scroll(&mut self) {
+        for i in 0..self.text_input_element_ids.len() {
+            let elem_id = self.text_input_element_ids[i];
+            let cfg = match self.text_input_configs.get(i) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            let font_id = cfg.font_id;
+            let font_size = cfg.font_size;
+            let is_multiline = cfg.is_multiline;
+            let is_password = cfg.is_password;
+
+            let (visible_width, visible_height) = self.layout_element_map.get(&elem_id)
+                .map(|item| (item.bounding_box.width, item.bounding_box.height))
+                .unwrap_or((200.0, 0.0));
+
+            let text_empty = self.text_edit_states.get(&elem_id)
+                .map(|s| s.text.is_empty())
+                .unwrap_or(true);
+
+            if text_empty {
+                if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {
+                    state_mut.scroll_offset = 0.0;
+                    state_mut.scroll_offset_y = 0.0;
+                }
+                continue;
+            }
+
+            if let Some(ref measure_fn) = self.measure_text_fn {
+                let disp_text = self.text_edit_states.get(&elem_id)
+                    .map(|s| crate::text_input::display_text(&s.text, "", is_password && !is_multiline))
+                    .unwrap_or_default();
+
+                if is_multiline {
+                    let visual_lines = crate::text_input::wrap_lines(
+                        &disp_text,
+                        visible_width,
+                        font_id,
+                        font_size,
+                        measure_fn.as_ref(),
+                    );
+                    let font_height = {
+                        let config = crate::text::TextConfig {
+                            font_id,
+                            font_size,
+                            ..Default::default()
+                        };
+                        measure_fn("Mg", &config).height
+                    };
+                    let total_height = visual_lines.len() as f32 * font_height;
+                    let max_scroll = (total_height - visible_height).max(0.0);
+                    if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {
+                        if state_mut.scroll_offset_y > max_scroll {
+                            state_mut.scroll_offset_y = max_scroll;
+                        }
+                    }
+                } else {
+                    // Single-line: clamp horizontal scroll
+                    let char_x_positions = crate::text_input::compute_char_x_positions(
+                        &disp_text,
+                        font_id,
+                        font_size,
+                        measure_fn.as_ref(),
+                    );
+                    let total_width = char_x_positions.last().copied().unwrap_or(0.0);
+                    let max_scroll = (total_width - visible_width).max(0.0);
+                    if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {
+                        if state_mut.scroll_offset > max_scroll {
+                            state_mut.scroll_offset = max_scroll;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Cycle focus to the next (or previous, if `reverse` is true) focusable element.
     /// This is called when Tab (or Shift+Tab) is pressed.
     pub fn cycle_focus(&mut self, reverse: bool) {
@@ -4137,6 +5216,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             ElementConfigType::Clip => ("Scroll", Color::rgba(242.0, 196.0, 90.0, 255.0)),
             ElementConfigType::Border => ("Border", Color::rgba(108.0, 91.0, 123.0, 255.0)),
             ElementConfigType::Custom => ("Custom", Color::rgba(11.0, 72.0, 107.0, 255.0)),
+            ElementConfigType::TextInput => ("TextInput", Color::rgba(52.0, 152.0, 219.0, 255.0)),
         }
     }
 
@@ -5753,6 +6833,69 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.close_element();
                             self.debug_text("Border Color", info_title_config);
                             self.render_debug_view_color(border_config.color, info_text_config);
+                        }
+                        self.close_element();
+                    }
+                    ElementConfigType::TextInput => {
+                        // ── [Input] section for text input config ──
+                        let input_label_color = Color::rgba(52.0, 152.0, 219.0, 255.0);
+                        self.render_debug_view_category_header("Input", input_label_color, elem_id_string.clone());
+                        let ti_cfg = self.text_input_configs[ec.config_index].clone();
+                        self.debug_open(&ElementDeclaration {
+                            layout: LayoutConfig {
+                                padding: attr_padding,
+                                child_gap: 8,
+                                layout_direction: LayoutDirection::TopToBottom,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        });
+                        {
+                            if !ti_cfg.placeholder.is_empty() {
+                                self.debug_text("Placeholder", info_title_config);
+                                self.debug_raw_text(&ti_cfg.placeholder, info_text_config);
+                            }
+                            self.debug_text("Max Length", info_title_config);
+                            if let Some(max_len) = ti_cfg.max_length {
+                                self.debug_int_text(max_len as f32, info_text_config);
+                            } else {
+                                self.debug_text("unlimited", info_text_config);
+                            }
+                            self.debug_text("Password", info_title_config);
+                            self.debug_text(if ti_cfg.is_password { "true" } else { "false" }, info_text_config);
+                            self.debug_text("Multiline", info_title_config);
+                            self.debug_text(if ti_cfg.is_multiline { "true" } else { "false" }, info_text_config);
+                            self.debug_text("Font", info_title_config);
+                            self.debug_open(&ElementDeclaration::default());
+                            {
+                                self.debug_text("id: ", info_text_config);
+                                self.debug_int_text(ti_cfg.font_id as f32, info_text_config);
+                                self.debug_text(", size: ", info_text_config);
+                                self.debug_int_text(ti_cfg.font_size as f32, info_text_config);
+                            }
+                            self.close_element();
+                            self.debug_text("Text Color", info_title_config);
+                            self.render_debug_view_color(ti_cfg.text_color, info_text_config);
+                            self.debug_text("Cursor Color", info_title_config);
+                            self.render_debug_view_color(ti_cfg.cursor_color, info_text_config);
+                            self.debug_text("Selection Color", info_title_config);
+                            self.render_debug_view_color(ti_cfg.selection_color, info_text_config);
+                            // Show current text value
+                            let state_data = self.text_edit_states.get(&selected_id)
+                                .map(|s| (s.text.clone(), s.cursor_pos));
+                            if let Some((text_val, cursor_pos)) = state_data {
+                                self.debug_text("Value", info_title_config);
+                                let preview = if text_val.len() > 40 {
+                                    let mut end = 40;
+                                    while !text_val.is_char_boundary(end) { end -= 1; }
+                                    format!("\"{}...\"", &text_val[..end])
+                                } else {
+                                    format!("\"{}\"", &text_val)
+                                };
+                                self.debug_raw_text(&preview, info_text_config);
+                                self.debug_text("Cursor Position", info_title_config);
+                                self.debug_int_text(cursor_pos as f32, info_text_config);
+                            }
                         }
                         self.close_element();
                     }

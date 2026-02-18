@@ -14,6 +14,7 @@ pub mod render_commands;
 pub mod shader_build;
 pub mod shaders;
 pub mod text;
+pub mod text_input;
 pub mod renderer;
 #[cfg(feature = "text-styling")]
 pub mod text_styling;
@@ -31,6 +32,10 @@ pub use color::Color;
 pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     context: engine::PlyContext<CustomElementData>,
     headless: bool,
+    /// Key repeat tracking for text input control keys
+    text_input_repeat_key: u32,
+    text_input_repeat_first: f64,
+    text_input_repeat_last: f64,
     #[cfg(target_arch = "wasm32")]
     web_a11y_state: accessibility_web::WebAccessibilityState,
     #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
@@ -51,6 +56,8 @@ pub struct ElementBuilder<'ply, CustomElementData: Clone + Default + std::fmt::D
     on_release_fn: Option<Box<dyn FnMut(Id) + 'static>>,
     on_focus_fn: Option<Box<dyn FnMut(Id) + 'static>>,
     on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'static>>,
+    text_input_on_changed_fn: Option<Box<dyn FnMut(&str) + 'static>>,
+    text_input_on_submit_fn: Option<Box<dyn FnMut(&str) + 'static>>,
 }
 
 impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
@@ -327,9 +334,44 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
+    /// Configures this element as a text input using a closure-based builder.
+    ///
+    /// The element will capture keyboard input when focused and render
+    /// text, cursor, and selection internally.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// ui.element()
+    ///     .id("username")
+    ///     .text_input(|t| t
+    ///         .placeholder("Enter username")
+    ///         .max_length(32)
+    ///         .font_size(18)
+    ///         .on_changed(|text| println!("Text changed: {}", text))
+    ///         .on_submit(|text| println!("Submitted: {}", text))
+    ///     )
+    ///     .empty();
+    /// ```
+    #[inline]
+    pub fn text_input(
+        mut self,
+        f: impl for<'a> FnOnce(&'a mut text_input::TextInputBuilder) -> &'a mut text_input::TextInputBuilder,
+    ) -> Self {
+        let mut builder = text_input::TextInputBuilder::new();
+        f(&mut builder);
+        self.inner.text_input = Some(builder.config);
+        self.text_input_on_changed_fn = builder.on_changed_fn;
+        self.text_input_on_submit_fn = builder.on_submit_fn;
+        self
+    }
+
     /// Finalizes the element with children defined in a closure.
     pub fn children(self, f: impl FnOnce(&mut Ply<CustomElementData>)) -> Id {
-        let ElementBuilder { ply, inner, id, on_press_fn, on_release_fn, on_focus_fn, on_unfocus_fn } = self;
+        let ElementBuilder {
+            ply, inner, id,
+            on_press_fn, on_release_fn, on_focus_fn, on_unfocus_fn,
+            text_input_on_changed_fn, text_input_on_submit_fn,
+        } = self;
         if let Some(ref id) = id {
             ply.context.open_element_with_id(id);
         } else {
@@ -343,6 +385,9 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         }
         if on_focus_fn.is_some() || on_unfocus_fn.is_some() {
             ply.context.set_focus_callbacks(on_focus_fn, on_unfocus_fn);
+        }
+        if text_input_on_changed_fn.is_some() || text_input_on_submit_fn.is_some() {
+            ply.context.set_text_input_callbacks(text_input_on_changed_fn, text_input_on_submit_fn);
         }
 
         f(ply);
@@ -385,7 +430,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 macroquad::prelude::screen_width(),
                 macroquad::prelude::screen_height(),
             ));
+
+            // Update timing
+            self.context.current_time = macroquad::prelude::get_time();
+            self.context.frame_delta_time = macroquad::prelude::get_frame_time();
         }
+
+        // Update blink timers for text inputs
+        self.context.update_text_input_blink_timers();
 
         // Auto-update pointer state from macroquad
         if !self.headless {
@@ -393,32 +445,239 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             let is_down = macroquad::prelude::is_mouse_button_down(
                 macroquad::prelude::MouseButton::Left,
             );
+
+            // Check shift state for text input click-to-cursor
+            // Must happen AFTER set_pointer_state, since that's what creates pending_text_click.
             self.context.set_pointer_state(Vector2::new(mx, my), is_down);
+
+            {
+                use macroquad::prelude::{is_key_down, KeyCode};
+                let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+                if shift {
+                    // If shift is held and there's a pending text click, update it
+                    if let Some(ref mut pending) = self.context.pending_text_click {
+                        pending.3 = true;
+                    }
+                }
+            }
 
             let (scroll_x, scroll_y) = macroquad::prelude::mouse_wheel();
             const SCROLL_SPEED: f32 = 20.0;
+            // Shift+scroll wheel swaps vertical to horizontal scrolling
+            let scroll_shift = {
+                use macroquad::prelude::{is_key_down, KeyCode};
+                is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift)
+            };
+            let scroll_delta = if scroll_shift {
+                // Shift held: vertical scroll becomes horizontal
+                Vector2::new(
+                    (scroll_x + scroll_y) * SCROLL_SPEED,
+                    0.0,
+                )
+            } else {
+                Vector2::new(scroll_x * SCROLL_SPEED, scroll_y * SCROLL_SPEED)
+            };
+
+            // Text input pointer scrolling (scroll wheel + drag) — consumes scroll if applicable
+            let text_consumed_scroll = self.context.update_text_input_pointer_scroll(scroll_delta);
+            self.context.clamp_text_input_scroll();
+
+            // Only pass scroll to scroll containers if text input didn't consume it
+            let container_scroll = if text_consumed_scroll {
+                Vector2::new(0.0, 0.0)
+            } else {
+                scroll_delta
+            };
             self.context.update_scroll_containers(
                 true,
-                Vector2::new(scroll_x * SCROLL_SPEED, scroll_y * SCROLL_SPEED),
+                container_scroll,
                 macroquad::prelude::get_frame_time(),
             );
 
-            // Keyboard navigation
+            // Keyboard input handling
             use macroquad::prelude::{is_key_pressed, is_key_down, is_key_released, KeyCode};
 
+            let text_input_focused = self.context.is_text_input_focused();
+
+            // Tab always cycles focus (even when text input is focused)
             if is_key_pressed(KeyCode::Tab) {
                 let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
                 self.context.cycle_focus(shift);
+            } else if text_input_focused {
+                // Route keyboard input to text editing
+                let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+                let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+                let time = self.context.current_time;
+
+                // Key repeat constants
+                const INITIAL_DELAY: f64 = 0.5;
+                const REPEAT_INTERVAL: f64 = 0.033;
+
+                // Helper: check if a key should fire (pressed or repeating)
+                macro_rules! key_fires {
+                    ($key:expr, $id:expr) => {{
+                        if is_key_pressed($key) {
+                            self.text_input_repeat_key = $id;
+                            self.text_input_repeat_first = time;
+                            self.text_input_repeat_last = time;
+                            true
+                        } else if is_key_down($key) && self.text_input_repeat_key == $id {
+                            let since_first = time - self.text_input_repeat_first;
+                            let since_last = time - self.text_input_repeat_last;
+                            if since_first > INITIAL_DELAY && since_last > REPEAT_INTERVAL {
+                                self.text_input_repeat_last = time;
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }};
+                }
+
+                // Handle special keys with repeat support
+                let mut cursor_moved = false;
+                if key_fires!(KeyCode::Left, 1) {
+                    if ctrl {
+                        self.context.process_text_input_action(engine::TextInputAction::MoveWordLeft { shift });
+                    } else {
+                        self.context.process_text_input_action(engine::TextInputAction::MoveLeft { shift });
+                    }
+                    cursor_moved = true;
+                }
+                if key_fires!(KeyCode::Right, 2) {
+                    if ctrl {
+                        self.context.process_text_input_action(engine::TextInputAction::MoveWordRight { shift });
+                    } else {
+                        self.context.process_text_input_action(engine::TextInputAction::MoveRight { shift });
+                    }
+                    cursor_moved = true;
+                }
+                if key_fires!(KeyCode::Backspace, 3) {
+                    if ctrl {
+                        self.context.process_text_input_action(engine::TextInputAction::BackspaceWord);
+                    } else {
+                        self.context.process_text_input_action(engine::TextInputAction::Backspace);
+                    }
+                    cursor_moved = true;
+                }
+                if key_fires!(KeyCode::Delete, 4) {
+                    if ctrl {
+                        self.context.process_text_input_action(engine::TextInputAction::DeleteWord);
+                    } else {
+                        self.context.process_text_input_action(engine::TextInputAction::Delete);
+                    }
+                    cursor_moved = true;
+                }
+                if key_fires!(KeyCode::Home, 5) {
+                    self.context.process_text_input_action(engine::TextInputAction::MoveHome { shift });
+                    cursor_moved = true;
+                }
+                if key_fires!(KeyCode::End, 6) {
+                    self.context.process_text_input_action(engine::TextInputAction::MoveEnd { shift });
+                    cursor_moved = true;
+                }
+
+                // Up/Down arrows for multiline
+                if self.context.is_focused_text_input_multiline() {
+                    if key_fires!(KeyCode::Up, 7) {
+                        self.context.process_text_input_action(engine::TextInputAction::MoveUp { shift });
+                        cursor_moved = true;
+                    }
+                    if key_fires!(KeyCode::Down, 8) {
+                        self.context.process_text_input_action(engine::TextInputAction::MoveDown { shift });
+                        cursor_moved = true;
+                    }
+                }
+
+                // Non-repeating keys
+                if is_key_pressed(KeyCode::Enter) {
+                    self.context.process_text_input_action(engine::TextInputAction::Submit);
+                    cursor_moved = true;
+                }
+                if ctrl && is_key_pressed(KeyCode::A) {
+                    self.context.process_text_input_action(engine::TextInputAction::SelectAll);
+                }
+                if ctrl && is_key_pressed(KeyCode::C) {
+                    // Copy selected text to clipboard
+                    let elem_id = self.context.focused_element_id;
+                    if let Some(state) = self.context.text_edit_states.get(&elem_id) {
+                        let selected = state.selected_text().to_string();
+                        if !selected.is_empty() {
+                            macroquad::miniquad::window::clipboard_set(&selected);
+                        }
+                    }
+                }
+                if ctrl && is_key_pressed(KeyCode::X) {
+                    // Cut: copy then delete selection
+                    let elem_id = self.context.focused_element_id;
+                    if let Some(state) = self.context.text_edit_states.get(&elem_id) {
+                        let selected = state.selected_text().to_string();
+                        if !selected.is_empty() {
+                            macroquad::miniquad::window::clipboard_set(&selected);
+                        }
+                    }
+                    self.context.process_text_input_action(engine::TextInputAction::Cut);
+                    cursor_moved = true;
+                }
+                if ctrl && is_key_pressed(KeyCode::V) {
+                    // Paste from clipboard
+                    if let Some(text) = macroquad::miniquad::window::clipboard_get() {
+                        self.context.process_text_input_action(engine::TextInputAction::Paste { text });
+                        cursor_moved = true;
+                    }
+                }
+
+                // Escape unfocuses the text input
+                if is_key_pressed(KeyCode::Escape) {
+                    self.context.clear_focus();
+                }
+
+                // Clear repeat state if the tracked key was released
+                if self.text_input_repeat_key != 0 {
+                    let still_down = match self.text_input_repeat_key {
+                        1 => is_key_down(KeyCode::Left),
+                        2 => is_key_down(KeyCode::Right),
+                        3 => is_key_down(KeyCode::Backspace),
+                        4 => is_key_down(KeyCode::Delete),
+                        5 => is_key_down(KeyCode::Home),
+                        6 => is_key_down(KeyCode::End),
+                        7 => is_key_down(KeyCode::Up),
+                        8 => is_key_down(KeyCode::Down),
+                        _ => false,
+                    };
+                    if !still_down {
+                        self.text_input_repeat_key = 0;
+                    }
+                }
+
+                // Drain character input queue
+                while let Some(ch) = macroquad::prelude::get_char_pressed() {
+                    // Filter out control characters and Ctrl-key combos
+                    if !ch.is_control() && !ctrl {
+                        self.context.process_text_input_char(ch);
+                        cursor_moved = true;
+                    }
+                }
+
+                // Update scroll to keep cursor visible (only when cursor moved, not every frame,
+                // so that manual scrolling via scroll wheel / drag isn't immediately undone).
+                if cursor_moved {
+                    self.context.update_text_input_scroll();
+                }
+                self.context.clamp_text_input_scroll();
+            } else {
+                // Normal keyboard navigation (non-text-input)
+                if is_key_pressed(KeyCode::Right) { self.context.arrow_focus(engine::ArrowDirection::Right); }
+                if is_key_pressed(KeyCode::Left)  { self.context.arrow_focus(engine::ArrowDirection::Left); }
+                if is_key_pressed(KeyCode::Up)    { self.context.arrow_focus(engine::ArrowDirection::Up); }
+                if is_key_pressed(KeyCode::Down)  { self.context.arrow_focus(engine::ArrowDirection::Down); }
+
+                let activate_pressed = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space);
+                let activate_released = is_key_released(KeyCode::Enter) || is_key_released(KeyCode::Space);
+                self.context.handle_keyboard_activation(activate_pressed, activate_released);
             }
-
-            if is_key_pressed(KeyCode::Right) { self.context.arrow_focus(engine::ArrowDirection::Right); }
-            if is_key_pressed(KeyCode::Left)  { self.context.arrow_focus(engine::ArrowDirection::Left); }
-            if is_key_pressed(KeyCode::Up)    { self.context.arrow_focus(engine::ArrowDirection::Up); }
-            if is_key_pressed(KeyCode::Down)  { self.context.arrow_focus(engine::ArrowDirection::Down); }
-
-            let activate_pressed = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space);
-            let activate_released = is_key_released(KeyCode::Enter) || is_key_released(KeyCode::Space);
-            self.context.handle_keyboard_activation(activate_pressed, activate_released);
         }
 
         self.context.begin_layout();
@@ -438,6 +697,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             on_release_fn: None,
             on_focus_fn: None,
             on_unfocus_fn: None,
+            text_input_on_changed_fn: None,
+            text_input_on_submit_fn: None,
         }
     }
 
@@ -474,6 +735,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         let mut ply = Self {
             context: engine::PlyContext::new(dimensions),
             headless: false,
+            text_input_repeat_key: 0,
+            text_input_repeat_first: 0.0,
+            text_input_repeat_last: 0.0,
             #[cfg(target_arch = "wasm32")]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
@@ -491,6 +755,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         Self {
             context: engine::PlyContext::new(dimensions),
             headless: true,
+            text_input_repeat_key: 0,
+            text_input_repeat_first: 0.0,
+            text_input_repeat_last: 0.0,
             #[cfg(target_arch = "wasm32")]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
@@ -632,6 +899,23 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     /// Clears focus (no element is focused).
     pub fn clear_focus(&mut self) {
         self.context.clear_focus();
+    }
+
+    /// Returns the text value of a text input element.
+    /// Returns an empty string if the element is not a text input or doesn't exist.
+    pub fn get_text_value(&self, id: impl Into<Id>) -> &str {
+        self.context.get_text_value(id.into().id)
+    }
+
+    /// Sets the text value of a text input element.
+    pub fn set_text_value(&mut self, id: impl Into<Id>, value: &str) {
+        self.context.set_text_value(id.into().id, value);
+    }
+
+    /// Returns true if the given element is currently pressed
+    /// (pointer held down on it).
+    pub fn is_pressed(&self, id: impl Into<Id>) -> bool {
+        self.context.is_element_pressed(id.into().id)
     }
 
     pub fn bounding_box(&self, id: Id) -> Option<math::BoundingBox> {
