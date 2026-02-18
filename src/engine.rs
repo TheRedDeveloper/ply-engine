@@ -90,6 +90,8 @@ pub enum TextInputAction {
     Cut,
     Paste { text: String },
     Submit,
+    Undo,
+    Redo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4535,6 +4537,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
         if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
             let old_text = state.text.clone();
+            state.push_undo(crate::text_input::UndoActionKind::InsertChar);
             state.insert_text(&ch.to_string(), max_length);
             if state.text != old_text {
                 let new_text = state.text.clone();
@@ -4591,6 +4594,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
         if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
             let old_text = state.text.clone();
+
+            // Push undo before text-modifying actions
+            match &action {
+                TextInputAction::Backspace => state.push_undo(crate::text_input::UndoActionKind::Backspace),
+                TextInputAction::Delete => state.push_undo(crate::text_input::UndoActionKind::Delete),
+                TextInputAction::BackspaceWord => state.push_undo(crate::text_input::UndoActionKind::DeleteWord),
+                TextInputAction::DeleteWord => state.push_undo(crate::text_input::UndoActionKind::DeleteWord),
+                TextInputAction::Cut => state.push_undo(crate::text_input::UndoActionKind::Cut),
+                TextInputAction::Paste { .. } => state.push_undo(crate::text_input::UndoActionKind::Paste),
+                TextInputAction::Submit if is_multiline => state.push_undo(crate::text_input::UndoActionKind::InsertChar),
+                _ => {}
+            }
+
             match action {
                 TextInputAction::MoveLeft { shift } => state.move_left(shift),
                 TextInputAction::MoveRight { shift } => state.move_right(shift),
@@ -4681,6 +4697,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                         return true;
                     }
+                }
+                TextInputAction::Undo => {
+                    state.undo();
+                }
+                TextInputAction::Redo => {
+                    state.redo();
                 }
             }
             if state.text != old_text {

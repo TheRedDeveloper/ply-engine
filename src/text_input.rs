@@ -1,5 +1,36 @@
 use crate::color::Color;
 
+/// Identifies what kind of edit an undo entry was, for grouping consecutive similar edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoActionKind {
+    /// Inserting a single character (consecutive inserts are grouped).
+    InsertChar,
+    /// Inserting text from paste (not grouped).
+    Paste,
+    /// Deleting via Backspace (consecutive deletes are grouped).
+    Backspace,
+    /// Deleting via Delete key (consecutive deletes are grouped).
+    Delete,
+    /// Deleting a word (not grouped).
+    DeleteWord,
+    /// Cutting selected text (not grouped).
+    Cut,
+    /// Any other discrete change (not grouped).
+    Other,
+}
+
+/// A snapshot of text state for undo/redo.
+#[derive(Debug, Clone)]
+pub struct UndoEntry {
+    pub text: String,
+    pub cursor_pos: usize,
+    pub selection_anchor: Option<usize>,
+    pub action_kind: UndoActionKind,
+}
+
+/// Maximum number of undo entries to keep.
+const MAX_UNDO_STACK: usize = 200;
+
 /// Persistent text editing state per text input element.
 /// Keyed by element `u32` ID in `PlyContext::text_edit_states`.
 #[derive(Debug, Clone)]
@@ -20,6 +51,10 @@ pub struct TextEditState {
     pub last_click_time: f64,
     /// Element ID of last click (for double-click detection).
     pub last_click_element: u32,
+    /// Undo stack: previous states (newest at end).
+    pub undo_stack: Vec<UndoEntry>,
+    /// Redo stack: states undone (newest at end).
+    pub redo_stack: Vec<UndoEntry>,
 }
 
 impl Default for TextEditState {
@@ -33,6 +68,8 @@ impl Default for TextEditState {
             cursor_blink_timer: 0.0,
             last_click_time: 0.0,
             last_click_element: 0,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 }
@@ -346,6 +383,80 @@ impl TextEditState {
         }
         if self.scroll_offset_y < 0.0 {
             self.scroll_offset_y = 0.0;
+        }
+    }
+
+    /// Push the current state onto the undo stack before an edit.
+    /// `kind` controls grouping: consecutive edits of the same kind are merged
+    /// (only InsertChar, Backspace, and Delete are grouped).
+    pub fn push_undo(&mut self, kind: UndoActionKind) {
+        // Grouping: if the last undo entry has the same kind and it's a groupable kind,
+        // don't push a new entry (the original pre-group state is already saved).
+        let should_group = matches!(kind, UndoActionKind::InsertChar | UndoActionKind::Backspace | UndoActionKind::Delete);
+        if should_group {
+            if let Some(last) = self.undo_stack.last() {
+                if last.action_kind == kind {
+                    // Same groupable action — skip push, keep the original entry
+                    // Clear redo stack since we're making a new edit
+                    self.redo_stack.clear();
+                    return;
+                }
+            }
+        }
+
+        self.undo_stack.push(UndoEntry {
+            text: self.text.clone(),
+            cursor_pos: self.cursor_pos,
+            selection_anchor: self.selection_anchor,
+            action_kind: kind,
+        });
+        // Limit stack size
+        if self.undo_stack.len() > MAX_UNDO_STACK {
+            self.undo_stack.remove(0);
+        }
+        // Any new edit clears the redo stack
+        self.redo_stack.clear();
+    }
+
+    /// Undo the last edit. Returns true if undo was performed.
+    pub fn undo(&mut self) -> bool {
+        if let Some(entry) = self.undo_stack.pop() {
+            // Save current state to redo stack
+            self.redo_stack.push(UndoEntry {
+                text: self.text.clone(),
+                cursor_pos: self.cursor_pos,
+                selection_anchor: self.selection_anchor,
+                action_kind: entry.action_kind,
+            });
+            // Restore
+            self.text = entry.text;
+            self.cursor_pos = entry.cursor_pos;
+            self.selection_anchor = entry.selection_anchor;
+            self.reset_blink();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Redo the last undone edit. Returns true if redo was performed.
+    pub fn redo(&mut self) -> bool {
+        if let Some(entry) = self.redo_stack.pop() {
+            // Save current state to undo stack
+            self.undo_stack.push(UndoEntry {
+                text: self.text.clone(),
+                cursor_pos: self.cursor_pos,
+                selection_anchor: self.selection_anchor,
+                action_kind: entry.action_kind,
+            });
+            // Restore
+            self.text = entry.text;
+            self.cursor_pos = entry.cursor_pos;
+            self.selection_anchor = entry.selection_anchor;
+            self.reset_blink();
+            true
+        } else {
+            false
         }
     }
 
@@ -1482,5 +1593,112 @@ mod tests {
         // Cursor at pos 3 (line 0, col 3) → home = 0, end = 6
         assert_eq!(visual_line_home(&lines, 3), 0);
         assert_eq!(visual_line_end(&lines, 3), 6);
+    }
+
+    #[test]
+    fn test_undo_basic() {
+        let mut state = TextEditState::default();
+        state.text = "hello".to_string();
+        state.cursor_pos = 5;
+
+        // Push undo, then modify
+        state.push_undo(UndoActionKind::Paste);
+        state.insert_text(" world", None);
+        assert_eq!(state.text, "hello world");
+
+        // Undo should restore
+        assert!(state.undo());
+        assert_eq!(state.text, "hello");
+        assert_eq!(state.cursor_pos, 5);
+
+        // Redo should restore the edit
+        assert!(state.redo());
+        assert_eq!(state.text, "hello world");
+        assert_eq!(state.cursor_pos, 11);
+    }
+
+    #[test]
+    fn test_undo_grouping_insert_char() {
+        let mut state = TextEditState::default();
+
+        // Simulate typing "abc" one char at a time
+        state.push_undo(UndoActionKind::InsertChar);
+        state.insert_text("a", None);
+        state.push_undo(UndoActionKind::InsertChar);
+        state.insert_text("b", None);
+        state.push_undo(UndoActionKind::InsertChar);
+        state.insert_text("c", None);
+        assert_eq!(state.text, "abc");
+
+        // Should undo all at once (grouped)
+        assert!(state.undo());
+        assert_eq!(state.text, "");
+        assert_eq!(state.cursor_pos, 0);
+
+        // No more undos
+        assert!(!state.undo());
+    }
+
+    #[test]
+    fn test_undo_grouping_backspace() {
+        let mut state = TextEditState::default();
+        state.text = "hello".to_string();
+        state.cursor_pos = 5;
+
+        // Backspace 3 times
+        state.push_undo(UndoActionKind::Backspace);
+        state.backspace();
+        state.push_undo(UndoActionKind::Backspace);
+        state.backspace();
+        state.push_undo(UndoActionKind::Backspace);
+        state.backspace();
+        assert_eq!(state.text, "he");
+
+        // Should undo all backspaces at once
+        assert!(state.undo());
+        assert_eq!(state.text, "hello");
+    }
+
+    #[test]
+    fn test_undo_different_kinds_not_grouped() {
+        let mut state = TextEditState::default();
+
+        // Type then delete — different kinds, not grouped
+        state.push_undo(UndoActionKind::InsertChar);
+        state.insert_text("abc", None);
+        state.push_undo(UndoActionKind::Backspace);
+        state.backspace();
+        assert_eq!(state.text, "ab");
+
+        // First undo restores before backspace
+        assert!(state.undo());
+        assert_eq!(state.text, "abc");
+
+        // Second undo restores before insert
+        assert!(state.undo());
+        assert_eq!(state.text, "");
+    }
+
+    #[test]
+    fn test_redo_cleared_on_new_edit() {
+        let mut state = TextEditState::default();
+
+        state.push_undo(UndoActionKind::Paste);
+        state.insert_text("hello", None);
+        state.undo();
+        assert_eq!(state.text, "");
+        assert!(!state.redo_stack.is_empty());
+
+        // New edit should clear redo
+        state.push_undo(UndoActionKind::Paste);
+        state.insert_text("world", None);
+        assert!(state.redo_stack.is_empty());
+    }
+
+    #[test]
+    fn test_undo_empty_stack() {
+        let mut state = TextEditState::default();
+        assert!(!state.undo());
+        assert!(!state.redo());
     }
 }

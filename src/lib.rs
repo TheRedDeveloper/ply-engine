@@ -599,6 +599,18 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 if ctrl && is_key_pressed(KeyCode::A) {
                     self.context.process_text_input_action(engine::TextInputAction::SelectAll);
                 }
+                if ctrl && is_key_pressed(KeyCode::Z) {
+                    if shift {
+                        self.context.process_text_input_action(engine::TextInputAction::Redo);
+                    } else {
+                        self.context.process_text_input_action(engine::TextInputAction::Undo);
+                    }
+                    cursor_moved = true;
+                }
+                if ctrl && is_key_pressed(KeyCode::Y) {
+                    self.context.process_text_input_action(engine::TextInputAction::Redo);
+                    cursor_moved = true;
+                }
                 if ctrl && is_key_pressed(KeyCode::C) {
                     // Copy selected text to clipboard
                     let elem_id = self.context.focused_element_id;
