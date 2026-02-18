@@ -273,7 +273,9 @@ enum PlatformAdapter {
     /// Marker — actual adapter lives in the `WINDOWS_A11Y` static so the
     /// wndproc hook (a plain `fn` pointer) can access it for `WM_GETOBJECT`.
     Windows,
-    /// Fallback for platforms without an adapter (e.g. Android/iOS in the future).
+    #[cfg(target_os = "android")]
+    Android(accesskit_android::InjectingAdapter),
+    /// Fallback for platforms without an adapter (e.g. iOS in the future).
     None,
 }
 
@@ -574,7 +576,52 @@ impl NativeAccessibilityState {
             self.adapter = PlatformAdapter::Windows;
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            // Android: Use InjectingAdapter which sets an accessibility delegate
+            // on the View, letting TalkBack discover our accessibility tree.
+            //
+            // We retrieve the View via JNI by calling:
+            //   activity.getWindow().getDecorView()
+            // using miniquad's existing ACTIVITY global ref and attach_jni_env().
+            use accesskit_android::jni;
+
+            let adapter = unsafe {
+                let raw_env = macroquad::miniquad::native::android::attach_jni_env();
+                let mut env = jni::JNIEnv::from_raw(raw_env as *mut _)
+                    .expect("Failed to wrap JNIEnv");
+
+                let activity = jni::objects::JObject::from_raw(
+                    macroquad::miniquad::native::android::ACTIVITY as _,
+                );
+
+                // activity.getWindow() → android.view.Window
+                let window = env
+                    .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])
+                    .expect("getWindow() failed")
+                    .l()
+                    .expect("getWindow() did not return an object");
+
+                // window.getDecorView() → android.view.View
+                let decor_view = env
+                    .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])
+                    .expect("getDecorView() failed")
+                    .l()
+                    .expect("getDecorView() did not return an object");
+
+                accesskit_android::InjectingAdapter::new(
+                    &mut env,
+                    &decor_view,
+                    PlyActivationHandler {
+                        initial_tree: Mutex::new(Some(initial_tree)),
+                    },
+                    PlyActionHandler { queue },
+                )
+            };
+            self.adapter = PlatformAdapter::Android(adapter);
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))]
         {
             let _ = (queue, initial_tree);
             self.adapter = PlatformAdapter::None;
@@ -677,6 +724,10 @@ pub fn sync_accessibility_tree(
             if let Some(events) = pending {
                 events.raise();
             }
+        }
+        #[cfg(target_os = "android")]
+        PlatformAdapter::Android(adapter) => {
+            adapter.update_if_active(|| update);
         }
         PlatformAdapter::None => {
             let _ = update;

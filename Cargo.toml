@@ -15,7 +15,7 @@ text-styling = []
 tinyvg = ["dep:tinyvg", "dep:kurbo", "dep:lyon"]
 shader-build = ["dep:spirv-cross2"]
 built-in-shaders = []
-native-a11y = ["dep:accesskit", "dep:accesskit_unix", "dep:accesskit_macos", "dep:accesskit_windows"]
+native-a11y = ["dep:accesskit", "dep:accesskit_unix", "dep:accesskit_macos", "dep:accesskit_windows", "dep:accesskit_android"]
 
 [dependencies]
 macroquad = { version = "0.4", git = "https://github.com/TheRedDeveloper/macroquad-fix" } # Temporary fix for a bug in macroquad, will switch back to the official version once it's fixed.
@@ -35,3 +35,6 @@ accesskit_macos = { version = "0.25", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit_windows = { version = "0.32", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+accesskit_android = { version = "0.7", optional = true, features = ["embedded-dex"] }
