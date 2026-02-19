@@ -25,6 +25,26 @@ miniquad_add_plugin({
 
                 // Tell screen readers the canvas "owns" the hidden tree
                 canvas.setAttribute("aria-owns", "ply-a11y-root");
+
+                // Fix Ctrl/Meta + letter shortcuts on non-QWERTY layouts
+                // (e.g. QWERTZ where Z and Y are swapped). miniquad uses
+                // event.code (physical key position, always QWERTY) to map
+                // key codes. We patch the code property in the capture phase
+                // (before miniquad's bubble-phase handler) so shortcuts like
+                // Ctrl+Z resolve to the layout-aware letter, not the physical
+                // QWERTY position.
+                function fixLayoutCode(e) {
+                    if ((e.ctrlKey || e.metaKey) && e.key && e.key.length === 1) {
+                        var upper = e.key.toUpperCase();
+                        if (upper >= 'A' && upper <= 'Z') {
+                            Object.defineProperty(e, 'code', {
+                                value: 'Key' + upper
+                            });
+                        }
+                    }
+                }
+                canvas.addEventListener("keydown", fixLayoutCode, true);
+                canvas.addEventListener("keyup", fixLayoutCode, true);
             }
         };
 
@@ -163,6 +183,117 @@ miniquad_add_plugin({
             for (var i = 0; i < count; i++) {
                 var el = nodes[ids[i]];
                 if (el) a11y_root.appendChild(el);
+            }
+        };
+
+        // Virtual keyboard support for mobile web.
+        // Creates a hidden textarea that triggers the on-screen keyboard
+        // when focused, and forwards input events to the canvas.
+        var vk_input = null;
+        imp.env.ply_show_virtual_keyboard = function (show) {
+            if (show) {
+                if (!vk_input) {
+                    vk_input = document.createElement("textarea");
+                    vk_input.id = "ply-virtual-keyboard";
+                    vk_input.autocapitalize = "off";
+                    vk_input.autocomplete = "off";
+                    vk_input.spellcheck = false;
+                    vk_input.style.cssText =
+                        "position:fixed;left:0;top:0;width:1px;height:1px;" +
+                        "opacity:0;z-index:-1;pointer-events:none;";
+                    document.body.appendChild(vk_input);
+
+                    // Forward character input back to the canvas
+                    vk_input.addEventListener("input", function () {
+                        var text = vk_input.value;
+                        vk_input.value = "";
+                        for (var i = 0; i < text.length; i++) {
+                            var code = text.charCodeAt(i);
+                            // Skip control characters
+                            if (code >= 32) {
+                                canvas.dispatchEvent(
+                                    new KeyboardEvent("keypress", {
+                                        charCode: code,
+                                        keyCode: code,
+                                        bubbles: true,
+                                    })
+                                );
+                            }
+                        }
+                    });
+
+                    // Forward control keys (Backspace, Enter, arrows, etc.)
+                    // Only forward the initial press (not browser-generated
+                    // repeats) — Rust has its own repeat logic.
+                    // Also forward all Ctrl/Meta combos (undo, redo, copy,
+                    // paste, cut, select-all) so they reach the canvas.
+                    vk_input.addEventListener("keydown", function (e) {
+                        var forward = [
+                            "Backspace", "Delete", "Enter", "Tab", "Escape",
+                            "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+                            "Home", "End",
+                        ];
+                        var shouldForward =
+                            forward.indexOf(e.key) !== -1 ||
+                            e.ctrlKey || e.metaKey;
+                        if (shouldForward) {
+                            if (!e.repeat) {
+                                // For Ctrl/Meta combos, map e.key to the correct
+                                // code so non-QWERTY layouts work correctly.
+                                var fwdCode = e.code;
+                                if ((e.ctrlKey || e.metaKey) && e.key && e.key.length === 1) {
+                                    var upper = e.key.toUpperCase();
+                                    if (upper >= 'A' && upper <= 'Z') {
+                                        fwdCode = 'Key' + upper;
+                                    }
+                                }
+                                canvas.dispatchEvent(
+                                    new KeyboardEvent("keydown", {
+                                        key: e.key,
+                                        code: fwdCode,
+                                        keyCode: e.keyCode,
+                                        ctrlKey: e.ctrlKey,
+                                        shiftKey: e.shiftKey,
+                                        altKey: e.altKey,
+                                        metaKey: e.metaKey,
+                                        bubbles: true,
+                                    })
+                                );
+                            }
+                            e.preventDefault();
+                        }
+                    });
+
+                    // Forward keyup so the Rust key-repeat tracker knows
+                    // the key was released and stops repeating.
+                    vk_input.addEventListener("keyup", function (e) {
+                        var fwdCode = e.code;
+                        if ((e.ctrlKey || e.metaKey) && e.key && e.key.length === 1) {
+                            var upper = e.key.toUpperCase();
+                            if (upper >= 'A' && upper <= 'Z') {
+                                fwdCode = 'Key' + upper;
+                            }
+                        }
+                        canvas.dispatchEvent(
+                            new KeyboardEvent("keyup", {
+                                key: e.key,
+                                code: fwdCode,
+                                keyCode: e.keyCode,
+                                ctrlKey: e.ctrlKey,
+                                shiftKey: e.shiftKey,
+                                altKey: e.altKey,
+                                metaKey: e.metaKey,
+                                bubbles: true,
+                            })
+                        );
+                    });
+                }
+                vk_input.focus({ preventScroll: true });
+            } else {
+                if (vk_input) {
+                    vk_input.blur();
+                }
+                canvas.focus();
             }
         };
     },

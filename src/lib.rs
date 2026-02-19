@@ -32,17 +32,23 @@ pub use color::Color;
 pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     context: engine::PlyContext<CustomElementData>,
     headless: bool,
+    fonts: Vec<macroquad::prelude::Font>,
     /// Key repeat tracking for text input control keys
     text_input_repeat_key: u32,
     text_input_repeat_first: f64,
     text_input_repeat_last: f64,
+    /// Which element was focused when the current repeat started.
+    /// Used to clear stale repeat state on focus change.
+    text_input_repeat_focus_id: u32,
+    /// Track virtual keyboard state to avoid redundant show/hide calls
+    was_text_input_focused: bool,
     #[cfg(target_arch = "wasm32")]
     web_a11y_state: accessibility_web::WebAccessibilityState,
     #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
     native_a11y_state: accessibility_native::NativeAccessibilityState,
 }
 
-pub struct PlyLayoutScope<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+pub struct Ui<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     ply: &'ply mut Ply<CustomElementData>,
 }
 
@@ -82,12 +88,6 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     pub fn background_color(mut self, color: impl Into<Color>) -> Self {
         self.inner.background_color = color.into();
         self
-    }
-
-    /// Shorthand alias for `background_color`.
-    #[inline]
-    pub fn color(self, color: impl Into<Color>) -> Self {
-        self.background_color(color)
     }
 
     /// Sets the corner radius.
@@ -366,7 +366,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 
     /// Finalizes the element with children defined in a closure.
-    pub fn children(self, f: impl FnOnce(&mut Ply<CustomElementData>)) -> Id {
+    pub fn children(self, f: impl FnOnce(&mut Ui<'_, CustomElementData>)) -> Id {
         let ElementBuilder {
             ply, inner, id,
             on_press_fn, on_release_fn, on_focus_fn, on_unfocus_fn,
@@ -390,9 +390,9 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
             ply.context.set_text_input_callbacks(text_input_on_changed_fn, text_input_on_submit_fn);
         }
 
-        f(ply);
-
-        ply.context.close_element();
+        let mut ui = Ui { ply };
+        f(&mut ui);
+        ui.ply.context.close_element();
 
         Id { id: element_id, ..Default::default() }
     }
@@ -404,7 +404,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
 }
 
 impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::Deref
-    for PlyLayoutScope<'ply, CustomElementData>
+    for Ui<'ply, CustomElementData>
 {
     type Target = Ply<CustomElementData>;
 
@@ -414,17 +414,88 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::Dere
 }
 
 impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::DerefMut
-    for PlyLayoutScope<'ply, CustomElementData>
+    for Ui<'ply, CustomElementData>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.ply
     }
 }
 
+impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, CustomElementData> {
+    /// Creates a new element builder for configuring and adding an element.
+    /// Finalize with `.children(|ui| {...})` or `.empty()`.
+    pub fn element(&mut self) -> ElementBuilder<'_, CustomElementData> {
+        ElementBuilder {
+            ply: &mut *self.ply,
+            inner: engine::ElementDeclaration::default(),
+            id: None,
+            on_press_fn: None,
+            on_release_fn: None,
+            on_focus_fn: None,
+            on_unfocus_fn: None,
+            text_input_on_changed_fn: None,
+            text_input_on_submit_fn: None,
+        }
+    }
+
+    /// Adds a text element to the current open element or to the root layout.
+    pub fn text(&mut self, text: &str, config_fn: impl FnOnce(&mut TextConfig) -> &mut TextConfig) {
+        let mut config = TextConfig::new();
+        config_fn(&mut config);
+        let text_config_index = self.ply.context.store_text_element_config(config);
+        self.ply.context.open_text_element(text, text_config_index);
+    }
+
+    pub fn on_hover<F>(&mut self, callback: F)
+    where
+        F: FnMut(Id, engine::PointerData) + 'static,
+    {
+        self.ply.context.on_hover(Box::new(callback));
+    }
+
+    pub fn scroll_offset(&self) -> Vector2 {
+        self.ply.context.get_scroll_offset()
+    }
+
+    /// Generates a locally unique ID based on the given `label`.
+    ///
+    /// The ID is unique within a specific local scope but not globally.
+    #[inline]
+    pub fn id_local(&self, label: &'static str) -> id::Id {
+        let parent_id = self.ply.context.get_parent_element_id();
+        id::Id::new_index_local_with_parent(label, 0, parent_id)
+    }
+
+    /// Generates a locally unique indexed ID based on the given `label` and `index`.
+    ///
+    /// This is useful for differentiating elements within a local scope while keeping their labels consistent.
+    #[inline]
+    pub fn id_index_local(&self, label: &'static str, index: u32) -> id::Id {
+        let parent_id = self.ply.context.get_parent_element_id();
+        id::Id::new_index_local_with_parent(label, index, parent_id)
+    }
+
+    /// Returns if the current element you are creating is hovered
+    pub fn hovered(&self) -> bool {
+        self.ply.context.hovered()
+    }
+
+    /// Returns if the current element you are creating is pressed
+    /// (pointer held down on it, or Enter/Space held on focused element)
+    pub fn pressed(&self) -> bool {
+        self.ply.context.pressed()
+    }
+
+    /// Returns if the current element you are creating has focus.
+    pub fn focused(&self) -> bool {
+        self.ply.context.focused()
+    }
+}
+
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData> {
     pub fn begin(
         &mut self,
-    ) -> PlyLayoutScope<'_, CustomElementData> {
+    ) -> Ui<'_, CustomElementData> {
         if !self.headless {
             self.context.set_layout_dimensions(Dimensions::new(
                 macroquad::prelude::screen_width(),
@@ -498,6 +569,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             use macroquad::prelude::{is_key_pressed, is_key_down, is_key_released, KeyCode};
 
             let text_input_focused = self.context.is_text_input_focused();
+            let current_focused_id = self.context.focused_element_id;
+
+            // Clear key-repeat state when focus changes (prevents stale
+            // repeat from one text input bleeding into another).
+            if current_focused_id != self.text_input_repeat_focus_id {
+                self.text_input_repeat_key = 0;
+                self.text_input_repeat_focus_id = current_focused_id;
+            }
 
             // Tab always cycles focus (even when text input is focused)
             if is_key_pressed(KeyCode::Tab) {
@@ -692,45 +771,26 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             }
         }
 
+        // Show/hide virtual keyboard when text input focus changes (mobile)
+        {
+            let text_input_focused = self.context.is_text_input_focused();
+            if text_input_focused != self.was_text_input_focused {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    macroquad::miniquad::window::show_keyboard(text_input_focused);
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    unsafe { ply_show_virtual_keyboard(text_input_focused); }
+                }
+                self.was_text_input_focused = text_input_focused;
+            }
+        }
+
         self.context.begin_layout();
-        PlyLayoutScope {
+        Ui {
             ply: self,
         }
-    }
-
-    /// Creates a new element builder for configuring and adding an element.
-    /// Finalize with `.children(|ui| {...})` or `.empty()`.
-    pub fn element(&mut self) -> ElementBuilder<'_, CustomElementData> {
-        ElementBuilder {
-            ply: self,
-            inner: engine::ElementDeclaration::default(),
-            id: None,
-            on_press_fn: None,
-            on_release_fn: None,
-            on_focus_fn: None,
-            on_unfocus_fn: None,
-            text_input_on_changed_fn: None,
-            text_input_on_submit_fn: None,
-        }
-    }
-
-    /// Adds a text element to the current open element or to the root layout.
-    pub fn text(&mut self, text: &str, config_fn: impl FnOnce(&mut TextConfig) -> &mut TextConfig) {
-        let mut config = TextConfig::new();
-        config_fn(&mut config);
-        let text_config_index = self.context.store_text_element_config(config);
-        self.context.open_text_element(text, text_config_index);
-    }
-
-    pub fn on_hover<F>(&mut self, callback: F)
-    where
-        F: FnMut(Id, engine::PointerData) + 'static,
-    {
-        self.context.on_hover(Box::new(callback));
-    }
-
-    pub fn scroll_offset(&self) -> Vector2 {
-        self.context.get_scroll_offset()
     }
 
     /// Create a new Ply engine with the given fonts.
@@ -747,9 +807,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         let mut ply = Self {
             context: engine::PlyContext::new(dimensions),
             headless: false,
+            fonts: fonts.clone(),
             text_input_repeat_key: 0,
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
+            text_input_repeat_focus_id: 0,
+            was_text_input_focused: false,
             #[cfg(target_arch = "wasm32")]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
@@ -767,9 +830,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         Self {
             context: engine::PlyContext::new(dimensions),
             headless: true,
+            fonts: vec![],
             text_input_repeat_key: 0,
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
+            text_input_repeat_focus_id: 0,
+            was_text_input_focused: false,
             #[cfg(target_arch = "wasm32")]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
@@ -779,22 +845,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
 
     /// Generates a locally unique ID based on the given `label`.
     ///
-    /// The ID is unique within a specific local scope but not globally.
-    #[inline]
-    pub fn id_local(&self, label: &'static str) -> id::Id {
-        let parent_id = self.context.get_parent_element_id();
-        id::Id::new_index_local_with_parent(label, 0, parent_id)
-    }
-
-    /// Generates a locally unique indexed ID based on the given `label` and `index`.
-    ///
-    /// This is useful for differentiating elements within a local scope while keeping their labels consistent.
-    #[inline]
-    pub fn id_index_local(&self, label: &'static str, index: u32) -> id::Id {
-        let parent_id = self.context.get_parent_element_id();
-        id::Id::new_index_local_with_parent(label, index, parent_id)
-    }
-
     pub fn pointer_over(&self, cfg: Id) -> bool {
         self.context.pointer_over(cfg)
     }
@@ -880,22 +930,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     ) {
         self.context
             .update_scroll_containers(drag_scrolling_enabled, scroll_delta, delta_time);
-    }
-
-    /// Returns if the current element you are creating is hovered
-    pub fn hovered(&self) -> bool {
-        self.context.hovered()
-    }
-
-    /// Returns if the current element you are creating is pressed
-    /// (pointer held down on it, or Enter/Space held on focused element)
-    pub fn pressed(&self) -> bool {
-        self.context.pressed()
-    }
-
-    /// Returns if the current element you are creating has focus.
-    pub fn focused(&self) -> bool {
-        self.context.focused()
     }
 
     /// Returns the ID of the currently focused element, or None.
@@ -985,8 +1019,21 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
 
         result
     }
+
+    /// Evaluate the layout and render all commands.
+    pub async fn show(
+        &mut self,
+        handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
+    ) {
+        let commands = self.eval();
+        renderer::render(commands, &self.fonts, handle_custom_command).await;
+    }
 }
 
+#[cfg(target_arch = "wasm32")]
+extern "C" {
+    fn ply_show_virtual_keyboard(show: bool);
+}
 
 #[cfg(test)]
 mod tests {

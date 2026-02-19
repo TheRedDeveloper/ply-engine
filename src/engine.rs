@@ -4816,18 +4816,62 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let mut consumed_scroll = false;
 
         let focused = self.focused_element_id;
+
+        // --- Scroll wheel: scroll any hovered text input (even if unfocused) ---
+        let has_scroll = scroll_delta.x.abs() > 0.01 || scroll_delta.y.abs() > 0.01;
+        if has_scroll {
+            let p = self.pointer_info.position;
+            // Find the text input under the pointer
+            let hovered_ti = self.text_input_element_ids.iter().enumerate().find(|&(_, &id)| {
+                self.layout_element_map.get(&id)
+                    .map(|item| {
+                        let bb = item.bounding_box;
+                        p.x >= bb.x && p.x <= bb.x + bb.width
+                            && p.y >= bb.y && p.y <= bb.y + bb.height
+                    })
+                    .unwrap_or(false)
+            });
+            if let Some((idx, &elem_id)) = hovered_ti {
+                let is_multiline = self.text_input_configs.get(idx)
+                    .map(|cfg| cfg.is_multiline)
+                    .unwrap_or(false);
+                if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
+                    if is_multiline {
+                        if scroll_delta.y.abs() > 0.01 {
+                            state.scroll_offset_y -= scroll_delta.y;
+                            if state.scroll_offset_y < 0.0 {
+                                state.scroll_offset_y = 0.0;
+                            }
+                        }
+                    } else {
+                        let h_delta = if scroll_delta.x.abs() > scroll_delta.y.abs() {
+                            scroll_delta.x
+                        } else {
+                            scroll_delta.y
+                        };
+                        if h_delta.abs() > 0.01 {
+                            state.scroll_offset -= h_delta;
+                            if state.scroll_offset < 0.0 {
+                                state.scroll_offset = 0.0;
+                            }
+                        }
+                    }
+                    consumed_scroll = true;
+                }
+            }
+        }
+
+        // --- Drag scrolling (focused text input only) ---
         if focused == 0 {
-            // Still handle drag release
             if self.text_input_drag_active {
                 let pointer_state = self.pointer_info.state;
                 if matches!(pointer_state, PointerDataInteractionState::ReleasedThisFrame | PointerDataInteractionState::Released) {
                     self.text_input_drag_active = false;
                 }
             }
-            return false;
+            return consumed_scroll;
         }
 
-        // Determine if focused element is a text input and whether it's multiline
         let ti_info = self.text_input_element_ids.iter()
             .position(|&id| id == focused)
             .and_then(|idx| self.text_input_configs.get(idx).map(|cfg| cfg.is_multiline));
@@ -4841,10 +4885,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     self.text_input_drag_active = false;
                 }
             }
-            return false;
+            return consumed_scroll;
         }
 
-        // Check if pointer is over the focused text input
         let pointer_over_focused = self.layout_element_map.get(&focused)
             .map(|item| {
                 let bb = item.bounding_box;
@@ -4854,37 +4897,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             })
             .unwrap_or(false);
 
-        // --- Scroll wheel ---
-        let has_scroll = scroll_delta.x.abs() > 0.01 || scroll_delta.y.abs() > 0.01;
-        if has_scroll && pointer_over_focused {
-            if let Some(state) = self.text_edit_states.get_mut(&focused) {
-                if is_multiline {
-                    // Vertical scroll for multiline (y axis)
-                    if scroll_delta.y.abs() > 0.01 {
-                        state.scroll_offset_y -= scroll_delta.y;
-                        if state.scroll_offset_y < 0.0 {
-                            state.scroll_offset_y = 0.0;
-                        }
-                    }
-                } else {
-                    // Horizontal scroll for single-line (use both y and x — y for regular scroll, x for shift+scroll)
-                    let h_delta = if scroll_delta.x.abs() > scroll_delta.y.abs() {
-                        scroll_delta.x
-                    } else {
-                        scroll_delta.y
-                    };
-                    if h_delta.abs() > 0.01 {
-                        state.scroll_offset -= h_delta;
-                        if state.scroll_offset < 0.0 {
-                            state.scroll_offset = 0.0;
-                        }
-                    }
-                }
-                consumed_scroll = true;
-            }
-        }
-
-        // --- Drag scrolling ---
         let pointer = self.pointer_info.position;
         let pointer_state = self.pointer_info.state;
 

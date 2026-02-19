@@ -35,7 +35,6 @@ use ply_engine::{
     fixed, grow,
     Color, Ply,
     layout::{LayoutAlignmentX, LayoutAlignmentY, LayoutDirection},
-    renderer::render,
 };
 
 // Configure the window, I recommend these settings
@@ -66,7 +65,7 @@ async fn main() {
     let fonts = vec![load_ttf_font("assets/lexend.ttf").await.unwrap()];
 
     // Create the engine
-    let mut ply = Ply::<()>::new(fonts.clone());
+    let mut ply = Ply::<()>::new(fonts);
 
     loop {
         clear_background(BLACK);
@@ -85,7 +84,7 @@ async fn main() {
                 // A colored box
                 ui.element().width(fixed!(200.0)).height(fixed!(100.0))
                     .corner_radius(8.0)
-                    .color(0x45A85A)
+                    .background_color(0x45A85A)
                     .empty();
 
                 // Some text below that box
@@ -95,7 +94,7 @@ async fn main() {
                 );
             });
 
-        render(ui.eval(), &fonts, |_| {}).await;
+        ui.show(|_| {}).await;
 
         next_frame().await;
     }
@@ -118,7 +117,7 @@ ui.element().width(fixed!(250.0)).height(grow!())
         .color(0x333333)
         .right(2)
     )
-    .color(0x1A1A2E)
+    .background_color(0x1A1A2E)
     .children(|ui| {
         // children go here
     });
@@ -187,7 +186,7 @@ static GRADIENT: ShaderAsset = ShaderAsset::Source {
 
 ui.element().width(fixed!(150.0)).height(fixed!(100.0))
     .corner_radius(12.0)
-    .color(0xFFFFFF)
+    .background_color(0xFFFFFF)
     .effect(&GRADIENT, |s| {
         s.uniform("color_a", [0.2f32, 0.6, 1.0, 1.0])
          .uniform("color_b", [1.0f32, 0.3, 0.5, 1.0]);
