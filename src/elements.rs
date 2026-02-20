@@ -1,29 +1,6 @@
+use crate::align::{AlignX, AlignY};
+use crate::id::Id;
 use crate::{color::Color, Dimensions, Vector2, engine};
-
-/// Represents different attachment points for floating elements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[repr(u8)]
-pub enum FloatingAttachPointType {
-    /// Attaches to the top-left of the parent.
-    #[default]
-    LeftTop,
-    /// Attaches to the center-left of the parent.
-    LeftCenter,
-    /// Attaches to the bottom-left of the parent.
-    LeftBottom,
-    /// Attaches to the top-center of the parent.
-    CenterTop,
-    /// Attaches to the center of the parent.
-    CenterCenter,
-    /// Attaches to the bottom-center of the parent.
-    CenterBottom,
-    /// Attaches to the top-right of the parent.
-    RightTop,
-    /// Attaches to the center-right of the parent.
-    RightCenter,
-    /// Attaches to the bottom-right of the parent.
-    RightBottom,
-}
 
 /// Specifies how pointer capture should behave for floating elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -89,29 +66,51 @@ impl FloatingBuilder {
         self
     }
 
-    /// Sets the parent element ID.
-    #[inline]
-    pub fn parent_id(&mut self, id: u32) -> &mut Self {
-        self.config.parent_id = id;
-        self
-    }
-
     /// Sets the attachment points of the floating element and its parent.
+    ///
+    /// Each tuple is `(AlignX, AlignY)` — the first for the element, the second for the parent.
+    /// ```ignore
+    /// .floating(|f| f.anchor((CenterX, Bottom), (CenterX, Top)))
+    /// ```
     #[inline]
     pub fn anchor(
         &mut self,
-        element: FloatingAttachPointType,
-        parent: FloatingAttachPointType,
+        element: (AlignX, AlignY),
+        parent: (AlignX, AlignY),
     ) -> &mut Self {
-        self.config.attach_points.element = element;
-        self.config.attach_points.parent = parent;
+        self.config.attach_points.element_x = element.0;
+        self.config.attach_points.element_y = element.1;
+        self.config.attach_points.parent_x = parent.0;
+        self.config.attach_points.parent_y = parent.1;
         self
     }
 
-    /// Sets how the floating element is attached to other elements.
+    /// Attaches this floating element to its parent element (default behavior).
     #[inline]
-    pub fn attach(&mut self, attach: FloatingAttachToElement) -> &mut Self {
-        self.config.attach_to = attach;
+    pub fn attach_parent(&mut self) -> &mut Self {
+        self.config.attach_to = FloatingAttachToElement::Parent;
+        self
+    }
+
+    /// Attaches this floating element to the root of the layout.
+    #[inline]
+    pub fn attach_root(&mut self) -> &mut Self {
+        self.config.attach_to = FloatingAttachToElement::Root;
+        self
+    }
+
+    /// Attaches this floating element to a specific element by ID.
+    #[inline]
+    pub fn attach_id(&mut self, id: impl Into<Id>) -> &mut Self {
+        self.config.attach_to = FloatingAttachToElement::ElementWithId;
+        self.config.parent_id = id.into().id;
+        self
+    }
+
+    /// Clips this floating element to its parent's bounds.
+    #[inline]
+    pub fn clip_by_parent(&mut self) -> &mut Self {
+        self.config.clip_to = FloatingClipToElement::AttachedParent;
         self
     }
 
@@ -119,13 +118,6 @@ impl FloatingBuilder {
     #[inline]
     pub fn passthrough(&mut self) -> &mut Self {
         self.config.pointer_capture_mode = PointerCaptureMode::Passthrough;
-        self
-    }
-
-    /// Sets the pointer capture mode.
-    #[inline]
-    pub fn pointer_capture_mode(&mut self, mode: PointerCaptureMode) -> &mut Self {
-        self.config.pointer_capture_mode = mode;
         self
     }
 }

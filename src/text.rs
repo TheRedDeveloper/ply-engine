@@ -1,7 +1,10 @@
-use crate::color::Color;use crate::shaders::{ShaderAsset, ShaderBuilder, ShaderConfig};
+use crate::align::AlignX;
+use crate::color::Color;
+use crate::shaders::{ShaderAsset, ShaderBuilder, ShaderConfig};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
-pub enum TextElementConfigWrapMode {
+pub enum WrapMode {
     /// Wraps on whitespaces not breaking words
     #[default]
     Words,
@@ -9,18 +12,6 @@ pub enum TextElementConfigWrapMode {
     Newline,
     /// Never wraps, can overflow of parent layout
     None,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[repr(u8)]
-pub enum TextAlignment {
-    /// Aligns the text to the left.
-    #[default]
-    Left,
-    /// Aligns the text to the center.
-    Center,
-    /// Aligns the text to the right.
-    Right,
 }
 
 /// Configuration settings for rendering text elements.
@@ -40,9 +31,9 @@ pub struct TextConfig {
     /// The height of each line of text.
     pub line_height: u16,
     /// Defines the text wrapping behavior.
-    pub wrap_mode: TextElementConfigWrapMode,
+    pub wrap_mode: WrapMode,
     /// The alignment of the text.
-    pub alignment: TextAlignment,
+    pub alignment: AlignX,
     /// Per-element shader effects applied to this text.
     pub(crate) effects: Vec<ShaderConfig>,
     /// When true, the text content is exposed to screen readers as static text.
@@ -92,14 +83,14 @@ impl TextConfig {
 
     /// Sets the text wrapping mode.
     #[inline]
-    pub fn wrap_mode(&mut self, mode: TextElementConfigWrapMode) -> &mut Self {
+    pub fn wrap_mode(&mut self, mode: WrapMode) -> &mut Self {
         self.wrap_mode = mode;
         self
     }
 
     /// Sets the text alignment.
     #[inline]
-    pub fn alignment(&mut self, alignment: TextAlignment) -> &mut Self {
+    pub fn alignment(&mut self, alignment: AlignX) -> &mut Self {
         self.alignment = alignment;
         self
     }
@@ -137,8 +128,8 @@ impl Default for TextConfig {
             font_size: 0,
             letter_spacing: 0,
             line_height: 0,
-            wrap_mode: TextElementConfigWrapMode::Words,
-            alignment: TextAlignment::Left,
+            wrap_mode: WrapMode::Words,
+            alignment: AlignX::Left,
             effects: Vec::new(),
             accessible: false,
         }

@@ -245,9 +245,15 @@ impl AccessibilityBuilder {
         self
     }
 
-    /// Sets the live region mode for dynamic content announcements.
-    pub fn live_region(&mut self, mode: LiveRegionMode) -> &mut Self {
-        self.config.live_region = mode;
+    /// Sets the live region to polite — screen reader announces changes on next idle.
+    pub fn live_region_polite(&mut self) -> &mut Self {
+        self.config.live_region = LiveRegionMode::Polite;
+        self
+    }
+
+    /// Sets the live region to assertive — screen reader interrupts to announce changes.
+    pub fn live_region_assertive(&mut self) -> &mut Self {
+        self.config.live_region = LiveRegionMode::Assertive;
         self
     }
 }

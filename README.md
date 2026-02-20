@@ -20,22 +20,17 @@ A pure Rust UI layout engine built on [macroquad](https://github.com/not-fl3/mac
 
 ```toml
 [dependencies]
-ply-engine = "0.4"
+ply-engine = "0.5"
 macroquad = { version = "0.4", git = "https://github.com/TheRedDeveloper/macroquad-fix" } # You have to this temporarily until the PR is merged to fix dragging issues
 
 # Optional features:
-# ply-engine = { version = "0.4", features = ["text-styling", "tinyvg", "built-in-shaders"] }
+# ply-engine = { version = "0.5", features = ["text-styling", "tinyvg", "built-in-shaders"] }
 ```
 
 ## Quick Start
 
 ```rust
-use macroquad::prelude::*;
-use ply_engine::{
-    fixed, grow,
-    Color, Ply,
-    layout::{LayoutAlignmentX, LayoutAlignmentY, LayoutDirection},
-};
+use ply_engine::prelude::*;
 
 // Configure the window, I recommend these settings
 fn window_conf() -> macroquad::conf::Conf {
@@ -68,7 +63,7 @@ async fn main() {
     let mut ply = Ply::<()>::new(fonts);
 
     loop {
-        clear_background(BLACK);
+        clear_background(MacroquadColor::new(0.0, 0.0, 0.0, 1.0));
 
         // Begin layout
         let mut ui = ply.begin();
@@ -76,9 +71,9 @@ async fn main() {
         // A column filling the screen
         ui.element().width(grow!()).height(grow!())
             .layout(|l| l
-                .direction(LayoutDirection::TopToBottom)
+                .direction(TopToBottom)
                 .gap(16)
-                .align(LayoutAlignmentX::Center, LayoutAlignmentY::Center)
+                .align(CenterX, CenterY)
             )
             .children(|ui| {
                 // A colored box
@@ -109,7 +104,7 @@ Layouts are built with a closure-based nesting API. The `element()` builder conf
 ui.element().width(fixed!(250.0)).height(grow!())
     .id("sidebar")
     .layout(|l| l
-        .direction(LayoutDirection::TopToBottom)
+        .direction(TopToBottom)
         .gap(8)
         .padding(16)
     )

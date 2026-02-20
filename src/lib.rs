@@ -3,6 +3,7 @@ pub mod accessibility;
 pub mod accessibility_web;
 #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
 pub mod accessibility_native;
+pub mod align;
 pub mod color;
 pub mod elements;
 pub mod engine;
@@ -20,6 +21,7 @@ pub mod renderer;
 pub mod text_styling;
 #[cfg(feature = "built-in-shaders")]
 pub mod built_in_shaders;
+pub mod prelude;
 
 use id::Id;
 use math::{Dimensions, Vector2};
@@ -1203,7 +1205,7 @@ mod tests {
                 .layout(|l| l
                     .direction(crate::layout::LayoutDirection::LeftToRight)
                     .gap(12)
-                    .align(crate::layout::LayoutAlignmentX::Left, crate::layout::LayoutAlignmentY::Center)
+                    .align(crate::align::AlignX::Left, crate::align::AlignY::CenterY)
                 )
                 .children(|ui| {
                     ui.text(label, |t| t
@@ -1413,10 +1415,10 @@ mod tests {
         });
 
         ui.element().width(fixed!(20.0)).height(fixed!(20.0))
-            .layout(|l| l.align(crate::layout::LayoutAlignmentX::Center, crate::layout::LayoutAlignmentY::Center))
+            .layout(|l| l.align(crate::align::AlignX::CenterX, crate::align::AlignY::CenterY))
             .floating(|f| f
-                .attach(crate::elements::FloatingAttachToElement::Root)
-                .anchor(crate::elements::FloatingAttachPointType::CenterCenter, crate::elements::FloatingAttachPointType::LeftTop)
+                .attach_root()
+                .anchor((crate::align::AlignX::CenterX, crate::align::AlignY::CenterY), (crate::align::AlignX::Left, crate::align::AlignY::Top))
                 .offset(100.0, 150.0)
                 .passthrough()
                 .z_index(110)

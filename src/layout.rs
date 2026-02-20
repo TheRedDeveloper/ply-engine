@@ -1,3 +1,4 @@
+use crate::align::{AlignX, AlignY};
 use crate::engine;
 
 /// Defines different sizing behaviors for an element.
@@ -114,46 +115,6 @@ impl From<(u16, u16, u16, u16)> for Padding {
     }
 }
 
-/// Represents horizontal alignment options for layout elements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[repr(u8)]
-pub enum LayoutAlignmentX {
-    /// Aligns to the left.
-    #[default]
-    Left,
-    /// Centers the element.
-    Center,
-    /// Aligns to the right.
-    Right,
-}
-
-/// Represents vertical alignment options for layout elements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[repr(u8)]
-pub enum LayoutAlignmentY {
-    /// Aligns to the top.
-    #[default]
-    Top,
-    /// Centers the element.
-    Center,
-    /// Aligns to the bottom.
-    Bottom,
-}
-
-/// Controls child alignment within a layout.
-#[derive(Debug, Copy, Clone)]
-pub struct Alignment {
-    pub x: LayoutAlignmentX,
-    pub y: LayoutAlignmentY,
-}
-
-impl Alignment {
-    /// Creates a new alignment setting for a layout.
-    pub fn new(x: LayoutAlignmentX, y: LayoutAlignmentY) -> Self {
-        Self { x, y }
-    }
-}
-
 /// Defines the layout direction for arranging child elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -181,7 +142,7 @@ impl LayoutBuilder {
 
     /// Sets the alignment of child elements using separate X and Y values.
     #[inline]
-    pub fn align(&mut self, x: LayoutAlignmentX, y: LayoutAlignmentY) -> &mut Self {
+    pub fn align(&mut self, x: AlignX, y: AlignY) -> &mut Self {
         self.config.child_alignment.x = x;
         self.config.child_alignment.y = y;
         self

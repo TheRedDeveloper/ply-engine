@@ -3,15 +3,16 @@
 
 use std::collections::HashMap;
 
+use crate::align::{AlignX, AlignY};
 use crate::color::Color;
 use crate::renderer::ImageSource;
 use crate::shaders::ShaderConfig;
 use crate::elements::{
-    FloatingAttachPointType, FloatingAttachToElement, FloatingClipToElement, PointerCaptureMode,
+    FloatingAttachToElement, FloatingClipToElement, PointerCaptureMode,
 };
-use crate::layout::{LayoutAlignmentX, LayoutAlignmentY, LayoutDirection};
+use crate::layout::LayoutDirection;
 use crate::math::{BoundingBox, Dimensions, Vector2};
-use crate::text::{TextAlignment, TextConfig, TextElementConfigWrapMode};
+use crate::text::{TextConfig, WrapMode};
 
 // ============================================================================
 // Constants
@@ -141,8 +142,8 @@ pub struct PaddingConfig {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ChildAlignmentConfig {
-    pub x: LayoutAlignmentX,
-    pub y: LayoutAlignmentY,
+    pub x: AlignX,
+    pub y: AlignY,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -265,8 +266,10 @@ impl ShapeRotationConfig {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FloatingAttachPoints {
-    pub element: FloatingAttachPointType,
-    pub parent: FloatingAttachPointType,
+    pub element_x: AlignX,
+    pub element_y: AlignY,
+    pub parent_x: AlignX,
+    pub parent_y: AlignY,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2279,7 +2282,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ElementConfigType::Text,
                         ) {
                             self.text_element_configs[text_cfg_idx].wrap_mode
-                                == TextElementConfigWrapMode::Words
+                                == WrapMode::Words
                         } else {
                             false
                         }
@@ -2839,68 +2842,48 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         let mut target = Vector2::default();
 
                         // X position - parent attach point
-                        match config.attach_points.parent {
-                            FloatingAttachPointType::LeftTop
-                            | FloatingAttachPointType::LeftCenter
-                            | FloatingAttachPointType::LeftBottom => {
+                        match config.attach_points.parent_x {
+                            AlignX::Left => {
                                 target.x = parent_bbox.x;
                             }
-                            FloatingAttachPointType::CenterTop
-                            | FloatingAttachPointType::CenterCenter
-                            | FloatingAttachPointType::CenterBottom => {
+                            AlignX::CenterX => {
                                 target.x = parent_bbox.x + parent_bbox.width / 2.0;
                             }
-                            FloatingAttachPointType::RightTop
-                            | FloatingAttachPointType::RightCenter
-                            | FloatingAttachPointType::RightBottom => {
+                            AlignX::Right => {
                                 target.x = parent_bbox.x + parent_bbox.width;
                             }
                         }
                         // X position - element attach point
-                        match config.attach_points.element {
-                            FloatingAttachPointType::CenterTop
-                            | FloatingAttachPointType::CenterCenter
-                            | FloatingAttachPointType::CenterBottom => {
+                        match config.attach_points.element_x {
+                            AlignX::Left => {}
+                            AlignX::CenterX => {
                                 target.x -= root_dims.width / 2.0;
                             }
-                            FloatingAttachPointType::RightTop
-                            | FloatingAttachPointType::RightCenter
-                            | FloatingAttachPointType::RightBottom => {
+                            AlignX::Right => {
                                 target.x -= root_dims.width;
                             }
-                            _ => {}
                         }
                         // Y position - parent attach point
-                        match config.attach_points.parent {
-                            FloatingAttachPointType::LeftTop
-                            | FloatingAttachPointType::RightTop
-                            | FloatingAttachPointType::CenterTop => {
+                        match config.attach_points.parent_y {
+                            AlignY::Top => {
                                 target.y = parent_bbox.y;
                             }
-                            FloatingAttachPointType::LeftCenter
-                            | FloatingAttachPointType::CenterCenter
-                            | FloatingAttachPointType::RightCenter => {
+                            AlignY::CenterY => {
                                 target.y = parent_bbox.y + parent_bbox.height / 2.0;
                             }
-                            FloatingAttachPointType::LeftBottom
-                            | FloatingAttachPointType::CenterBottom
-                            | FloatingAttachPointType::RightBottom => {
+                            AlignY::Bottom => {
                                 target.y = parent_bbox.y + parent_bbox.height;
                             }
                         }
                         // Y position - element attach point
-                        match config.attach_points.element {
-                            FloatingAttachPointType::LeftCenter
-                            | FloatingAttachPointType::CenterCenter
-                            | FloatingAttachPointType::RightCenter => {
+                        match config.attach_points.element_y {
+                            AlignY::Top => {}
+                            AlignY::CenterY => {
                                 target.y -= root_dims.height / 2.0;
                             }
-                            FloatingAttachPointType::LeftBottom
-                            | FloatingAttachPointType::CenterBottom
-                            | FloatingAttachPointType::RightBottom => {
+                            AlignY::Bottom => {
                                 target.y -= root_dims.height;
                             }
-                            _ => {}
                         }
                         target.x += config.offset.x;
                         target.y += config.offset.y;
@@ -3167,10 +3150,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                                     let mut offset =
                                         current_bbox.width - line_dims.width;
-                                    if text_config.alignment == TextAlignment::Left {
+                                    if text_config.alignment == AlignX::Left {
                                         offset = 0.0;
                                     }
-                                    if text_config.alignment == TextAlignment::Center {
+                                    if text_config.alignment == AlignX::CenterX {
                                         offset /= 2.0;
                                     }
 
@@ -3599,8 +3582,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 - (layout_config.padding.left + layout_config.padding.right) as f32
                                 - content_width;
                             match layout_config.child_alignment.x {
-                                LayoutAlignmentX::Left => extra_space = 0.0,
-                                LayoutAlignmentX::Center => extra_space /= 2.0,
+                                AlignX::Left => extra_space = 0.0,
+                                AlignX::CenterX => extra_space /= 2.0,
                                 _ => {} // Right - keep full extra_space
                             }
                             dfs_buffer[buf_idx].next_child_offset.x += extra_space;
@@ -3620,8 +3603,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 - (layout_config.padding.top + layout_config.padding.bottom) as f32
                                 - content_height;
                             match layout_config.child_alignment.y {
-                                LayoutAlignmentY::Top => extra_space = 0.0,
-                                LayoutAlignmentY::Center => extra_space /= 2.0,
+                                AlignY::Top => extra_space = 0.0,
+                                AlignY::CenterY => extra_space /= 2.0,
                                 _ => {}
                             }
                             dfs_buffer[buf_idx].next_child_offset.y += extra_space;
@@ -3878,11 +3861,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 - (layout_config.padding.top + layout_config.padding.bottom) as f32
                                 - self.layout_elements[child_idx].dimensions.height;
                             match layout_config.child_alignment.y {
-                                LayoutAlignmentY::Top => {}
-                                LayoutAlignmentY::Center => {
+                                AlignY::Top => {}
+                                AlignY::CenterY => {
                                     child_offset.y += whitespace / 2.0;
                                 }
-                                LayoutAlignmentY::Bottom => {
+                                AlignY::Bottom => {
                                     child_offset.y += whitespace;
                                 }
                             }
@@ -3892,11 +3875,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 - (layout_config.padding.left + layout_config.padding.right) as f32
                                 - self.layout_elements[child_idx].dimensions.width;
                             match layout_config.child_alignment.x {
-                                LayoutAlignmentX::Left => {}
-                                LayoutAlignmentX::Center => {
+                                AlignX::Left => {}
+                                AlignX::CenterX => {
                                     child_offset.x += whitespace / 2.0;
                                 }
-                                LayoutAlignmentX::Right => {
+                                AlignX::Right => {
                                     child_offset.x += whitespace;
                                 }
                             }
@@ -5316,7 +5299,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     top: Self::DEBUG_VIEW_OUTER_PADDING,
                     bottom: Self::DEBUG_VIEW_OUTER_PADDING,
                 },
-                child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Left, y: LayoutAlignmentY::Center },
+                child_alignment: ChildAlignmentConfig { x: AlignX::Left, y: AlignY::CenterY },
                 ..Default::default()
             },
             ..Default::default()
@@ -5361,7 +5344,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             let tc = self.store_text_element_config(TextConfig {
                 color: Self::DEBUG_COLOR_3,
                 font_size: 16,
-                wrap_mode: TextElementConfigWrapMode::None,
+                wrap_mode: WrapMode::None,
                 ..Default::default()
             });
             if !element_id_string.is_empty() {
@@ -5375,7 +5358,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     fn render_debug_view_color(&mut self, color: Color, config_index: usize) {
         self.debug_open(&ElementDeclaration {
             layout: LayoutConfig {
-                child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Left, y: LayoutAlignmentY::Center },
+                child_alignment: ChildAlignmentConfig { x: AlignX::Left, y: AlignY::CenterY },
                 ..Default::default()
             },
             ..Default::default()
@@ -5441,7 +5424,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     fn render_debug_view_corner_radius(&mut self, cr: CornerRadius, config_index: usize) {
         self.debug_open(&ElementDeclaration {
             layout: LayoutConfig {
-                child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Left, y: LayoutAlignmentY::Center },
+                child_alignment: ChildAlignmentConfig { x: AlignX::Left, y: AlignY::CenterY },
                 ..Default::default()
             },
             ..Default::default()
@@ -5525,14 +5508,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 ..Default::default()
             },
             child_gap: 6,
-            child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Left, y: LayoutAlignmentY::Center },
+            child_alignment: ChildAlignmentConfig { x: AlignX::Left, y: AlignY::CenterY },
             ..Default::default()
         };
 
         let name_text_config = TextConfig {
             color: Self::DEBUG_COLOR_4,
             font_size: 16,
-            wrap_mode: TextElementConfigWrapMode::None,
+            wrap_mode: WrapMode::None,
             ..Default::default()
         };
 
@@ -5657,7 +5640,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     width: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: 16.0, max: 16.0 }, ..Default::default() },
                                     height: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: 16.0, max: 16.0 }, ..Default::default() },
                                 },
-                                child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Center, y: LayoutAlignmentY::Center },
+                                child_alignment: ChildAlignmentConfig { x: AlignX::CenterX, y: AlignY::CenterY },
                                 ..Default::default()
                             },
                             corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
@@ -5688,7 +5671,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     width: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: 16.0, max: 16.0 }, ..Default::default() },
                                     height: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: 16.0, max: 16.0 }, ..Default::default() },
                                 },
-                                child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Center, y: LayoutAlignmentY::Center },
+                                child_alignment: ChildAlignmentConfig { x: AlignX::CenterX, y: AlignY::CenterY },
                                 ..Default::default()
                             },
                             ..Default::default()
@@ -5982,7 +5965,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 },
                                 ..Default::default()
                             },
-                            child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Left, y: LayoutAlignmentY::Center },
+                            child_alignment: ChildAlignmentConfig { x: AlignX::Left, y: AlignY::CenterY },
                             ..Default::default()
                         },
                         ..Default::default()
@@ -6140,13 +6123,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let info_text_config = self.store_text_element_config(TextConfig {
             color: Self::DEBUG_COLOR_4,
             font_size: 16,
-            wrap_mode: TextElementConfigWrapMode::None,
+            wrap_mode: WrapMode::None,
             ..Default::default()
         });
         let info_title_config = self.store_text_element_config(TextConfig {
             color: Self::DEBUG_COLOR_3,
             font_size: 16,
-            wrap_mode: TextElementConfigWrapMode::None,
+            wrap_mode: WrapMode::None,
             ..Default::default()
         });
 
@@ -6200,8 +6183,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             floating: FloatingConfig {
                 z_index: 32765,
                 attach_points: FloatingAttachPoints {
-                    element: FloatingAttachPointType::RightCenter,
-                    parent: FloatingAttachPointType::RightCenter,
+                    element_x: AlignX::Right,
+                    element_y: AlignY::CenterY,
+                    parent_x: AlignX::Right,
+                    parent_y: AlignY::CenterY,
                 },
                 attach_to: FloatingAttachToElement::Root,
                 clip_to: FloatingClipToElement::AttachedParent,
@@ -6226,7 +6211,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         },
                     },
                     padding: PaddingConfig { left: outer_padding, right: outer_padding, top: 0, bottom: 0 },
-                    child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Left, y: LayoutAlignmentY::Center },
+                    child_alignment: ChildAlignmentConfig { x: AlignX::Left, y: AlignY::CenterY },
                     ..Default::default()
                 },
                 background_color: Self::DEBUG_COLOR_2,
@@ -6254,7 +6239,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             width: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: close_size, max: close_size }, ..Default::default() },
                             height: SizingAxis { type_: SizingType::Fixed, min_max: SizingMinMax { min: close_size, max: close_size }, ..Default::default() },
                         },
-                        child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Center, y: LayoutAlignmentY::Center },
+                        child_alignment: ChildAlignmentConfig { x: AlignX::CenterX, y: AlignY::CenterY },
                         ..Default::default()
                     },
                     background_color: Color::rgba(217.0, 91.0, 67.0, 80.0),
@@ -6448,7 +6433,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         },
                     },
                     padding: PaddingConfig { left: outer_padding, right: outer_padding, top: 0, bottom: 0 },
-                    child_alignment: ChildAlignmentConfig { x: LayoutAlignmentX::Left, y: LayoutAlignmentY::Center },
+                    child_alignment: ChildAlignmentConfig { x: AlignX::Left, y: AlignY::CenterY },
                     ..Default::default()
                 },
                 ..Default::default()
@@ -6555,18 +6540,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 self.debug_open(&ElementDeclaration::default());
                 {
                     self.debug_text("{ x: ", info_text_config);
-                    let align_x = match layout_config.child_alignment.x {
-                        LayoutAlignmentX::Center => "CENTER",
-                        LayoutAlignmentX::Right => "RIGHT",
-                        _ => "LEFT",
-                    };
+                    let align_x = Self::align_x_name(layout_config.child_alignment.x);
                     self.debug_text(align_x, info_text_config);
                     self.debug_text(", y: ", info_text_config);
-                    let align_y = match layout_config.child_alignment.y {
-                        LayoutAlignmentY::Center => "CENTER",
-                        LayoutAlignmentY::Bottom => "BOTTOM",
-                        _ => "TOP",
-                    };
+                    let align_y = Self::align_y_name(layout_config.child_alignment.y);
                     self.debug_text(align_y, info_text_config);
                     self.debug_text(" }", info_text_config);
                 }
@@ -6694,15 +6671,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.debug_int_text(text_config.letter_spacing as f32, info_text_config);
                             self.debug_text("Wrap Mode", info_title_config);
                             let wrap = match text_config.wrap_mode {
-                                TextElementConfigWrapMode::None => "NONE",
-                                TextElementConfigWrapMode::Newline => "NEWLINES",
+                                WrapMode::None => "NONE",
+                                WrapMode::Newline => "NEWLINES",
                                 _ => "WORDS",
                             };
                             self.debug_text(wrap, info_text_config);
                             self.debug_text("Text Alignment", info_title_config);
                             let align = match text_config.alignment {
-                                TextAlignment::Center => "CENTER",
-                                TextAlignment::Right => "RIGHT",
+                                AlignX::CenterX => "CENTER",
+                                AlignX::Right => "RIGHT",
                                 _ => "LEFT",
                             };
                             self.debug_text(align, info_text_config);
@@ -6801,13 +6778,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.debug_text("Attach Points", info_title_config);
                             self.debug_open(&ElementDeclaration::default());
                             {
-                                self.debug_text("{ element: ", info_text_config);
-                                let elem_ap = Self::attach_point_name(float_config.attach_points.element);
-                                self.debug_text(elem_ap, info_text_config);
-                                self.debug_text(", parent: ", info_text_config);
-                                let parent_ap = Self::attach_point_name(float_config.attach_points.parent);
-                                self.debug_text(parent_ap, info_text_config);
-                                self.debug_text(" }", info_text_config);
+                                self.debug_text("{ element: (", info_text_config);
+                                self.debug_text(Self::align_x_name(float_config.attach_points.element_x), info_text_config);
+                                self.debug_text(", ", info_text_config);
+                                self.debug_text(Self::align_y_name(float_config.attach_points.element_y), info_text_config);
+                                self.debug_text("), parent: (", info_text_config);
+                                self.debug_text(Self::align_x_name(float_config.attach_points.parent_x), info_text_config);
+                                self.debug_text(", ", info_text_config);
+                                self.debug_text(Self::align_y_name(float_config.attach_points.parent_y), info_text_config);
+                                self.debug_text(") }", info_text_config);
                             }
                             self.close_element();
 
@@ -7030,17 +7009,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.close_element(); // detail panel
     }
 
-    fn attach_point_name(value: FloatingAttachPointType) -> &'static str {
+    fn align_x_name(value: AlignX) -> &'static str {
         match value {
-            FloatingAttachPointType::LeftTop => "LEFT_TOP",
-            FloatingAttachPointType::LeftCenter => "LEFT_CENTER",
-            FloatingAttachPointType::LeftBottom => "LEFT_BOTTOM",
-            FloatingAttachPointType::CenterTop => "CENTER_TOP",
-            FloatingAttachPointType::CenterCenter => "CENTER_CENTER",
-            FloatingAttachPointType::CenterBottom => "CENTER_BOTTOM",
-            FloatingAttachPointType::RightTop => "RIGHT_TOP",
-            FloatingAttachPointType::RightCenter => "RIGHT_CENTER",
-            FloatingAttachPointType::RightBottom => "RIGHT_BOTTOM",
+            AlignX::Left => "LEFT",
+            AlignX::CenterX => "CENTER",
+            AlignX::Right => "RIGHT",
+        }
+    }
+
+    fn align_y_name(value: AlignY) -> &'static str {
+        match value {
+            AlignY::Top => "TOP",
+            AlignY::CenterY => "CENTER",
+            AlignY::Bottom => "BOTTOM",
         }
     }
 
