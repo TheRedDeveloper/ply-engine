@@ -614,6 +614,35 @@ impl RenderState {
     }
 }
 
+/// Render custom content to a [`Texture2D`]
+///
+/// Sets up a render target, points a camera at it, calls your closure, then
+/// restores the default camera and returns the resulting texture.
+/// The coordinate system inside the closure runs from `(0, 0)` at the top-left
+/// to `(width, height)` at the bottom-right.
+///
+/// Call this before the layout pass, then hand the texture to an element with `.image(tex)`.
+///
+/// # Example
+/// ```rust,ignore
+/// let tex = render_to_texture(200.0, 100.0, || {
+///     clear_background(BLANK);
+///     draw_circle(w / 2.0, h / 2.0, 40.0, RED);
+/// });
+/// ```
+pub fn render_to_texture(width: f32, height: f32, draw: impl FnOnce()) -> Texture2D {
+    let render_target = render_target_msaa(width as u32, height as u32);
+    render_target.texture.set_filter(FilterMode::Linear);
+    let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, width, height));
+    cam.render_target = Some(render_target.clone());
+    set_camera(&cam);
+
+    draw();
+
+    set_default_camera();
+    render_target.texture
+}
+
 fn rounded_rectangle_texture(cr: &CornerRadii, bb: &BoundingBox, clip: &Option<(i32, i32, i32, i32)>) -> Texture2D {
     let render_target = render_target_msaa(bb.width as u32, bb.height as u32);
     render_target.texture.set_filter(FilterMode::Linear);

@@ -11,6 +11,9 @@ pub use crate::id::Id;
 pub use crate::renderer::GraphicAsset;
 pub use crate::shaders::ShaderAsset;
 
+// Utility functions
+pub use crate::renderer::render_to_texture;
+
 // Macros
 pub use crate::{grow, fit, fixed, percent};
 
