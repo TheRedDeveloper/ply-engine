@@ -696,6 +696,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     // Copy selected text to clipboard
                     let elem_id = self.context.focused_element_id;
                     if let Some(state) = self.context.text_edit_states.get(&elem_id) {
+                        #[cfg(feature = "text-styling")]
+                        let selected = state.selected_text_styled();
+                        #[cfg(not(feature = "text-styling"))]
                         let selected = state.selected_text().to_string();
                         if !selected.is_empty() {
                             macroquad::miniquad::window::clipboard_set(&selected);
@@ -706,6 +709,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     // Cut: copy then delete selection
                     let elem_id = self.context.focused_element_id;
                     if let Some(state) = self.context.text_edit_states.get(&elem_id) {
+                        #[cfg(feature = "text-styling")]
+                        let selected = state.selected_text_styled();
+                        #[cfg(not(feature = "text-styling"))]
                         let selected = state.selected_text().to_string();
                         if !selected.is_empty() {
                             macroquad::miniquad::window::clipboard_set(&selected);
@@ -777,7 +783,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         {
             let text_input_focused = self.context.is_text_input_focused();
             if text_input_focused != self.was_text_input_focused {
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(not(any(target_arch = "wasm32", target_os = "linux")))]
                 {
                     macroquad::miniquad::window::show_keyboard(text_input_focused);
                 }
@@ -958,6 +964,29 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     /// Sets the text value of a text input element.
     pub fn set_text_value(&mut self, id: impl Into<Id>, value: &str) {
         self.context.set_text_value(id.into().id, value);
+    }
+
+    /// Returns the cursor position of a text input element.
+    /// Returns 0 if the element is not a text input or doesn't exist.
+    pub fn get_cursor_pos(&self, id: impl Into<Id>) -> usize {
+        self.context.get_cursor_pos(id.into().id)
+    }
+
+    /// Sets the cursor position of a text input element.
+    /// Clamps to the text length and clears any selection.
+    pub fn set_cursor_pos(&mut self, id: impl Into<Id>, pos: usize) {
+        self.context.set_cursor_pos(id.into().id, pos);
+    }
+
+    /// Returns the selection range (start, end) for a text input element, or None.
+    pub fn get_selection_range(&self, id: impl Into<Id>) -> Option<(usize, usize)> {
+        self.context.get_selection_range(id.into().id)
+    }
+
+    /// Sets the selection range for a text input element.
+    /// `anchor` is where selection started, `cursor` is where it ends.
+    pub fn set_selection(&mut self, id: impl Into<Id>, anchor: usize, cursor: usize) {
+        self.context.set_selection(id.into().id, anchor, cursor);
     }
 
     /// Returns true if the given element is currently pressed

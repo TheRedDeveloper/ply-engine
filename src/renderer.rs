@@ -1744,17 +1744,24 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     };
                     {
                         let mut tracker = ANIMATION_TRACKER.lock().unwrap();
+                        let ts_default = crate::color::Color::rgba(
+                            config.color.r,
+                            config.color.g,
+                            config.color.b,
+                            config.color.a,
+                        );
                         render_styled_text(
                             &segments,
                             time,
                             font_size,
+                            ts_default,
                             &mut *tracker,
                             &mut state.total_char_index,
                             |text, tr, style_color| {
                                 let text_string = text.to_string();
                                 let text_width = measure_text(&text_string, font, config.font_size as u16, 1.0).width;
                                 
-                                let color = Color::new(style_color.r, style_color.g, style_color.b, style_color.a);
+                                let color = Color::new(style_color.r / 255.0, style_color.g / 255.0, style_color.b / 255.0, style_color.a / 255.0);
                                 let x = cursor_x.get();
                                 
                                 pending_renders.push((x, text_string, tr, color));
@@ -1763,7 +1770,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                             },
                             |text, tr, style_color| {
                                 let text_string = text.to_string();
-                                let color = Color::new(style_color.r, style_color.g, style_color.b, style_color.a);
+                                let color = Color::new(style_color.r / 255.0, style_color.g / 255.0, style_color.b / 255.0, style_color.a / 255.0);
                                 let x = cursor_x.get();
                                 
                                 draw_text_ex(

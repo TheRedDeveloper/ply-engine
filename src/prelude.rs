@@ -31,6 +31,10 @@ pub use crate::accessibility::AccessibilityRole;
 #[cfg(feature = "built-in-shaders")]
 pub use crate::built_in_shaders::*;
 
+// Text styling cursor utilities — feature-gated
+#[cfg(feature = "text-styling")]
+pub use crate::text_input::styling_cursor;
+
 // Full macroquad prelude, with Color shadowed by ply's version
 pub use macroquad::prelude::*;
 pub use crate::color::Color;

@@ -1,18 +1,11 @@
 use std::collections::HashMap;
 use std::f32::consts::PI;
+use crate::color::Color;
 
 #[derive(Debug, Clone)]
 pub struct StyledSegment {
     pub text: String,
     pub styles: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Color { 
-    pub r: f32, 
-    pub g: f32, 
-    pub b: f32, 
-    pub a: f32 
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -142,10 +135,12 @@ pub fn parse_text_lines(lines: Vec<String>) -> Result<Vec<Vec<StyledSegment>>, S
     Ok(result_lines)
 }
 
+/// Render styled text segments with a custom default color for unstyled text.
 pub fn render_styled_text<F1, F2>(
     segments: &[StyledSegment], 
     time: f64, 
     font_size: f32,
+    default_color: Color,
     animation_tracker: &mut HashMap<String, (usize, f64)>,
     total_char_index: &mut usize,
     mut render_fn: F1,
@@ -155,15 +150,15 @@ pub fn render_styled_text<F1, F2>(
     F2: FnMut(&str, Transform, Color)
 {
     let named_colors: HashMap<String, Color> = [
-        ("white", (1.0, 1.0, 1.0)), ("black", (0.0, 0.0, 0.0)),
-        ("lightgray", (0.75, 0.75, 0.75)), ("darkgray", (0.37, 0.37, 0.37)),
-        ("red", (0.9, 0.0, 0.0)), ("orange", (1.0, 0.55, 0.0)),
-        ("yellow", (1.0, 0.84, 0.0)), ("lime", (0.0, 0.8, 0.0)),
-        ("green", (0.0, 0.5, 0.0)), ("cyan", (0.0, 0.8, 0.8)),
-        ("lightblue", (0.2, 0.6, 1.0)), ("blue", (0.0, 0.2, 0.8)),
-        ("purple", (0.45, 0.15, 0.77)), ("magenta", (0.8, 0.0, 0.8)),
-        ("brown", (0.54, 0.27, 0.07)), ("pink", (1.0, 0.4, 0.66)),
-    ].iter().map(|(k, (r,g,b))| (k.to_string(), Color{r:*r, g:*g, b:*b, a:1.0})).collect();
+        ("white", (255.0, 255.0, 255.0)), ("black", (0.0, 0.0, 0.0)),
+        ("lightgray", (191.25, 191.25, 191.25)), ("darkgray", (94.35, 94.35, 94.35)),
+        ("red", (229.5, 0.0, 0.0)), ("orange", (255.0, 140.25, 0.0)),
+        ("yellow", (255.0, 214.2, 0.0)), ("lime", (0.0, 204.0, 0.0)),
+        ("green", (0.0, 127.5, 0.0)), ("cyan", (0.0, 204.0, 204.0)),
+        ("lightblue", (51.0, 153.0, 255.0)), ("blue", (0.0, 51.0, 204.0)),
+        ("purple", (114.75, 38.25, 196.35)), ("magenta", (204.0, 0.0, 204.0)),
+        ("brown", (137.7, 68.85, 17.85)), ("pink", (255.0, 102.0, 168.3)),
+    ].iter().map(|(k, (r,g,b))| (k.to_string(), Color::rgba(*r, *g, *b, 255.0))).collect();
 
     let parse_float = |s: &str| s.parse::<f32>().unwrap_or(0.0);
     let parse_color = |s: &str| -> Color {
@@ -171,20 +166,20 @@ pub fn render_styled_text<F1, F2>(
         if s.starts_with('#') {
             let hex = s.trim_start_matches('#');
             if let Ok(val) = u32::from_str_radix(hex, 16) {
-                let r = ((val >> 16) & 0xFF) as f32 / 255.0;
-                let g = ((val >> 8) & 0xFF) as f32 / 255.0;
-                let b = (val & 0xFF) as f32 / 255.0;
-                return Color { r, g, b, a: 1.0 };
+                let r = ((val >> 16) & 0xFF) as f32;
+                let g = ((val >> 8) & 0xFF) as f32;
+                let b = (val & 0xFF) as f32;
+                return Color::rgba(r, g, b, 255.0);
             }
         }
         if s.starts_with('(') && s.ends_with(')') {
             let inner = &s[1..s.len()-1];
             let parts: Vec<f32> = inner.split(',').map(|p| parse_float(p.trim())).collect();
             if parts.len() >= 3 {
-                return Color { r: parts[0] / 255.0, g: parts[1] / 255.0, b: parts[2] / 255.0, a: 1.0 };
+                return Color::rgba(parts[0], parts[1], parts[2], 255.0);
             }
         }
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
+        Color::rgba(255.0, 255.0, 255.0, 255.0)
     };
 
     for segment in segments {
@@ -204,7 +199,7 @@ pub fn render_styled_text<F1, F2>(
         }
 
         if !has_effects {
-            let mut color = Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+            let mut color = default_color;
             let mut opacity_mult = 1.0;
             
             for style_str in &segment.styles {
@@ -239,7 +234,7 @@ pub fn render_styled_text<F1, F2>(
             let global_char_idx = *total_char_index as f32;
 
             let mut tr = Transform::default();
-            let mut color = Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+            let mut color = default_color;
             let mut opacity_mult = 1.0;
             let mut shadow_opts: Option<(Color, f32, f32, f32, f32)> = None;
             let mut skip_render = false;
@@ -480,7 +475,7 @@ pub fn render_styled_text<F1, F2>(
                     shadow_tr.scale_x *= ssx;
                     shadow_tr.scale_y *= ssy;
                     
-                    let shadow_final_color = Color { r: sc.r, g: sc.g, b: sc.b, a: sc.a * opacity_mult };
+                    let shadow_final_color = Color::rgba(sc.r, sc.g, sc.b, sc.a * opacity_mult);
                     render_shadow_fn(&render_char, shadow_tr, shadow_final_color);
                 }
                 
@@ -495,6 +490,8 @@ pub fn render_styled_text<F1, F2>(
 mod tests {
     use super::*;
 
+    const WHITE: Color = Color { r: 255.0, g: 255.0, b: 255.0, a: 255.0 };
+
     #[test]
     fn test_render_simple_text() {
         let lines = vec!["Hello".to_string()];
@@ -502,7 +499,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -519,14 +516,14 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
         assert_eq!(rendered[0].0, "R", "Char should be 'R'");
-        assert!((rendered[0].2.r - 0.9).abs() < 0.01, "Named color red r value wrong? {:?}", rendered);
-        assert!(rendered[0].2.g < 0.01, "Named color red g value wrong? {:?}", rendered);
-        assert!(rendered[0].2.b < 0.01, "Named color red b value wrong? {:?}", rendered);
+        assert!((rendered[0].2.r - 230.0).abs() < 1.0, "Named color red r value wrong? {:?}", rendered);
+        assert!(rendered[0].2.g < 1.0, "Named color red g value wrong? {:?}", rendered);
+        assert!(rendered[0].2.b < 1.0, "Named color red b value wrong? {:?}", rendered);
     }
 
     #[test]
@@ -536,13 +533,13 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
-        assert!((rendered[0].2.r - 1.0).abs() < 0.01, "Hex color r value wrong? {:?}", rendered);
-        assert!(rendered[0].2.g < 0.01, "Hex color g value wrong? {:?}", rendered);
-        assert!(rendered[0].2.b < 0.01, "Hex color b value wrong? {:?}", rendered);
+        assert!((rendered[0].2.r - 255.0).abs() < 1.0, "Hex color r value wrong? {:?}", rendered);
+        assert!(rendered[0].2.g < 1.0, "Hex color g value wrong? {:?}", rendered);
+        assert!(rendered[0].2.b < 1.0, "Hex color b value wrong? {:?}", rendered);
     }
 
     #[test]
@@ -552,13 +549,13 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
-        assert!((rendered[0].2.r - 1.0).abs() < 0.01, "RGB color r value wrong? {:?}", rendered);
-        assert!((rendered[0].2.g - 128.0/255.0).abs() < 0.01, "RGB color g value wrong? {:?}", rendered);
-        assert!(rendered[0].2.b < 0.01, "RGB color b value wrong? {:?}", rendered);
+        assert!((rendered[0].2.r - 255.0).abs() < 1.0, "RGB color r value wrong? {:?}", rendered);
+        assert!((rendered[0].2.g - 128.0).abs() < 1.0, "RGB color g value wrong? {:?}", rendered);
+        assert!(rendered[0].2.b < 1.0, "RGB color b value wrong? {:?}", rendered);
     }
 
     #[test]
@@ -568,11 +565,11 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
-        assert!((rendered[0].2.a - 0.5).abs() < 0.01, "Opacity value wrong? {:?}", rendered);
+        assert!((rendered[0].2.a - 127.5).abs() < 1.0, "Opacity value wrong? {:?}", rendered);
     }
 
     #[test]
@@ -582,7 +579,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -597,7 +594,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -612,7 +609,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -627,7 +624,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -641,7 +638,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -656,7 +653,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -671,7 +668,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -686,7 +683,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -702,11 +699,11 @@ mod tests {
         let mut rendered_t1 = Vec::new();
         let mut rendered_t2 = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered_t1.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
-        render_styled_text(&segments[0], 0.5, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.5, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered_t2.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -720,7 +717,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -736,7 +733,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -751,7 +748,7 @@ mod tests {
         let mut rendered = Vec::new();
         let mut shadows = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |c, tr, col| shadows.push((c.to_string(), tr, col)));
         
@@ -768,7 +765,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut shadows = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |_, _, _| {},
             |c, tr, col| shadows.push((c.to_string(), tr, col)));
         
@@ -783,7 +780,7 @@ mod tests {
         let mut rendered = Vec::new();
         let mut shadows = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |c, tr, col| shadows.push((c.to_string(), tr, col)));
         
@@ -798,14 +795,14 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
         assert_eq!(rendered.len(), 0, "Type animation at time 0 should show nothing");
         
         rendered.clear();
-        render_styled_text(&segments[0], 0.1, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.1, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -821,7 +818,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -829,7 +826,7 @@ mod tests {
         assert!(rendered[0].2.a < 0.1, "Fade animation alpha at time 0 should be low? {:?}", rendered);
         
         rendered.clear();
-        render_styled_text(&segments[0], 2.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 2.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -843,14 +840,14 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
         assert!(rendered[0].1.scale_x < 0.1, "Scale animation scale_x at time 0 should be small? {:?}", rendered);
         
         rendered.clear();
-        render_styled_text(&segments[0], 2.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 2.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -864,7 +861,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -880,7 +877,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -897,7 +894,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.5, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.5, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -915,11 +912,11 @@ mod tests {
         let mut rendered_t1 = Vec::new();
         let mut rendered_t2 = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered_t1.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
-        render_styled_text(&segments[0], 0.1, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.1, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered_t2.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -933,7 +930,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.5, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.5, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -951,7 +948,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -968,7 +965,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -983,11 +980,11 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
-        assert!((rendered[0].2.a - 0.25).abs() < 0.01, "Opacity accumulation wrong? {:?}", rendered);
+        assert!((rendered[0].2.a - 63.75).abs() < 1.0, "Opacity accumulation wrong? {:?}", rendered);
     }
 
     #[test]
@@ -998,7 +995,7 @@ mod tests {
         let mut rendered = Vec::new();
         let mut shadows = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |c, tr, col| shadows.push((c.to_string(), tr, col)));
         
@@ -1013,7 +1010,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -1027,7 +1024,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -1044,14 +1041,14 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
         assert_eq!(rendered.len(), 3, "Type out animation at time 0 should show all chars");
         
         rendered.clear();
-        render_styled_text(&segments[0], 0.5, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.5, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -1065,7 +1062,7 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -1073,7 +1070,7 @@ mod tests {
         assert!(rendered[0].2.a > 0.9, "Fade out animation alpha at time 0 should be high? {:?}", rendered);
         
         rendered.clear();
-        render_styled_text(&segments[0], 2.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 2.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
@@ -1087,14 +1084,14 @@ mod tests {
         let mut tracker = HashMap::new();
         let mut rendered = Vec::new();
         
-        render_styled_text(&segments[0], 0.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
         assert!(rendered[0].1.scale_x > 0.9, "Scale out animation scale_x at time 0 should be large? {:?}", rendered);
         
         rendered.clear();
-        render_styled_text(&segments[0], 2.0, 16.0, &mut tracker, &mut 0,
+        render_styled_text(&segments[0], 2.0, 16.0, WHITE, &mut tracker, &mut 0,
             |c, tr, col| rendered.push((c.to_string(), tr, col)),
             |_, _, _| {});
         
