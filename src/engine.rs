@@ -335,6 +335,7 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub shape_rotation: Option<ShapeRotationConfig>,
     pub accessibility: Option<crate::accessibility::AccessibilityConfig>,
     pub text_input: Option<crate::text_input::TextInputConfig>,
+    pub preserve_focus: bool,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDeclaration<CustomElementData> {
@@ -356,6 +357,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
             shape_rotation: None,
             accessibility: None,
             text_input: None,
+            preserve_focus: false,
         }
     }
 }
@@ -433,6 +435,7 @@ struct LayoutElementHashMapItem {
     on_text_changed_fn: Option<Box<dyn FnMut(&str)>>,
     on_text_submit_fn: Option<Box<dyn FnMut(&str)>>,
     is_text_input: bool,
+    preserve_focus: bool,
     generation: u32,
     collision: bool,
     collapsed: bool,
@@ -452,6 +455,7 @@ impl Clone for LayoutElementHashMapItem {
             on_text_changed_fn: None,
             on_text_submit_fn: None,
             is_text_input: self.is_text_input,
+            preserve_focus: self.preserve_focus,
             generation: self.generation,
             collision: self.collision,
             collapsed: self.collapsed,
@@ -984,6 +988,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     item.on_text_changed_fn = None;
                     item.on_text_submit_fn = None;
                     item.is_text_input = false;
+                    item.preserve_focus = false;
                 } else {
                     // Duplicate ID
                     item.collision = true;
@@ -1003,6 +1008,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     on_text_changed_fn: None,
                     on_text_submit_fn: None,
                     is_text_input: false,
+                    preserve_focus: false,
                     collision: false,
                     collapsed: false,
                 });
@@ -1554,6 +1560,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         insertion_order: self.focusable_elements.len() as u32,
                     });
                 }
+            }
+        }
+
+        // Preserve-focus flag
+        if declaration.preserve_focus {
+            let elem_id = self.layout_elements[open_idx].id;
+            if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+                item.preserve_focus = true;
             }
         }
     }
@@ -4176,8 +4190,16 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         self.pressed_element_id = Some(top.id);
                     }
                 } else {
-                    // Clear keyboard focus when the user clicks with the mouse
-                    if self.focused_element_id != 0 {
+                    // Check if any element in the pointer stack preserves focus
+                    // (e.g. a toolbar button's child text element inherits the parent's preserve_focus)
+                    let preserves = self.pointer_over_ids.iter().any(|eid| {
+                        self.layout_element_map.get(&eid.id)
+                            .map(|item| item.preserve_focus)
+                            .unwrap_or(false)
+                    });
+
+                    // Clear keyboard focus when the user clicks, unless the element preserves focus
+                    if !preserves && self.focused_element_id != 0 {
                         self.change_focus(0);
                     }
 

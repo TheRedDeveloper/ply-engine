@@ -293,6 +293,15 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
+    /// When set, clicking this element will not steal focus from a text input
+    /// (or any other focused element). Use this for toolbar buttons that
+    /// modify a text input's content without unfocusing it.
+    #[inline]
+    pub fn preserve_focus(mut self) -> Self {
+        self.inner.preserve_focus = true;
+        self
+    }
+
     /// Registers a callback that fires once when the element is pressed
     /// (pointer click or Enter/Space on focused element).
     #[inline]
