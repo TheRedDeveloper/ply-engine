@@ -180,12 +180,15 @@ void main() {
 }
 ";
 
-/// Default fragment shader template prefix for effects.
-const DEFAULT_FRAGMENT_HEADER: &str = "#version 100
+/// Default fragment shader as fallback.
+pub const DEFAULT_FRAGMENT_SHADER: &str = "#version 100
 precision lowp float;
 varying vec2 uv;
 varying vec4 color;
 uniform sampler2D Texture;
+void main() {
+    gl_FragColor = color;
+}
 ";
 
 /// Global MaterialManager for caching compiled shader materials.
@@ -196,8 +199,14 @@ pub static MATERIAL_MANAGER: std::sync::LazyLock<std::sync::Mutex<MaterialManage
 ///
 /// Equivalent to `TextureManager` but for materials. The renderer creates and uses
 /// this to avoid recompiling shaders every frame.
+///
+/// Also holds a runtime shader storage (`name → source`) for [`ShaderAsset::Stored`]
+/// shaders. Update stored sources with [`set_source`](Self::set_source); the old
+/// compiled material is evicted automatically when the source changes.
 pub struct MaterialManager {
     materials: std::collections::HashMap<std::borrow::Cow<'static, str>, MaterialData>,
+    /// Runtime shader storage: name → fragment source.
+    shader_storage: std::collections::HashMap<String, String>,
     /// How many frames a material can go unused before being evicted.
     pub max_frames_not_used: usize,
 }
@@ -211,6 +220,7 @@ impl MaterialManager {
     pub fn new() -> Self {
         Self {
             materials: std::collections::HashMap::new(),
+            shader_storage: std::collections::HashMap::new(),
             max_frames_not_used: 60, // Keep materials longer than textures
         }
     }
@@ -269,7 +279,7 @@ impl MaterialManager {
                 load_material(
                     ShaderSource::Glsl {
                         vertex: DEFAULT_VERTEX_SHADER,
-                        fragment: &format!("{}void main() {{ gl_FragColor = color; }}", DEFAULT_FRAGMENT_HEADER),
+                        fragment: DEFAULT_FRAGMENT_SHADER,
                     },
                     MaterialParams::default(),
                 )
@@ -294,6 +304,48 @@ impl MaterialManager {
             data.frames_not_used += 1;
         }
     }
+
+    /// Store or update a named shader source.
+    ///
+    /// If the source changed compared to the previously stored value, the old
+    /// compiled material is evicted from the cache so the next render pass
+    /// recompiles automatically. No-ops if the source is unchanged.
+    pub fn set_source(&mut self, name: &str, fragment: &str) {
+        if let Some(old_source) = self.shader_storage.get(name) {
+            if old_source == fragment {
+                return; // Unchanged — nothing to do
+            }
+            // Evict stale material keyed by the old source
+            self.materials.remove(old_source.as_str());
+        }
+        self.shader_storage.insert(name.to_string(), fragment.to_string());
+    }
+
+    /// Look up a stored shader source by name.
+    pub fn get_source(&self, name: &str) -> Option<&str> {
+        self.shader_storage.get(name).map(String::as_str)
+    }
+}
+
+/// Update a named shader source in the global shader storage.
+///
+/// When the source changes, the previously compiled material is evicted
+/// and will be recompiled on the next render pass. No-ops if unchanged.
+///
+/// Use with [`ShaderAsset::Stored`](crate::shaders::ShaderAsset::Stored) to reference
+/// the stored source by name.
+///
+/// # Example
+/// ```rust,ignore
+/// set_shader_source("live_shader", &editor.text);
+///
+/// const LIVE: ShaderAsset = ShaderAsset::Stored("live_shader");
+/// ui.element()
+///     .effect(&LIVE, |s| s.uniform("u_time", get_time() as f32))
+///     .build();
+/// ```
+pub fn set_shader_source(name: &str, fragment: &str) {
+    MATERIAL_MANAGER.lock().unwrap().set_source(name, fragment);
 }
 
 /// Apply shader uniforms to a material, including auto-uniforms.

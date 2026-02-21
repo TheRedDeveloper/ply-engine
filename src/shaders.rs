@@ -5,13 +5,16 @@
 
 use std::borrow::Cow;
 
-/// Represents a shader asset that can be loaded from a file path or embedded as source.
+/// Represents a shader asset that can be loaded from a file path, embedded as source,
+/// or looked up from the runtime shader storage in [`MaterialManager`].
 ///
 /// `Path` is loaded from the filesystem at runtime (useful for development/hot-reloading).
 /// `Source` embeds the shader in the binary (via `include_str!`).
+/// `Stored` references a named entry in the shader storage, enabling runtime-updateable
+/// shader code (e.g. live shader editors).
 ///
-/// Both variants use their identifier (`Path` path or `Source` file_name) as the cache key
-/// in the `MaterialManager`.
+/// Both `Path` and `Source` use their identifier as the cache key in the `MaterialManager`.
+/// `Stored` uses the storage name as its cache key and resolves source from the storage.
 #[derive(Debug, Clone)]
 pub enum ShaderAsset {
     /// Path to a compiled .glsl file, loaded at runtime
@@ -23,12 +26,15 @@ pub enum ShaderAsset {
         /// GLSL ES 3.00 fragment shader source
         fragment: &'static str,
     },
+    /// References a named entry in the runtime shader storage.
+    Stored(&'static str),
 }
 
 impl ShaderAsset {
     /// Returns the fragment shader source.
     /// For `Path` variant, reads the file synchronously.
     /// For `Source` variant, returns a borrowed reference (zero-copy).
+    /// For `Stored` variant, looks up the source from the global shader storage.
     pub fn fragment_source(&self) -> Cow<'static, str> {
         match self {
             ShaderAsset::Path(path) => {
@@ -36,6 +42,16 @@ impl ShaderAsset {
                     .unwrap_or_else(|e| panic!("Failed to read shader file '{}': {}", path, e)))
             }
             ShaderAsset::Source { fragment, .. } => Cow::Borrowed(fragment),
+            ShaderAsset::Stored(name) => {
+                let mgr = crate::renderer::MATERIAL_MANAGER.lock().unwrap();
+                match mgr.get_source(name) {
+                    Some(src) => Cow::Owned(src.to_string()),
+                    None => {
+                        eprintln!("Shader storage '{}' not found, using fallback", name);
+                        Cow::Borrowed(crate::renderer::DEFAULT_FRAGMENT_SHADER)
+                    }
+                }
+            }
         }
     }
 
@@ -44,6 +60,7 @@ impl ShaderAsset {
         match self {
             ShaderAsset::Path(path) => path,
             ShaderAsset::Source { file_name, .. } => file_name,
+            ShaderAsset::Stored(name) => name,
         }
     }
 }

@@ -13,6 +13,7 @@ pub use crate::shaders::ShaderAsset;
 
 // Utility functions
 pub use crate::renderer::render_to_texture;
+pub use crate::renderer::set_shader_source;
 
 // Macros
 pub use crate::{grow, fit, fixed, percent};
