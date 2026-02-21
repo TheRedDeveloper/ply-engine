@@ -2553,7 +2553,8 @@ mod tests {
             ui.eval();
         }
 
-        // Set focus
+        // Set focus via keyboard
+        ply.context.focus_from_keyboard = true;
         ply.context.set_focus(id_a);
 
         // Frame 2: eval to get render commands with focus ring

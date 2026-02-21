@@ -647,6 +647,8 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
 
     // Accessibility / focus
     pub focused_element_id: u32, // 0 = no focus
+    /// True when focus was set via keyboard (Tab/arrow keys), false when via mouse click.
+    pub(crate) focus_from_keyboard: bool,
     focusable_elements: Vec<FocusableEntry>,
     pub(crate) accessibility_configs: FxHashMap<u32, crate::accessibility::AccessibilityConfig>,
     pub(crate) accessibility_element_order: Vec<u32>,
@@ -838,6 +840,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             pressed_element_id: None,
             scroll_container_datas: Vec::new(),
             focused_element_id: 0,
+            focus_from_keyboard: false,
             focusable_elements: Vec::new(),
             accessibility_configs: FxHashMap::default(),
             accessibility_element_order: Vec::new(),
@@ -3887,8 +3890,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
         }
 
-        // Focus ring: render a red border around the focused element
-        if self.focused_element_id != 0 {
+        // Focus ring: render a red border around the focused element (keyboard focus only)
+        if self.focused_element_id != 0 && self.focus_from_keyboard {
             if let Some(item) = self.layout_element_map.get(&self.focused_element_id) {
                 let bbox = item.bounding_box;
                 if !self.element_is_offscreen(&bbox) {
@@ -4069,6 +4072,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                 if clicked_text_input {
                     // Focus the text input (or keep focus if already focused)
+                    self.focus_from_keyboard = false;
                     if let Some(top) = self.pointer_over_ids.last().cloned() {
                         if self.focused_element_id != top.id {
                             self.change_focus(top.id);
@@ -4363,6 +4367,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             return;
         }
         self.focused_element_id = new_id;
+        if new_id == 0 {
+            self.focus_from_keyboard = false;
+        }
 
         // Fire on_unfocus on old element
         if old_id != 0 {
@@ -5107,6 +5114,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         if self.focusable_elements.is_empty() {
             return;
         }
+        self.focus_from_keyboard = true;
 
         // Sort: explicit tab_index first (ascending), then insertion order
         let mut sorted: Vec<FocusableEntry> = self.focusable_elements.clone();
@@ -5146,6 +5154,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         if self.focused_element_id == 0 {
             return;
         }
+        self.focus_from_keyboard = true;
         if let Some(config) = self.accessibility_configs.get(&self.focused_element_id) {
             let target = match direction {
                 ArrowDirection::Left => config.focus_left,
