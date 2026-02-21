@@ -87,8 +87,8 @@ pub struct Custom<CustomElementData> {
     pub data: CustomElementData,
 }
 
-impl From<engine::CornerRadius> for CornerRadii {
-    fn from(value: engine::CornerRadius) -> Self {
+impl From<crate::layout::CornerRadius> for CornerRadii {
+    fn from(value: crate::layout::CornerRadius) -> Self {
         Self {
             top_left: value.top_left,
             top_right: value.top_right,
@@ -108,15 +108,14 @@ pub enum RenderCommandConfig<CustomElementData> {
     ScissorStart(),
     ScissorEnd(),
     Custom(Custom<CustomElementData>),
-    /// Begin a group — renders children to an offscreen buffer.
+    /// Begin a group: Renders children to an offscreen buffer.
     /// Optionally applies a fragment shader and/or visual rotation.
     GroupBegin {
-        /// Fragment shader to apply as post-process. `None` for rotation-only groups.
+        /// Fragment shader to apply as post-process.
         shader: Option<ShaderConfig>,
         /// Visual rotation applied when compositing the render target.
         visual_rotation: Option<VisualRotationConfig>,
     },
-    /// End a group — pops the render target and composites.
     GroupEnd,
 }
 

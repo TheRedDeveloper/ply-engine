@@ -1,9 +1,6 @@
 use crate::id::Id;
 
-// ============================================================================
-// Accessibility roles
-// ============================================================================
-
+/// Defines the semantic role of a UI element for screen readers and assistive technologies.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AccessibilityRole {
     #[default]
@@ -41,10 +38,6 @@ pub enum AccessibilityRole {
     ProgressBar,
 }
 
-// ============================================================================
-// Live region mode
-// ============================================================================
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum LiveRegionMode {
     /// No live announcements.
@@ -55,10 +48,6 @@ pub enum LiveRegionMode {
     /// Screen reader announces changes immediately (interrupts current speech).
     Assertive,
 }
-
-// ============================================================================
-// Accessibility config (stored per element)
-// ============================================================================
 
 #[derive(Debug, Clone, Default)]
 pub struct AccessibilityConfig {
@@ -87,10 +76,6 @@ impl AccessibilityConfig {
         }
     }
 }
-
-// ============================================================================
-// AccessibilityBuilder (closure-based API)
-// ============================================================================
 
 pub struct AccessibilityBuilder {
     pub(crate) config: AccessibilityConfig,

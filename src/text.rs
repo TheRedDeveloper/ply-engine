@@ -21,8 +21,7 @@ pub struct TextConfig {
     pub(crate) user_data: usize,
     /// The color of the text.
     pub color: Color,
-    /// Ply does not manage fonts. It is up to the user to assign a unique ID to each font
-    /// and provide it via the [`font_id`](TextConfig::font_id) field.
+    /// Ply does not manage fonts. It is up to the user to order their fonts correctly.
     pub font_id: u16,
     /// The font size of the text.
     pub font_size: u16,
@@ -105,9 +104,6 @@ impl TextConfig {
     }
 
     /// Makes this text element visible to screen readers.
-    ///
-    /// The text content is automatically used as the accessible label
-    /// with a `StaticText` role. No wrapper element is needed.
     ///
     /// ```ignore
     /// ui.text("Hello world", |t| t.font_size(16).accessible());

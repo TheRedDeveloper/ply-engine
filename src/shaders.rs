@@ -1,8 +1,3 @@
-//! Shader types and utilities for per-element effects and group shaders.
-//!
-//! This module provides the types needed to define shader effects on UI elements,
-//! including shader assets, uniform configuration, and the builder API.
-
 use std::borrow::Cow;
 
 /// Represents a shader asset that can be loaded from a file path, embedded as source,
@@ -10,11 +5,7 @@ use std::borrow::Cow;
 ///
 /// `Path` is loaded from the filesystem at runtime (useful for development/hot-reloading).
 /// `Source` embeds the shader in the binary (via `include_str!`).
-/// `Stored` references a named entry in the shader storage, enabling runtime-updateable
-/// shader code (e.g. live shader editors).
-///
-/// Both `Path` and `Source` use their identifier as the cache key in the `MaterialManager`.
-/// `Stored` uses the storage name as its cache key and resolves source from the storage.
+/// `Stored` references a named entry in the shader storage, enabling runtime-updateable shader code.
 #[derive(Debug, Clone)]
 pub enum ShaderAsset {
     /// Path to a compiled .glsl file, loaded at runtime
@@ -73,7 +64,7 @@ pub struct ShaderConfig {
     pub fragment: Cow<'static, str>,
     /// The uniform values to set on the shader.
     pub uniforms: Vec<ShaderUniform>,
-    /// Debug-friendly name derived from the shader asset (file name or path).
+    /// Debug-friendly name derived from the shader asset.
     pub name: String,
 }
 

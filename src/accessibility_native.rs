@@ -8,7 +8,7 @@
 //! some platforms (notably Linux/AT-SPI). We use `Arc<Mutex<>>` for shared
 //! state between the main loop and the adapter thread.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex};
 
 use accesskit::{
@@ -21,10 +21,6 @@ use accesskit::DeactivationHandler;
 #[allow(unused_imports)]
 use crate::accessibility::{AccessibilityConfig, AccessibilityRole, LiveRegionMode};
 
-// ============================================================================
-// Constants
-// ============================================================================
-
 /// Sentinel NodeId for the root window node.
 /// We use u64::MAX to avoid collision with element IDs (which are u32 hash values).
 const ROOT_NODE_ID: NodeId = NodeId(u64::MAX);
@@ -33,10 +29,6 @@ const ROOT_NODE_ID: NodeId = NodeId(u64::MAX);
 /// Placed as the sole child of the root window, all accessible elements are its children.
 /// This enables structural navigation in screen readers (e.g. Orca's Insert+Z).
 const DOCUMENT_NODE_ID: NodeId = NodeId(u64::MAX - 1);
-
-// ============================================================================
-// Role mapping: Ply AccessibilityRole → AccessKit Role
-// ============================================================================
 
 fn map_role(role: &AccessibilityRole) -> Role {
     match role {
@@ -67,10 +59,6 @@ fn map_role(role: &AccessibilityRole) -> Role {
         AccessibilityRole::ProgressBar => Role::ProgressIndicator,
     }
 }
-
-// ============================================================================
-// Build an AccessKit Node from a Ply AccessibilityConfig
-// ============================================================================
 
 fn build_node(config: &AccessibilityConfig) -> Node {
     let role = map_role(&config.role);
@@ -153,12 +141,8 @@ fn build_node(config: &AccessibilityConfig) -> Node {
     node
 }
 
-// ============================================================================
-// Build a full TreeUpdate from Ply's accessibility data
-// ============================================================================
-
 fn build_tree_update(
-    configs: &HashMap<u32, AccessibilityConfig>,
+    configs: &FxHashMap<u32, AccessibilityConfig>,
     element_order: &[u32],
     focused_id: u32,
     include_tree: bool,
@@ -215,10 +199,6 @@ fn build_tree_update(
     }
 }
 
-// ============================================================================
-// Handler implementations
-// ============================================================================
-
 /// ActivationHandler: called when an assistive technology activates.
 /// Holds a pre-built initial tree so the adapter is immediately ready.
 struct PlyActivationHandler {
@@ -260,10 +240,6 @@ impl DeactivationHandler for PlyDeactivationHandler {
     }
 }
 
-// ============================================================================
-// Platform adapter wrapper
-// ============================================================================
-
 enum PlatformAdapter {
     #[cfg(target_os = "linux")]
     Unix(accesskit_unix::Adapter),
@@ -278,10 +254,6 @@ enum PlatformAdapter {
     /// Fallback for platforms without an adapter (e.g. iOS in the future).
     None,
 }
-
-// ============================================================================
-// Windows: Static adapter state + subclass proc for WM_GETOBJECT
-// ============================================================================
 
 #[cfg(target_os = "windows")]
 struct WindowsA11yState {
@@ -375,10 +347,6 @@ unsafe extern "system" fn a11y_subclass_proc(
     }
 }
 
-// ============================================================================
-// Linux: Ensure ScreenReaderEnabled is set on the AT-SPI bus
-// ============================================================================
-
 /// On some non-GNOME Wayland compositors, Orca does not set the
 /// `org.a11y.Status.ScreenReaderEnabled` property on the session D-Bus bus.
 /// AccessKit only creates its AT-SPI bus connection when this property is `true`.
@@ -454,10 +422,6 @@ fn ensure_screen_reader_enabled() {
         .output();
 }
 
-// ============================================================================
-// NativeAccessibilityState (owned by Ply)
-// ============================================================================
-
 pub struct NativeAccessibilityState {
     adapter: PlatformAdapter,
     action_queue: Arc<Mutex<Vec<ActionRequest>>>,
@@ -477,7 +441,7 @@ impl Default for NativeAccessibilityState {
 impl NativeAccessibilityState {
     fn initialize(
         &mut self,
-        configs: &HashMap<u32, AccessibilityConfig>,
+        configs: &FxHashMap<u32, AccessibilityConfig>,
         element_order: &[u32],
         focused_id: u32,
     ) {
@@ -639,10 +603,6 @@ pub enum PendingA11yAction {
     Click(u32),
 }
 
-// ============================================================================
-// Sync function (called each frame after layout, mirrors the web version)
-// ============================================================================
-
 /// Synchronise Ply's accessibility state with the platform screen reader.
 ///
 /// This is the native equivalent of `accessibility_web::sync_accessibility_tree`.
@@ -653,7 +613,7 @@ pub enum PendingA11yAction {
 /// clicks) that the engine should process.
 pub fn sync_accessibility_tree(
     state: &mut NativeAccessibilityState,
-    accessibility_configs: &HashMap<u32, AccessibilityConfig>,
+    accessibility_configs: &FxHashMap<u32, AccessibilityConfig>,
     accessibility_element_order: &[u32],
     focused_element_id: u32,
 ) -> Vec<PendingA11yAction> {
@@ -736,10 +696,6 @@ pub fn sync_accessibility_tree(
 
     result
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -848,7 +804,7 @@ mod tests {
 
     #[test]
     fn build_tree_update_structure() {
-        let mut configs = HashMap::new();
+        let mut configs = FxHashMap::default();
         configs.insert(101, make_config(AccessibilityRole::Button, "OK"));
         configs.insert(102, make_config(AccessibilityRole::Button, "Cancel"));
 
@@ -877,7 +833,7 @@ mod tests {
 
     #[test]
     fn build_tree_update_no_focus() {
-        let configs = HashMap::new();
+        let configs = FxHashMap::default();
         let order = vec![];
         let update = build_tree_update(&configs, &order, 0, true);
 

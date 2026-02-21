@@ -28,6 +28,7 @@ impl StringId {
     }
 }
 
+/// A hashed identifier used to uniquely address UI elements across frames.
 #[derive(Debug, Clone, Default)]
 pub struct Id {
     pub id: u32,
@@ -39,19 +40,19 @@ pub struct Id {
 impl Id {
     /// Creates a ply id using the `label`
     #[inline]
-    pub(crate) fn new(label: &'static str) -> Id {
+    pub fn new(label: &'static str) -> Id {
         Self::new_index(label, 0)
     }
 
     /// Creates a ply id using the `label` and the `index`
     #[inline]
-    pub(crate) fn new_index(label: &'static str, index: u32) -> Id {
+    pub fn new_index(label: &'static str, index: u32) -> Id {
         engine::hash_string_with_offset(label, index, 0)
     }
 
     #[inline]
-    pub(crate) fn new_index_local_with_parent(label: &'static str, index: u32, parent_id: u32) -> Id {
-        engine::hash_string_with_offset(label, index, parent_id)
+    pub fn new_index_seed(label: &'static str, index: u32, seed: u32) -> Id {
+        engine::hash_string_with_offset(label, index, seed)
     }
 }
 

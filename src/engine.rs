@@ -1,7 +1,7 @@
 //! Pure Rust implementation of the Ply layout engine.
 //! A UI layout engine inspired by Clay.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::align::{AlignX, AlignY};
 use crate::color::Color;
@@ -10,22 +10,14 @@ use crate::shaders::ShaderConfig;
 use crate::elements::{
     FloatingAttachToElement, FloatingClipToElement, PointerCaptureMode,
 };
-use crate::layout::LayoutDirection;
+use crate::layout::{LayoutDirection, CornerRadius};
 use crate::math::{BoundingBox, Dimensions, Vector2};
 use crate::text::{TextConfig, WrapMode};
-
-// ============================================================================
-// Constants
-// ============================================================================
 
 const DEFAULT_MAX_ELEMENT_COUNT: i32 = 8192;
 const DEFAULT_MAX_MEASURE_TEXT_WORD_CACHE_COUNT: i32 = 16384;
 const MAXFLOAT: f32 = 3.40282346638528859812e+38;
 const EPSILON: f32 = 0.01;
-
-// ============================================================================
-// Enums
-// ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -109,10 +101,6 @@ pub enum ElementConfigType {
     TextInput,
 }
 
-// ============================================================================
-// Config structs (public, used by Declaration in lib.rs)
-// ============================================================================
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SizingMinMax {
     pub min: f32,
@@ -155,50 +143,7 @@ pub struct LayoutConfig {
     pub layout_direction: LayoutDirection,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CornerRadius {
-    pub top_left: f32,
-    pub top_right: f32,
-    pub bottom_left: f32,
-    pub bottom_right: f32,
-}
 
-impl CornerRadius {
-    pub fn is_zero(&self) -> bool {
-        self.top_left == 0.0
-            && self.top_right == 0.0
-            && self.bottom_left == 0.0
-            && self.bottom_right == 0.0
-    }
-}
-
-impl From<f32> for CornerRadius {
-    /// Creates a corner radius with the same value for all corners.
-    fn from(value: f32) -> Self {
-        Self {
-            top_left: value,
-            top_right: value,
-            bottom_left: value,
-            bottom_right: value,
-        }
-    }
-}
-
-impl From<(f32, f32, f32, f32)> for CornerRadius {
-    /// Creates corner radii from a tuple in CSS order: (top-left, top-right, bottom-right, bottom-left).
-    fn from((tl, tr, br, bl): (f32, f32, f32, f32)) -> Self {
-        Self {
-            top_left: tl,
-            top_right: tr,
-            bottom_left: bl,
-            bottom_right: br,
-        }
-    }
-}
-
-/// Configuration for visual rotation (render-target based).
-/// Renders the element + children to an offscreen buffer, then draws the
-/// buffer with rotation / flip applied via `DrawTextureParams`.
 #[derive(Debug, Clone, Copy)]
 pub struct VisualRotationConfig {
     /// Rotation angle in radians.
@@ -232,11 +177,6 @@ impl VisualRotationConfig {
     }
 }
 
-/// Configuration for shape rotation (vertex-level).
-/// Rotates the element geometry itself and adjusts the layout bounding box
-/// to the axis-aligned bounding box (AABB) of the rotated shape.
-/// Does NOT affect children, text, or shaders — only the element's own
-/// rectangle / image / border.
 #[derive(Debug, Clone, Copy)]
 pub struct ShapeRotationConfig {
     /// Rotation angle in radians.
@@ -362,15 +302,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
     }
 }
 
-// ============================================================================
-// Id is defined in crate::id — use it throughout the engine
-// ============================================================================
-
 use crate::id::{Id, StringId};
-
-// ============================================================================
-// Internal engine types
-// ============================================================================
 
 #[derive(Debug, Clone, Copy, Default)]
 struct SharedElementConfig {
@@ -536,10 +468,6 @@ struct BooleanWarnings {
     max_render_commands_exceeded: bool,
 }
 
-// ============================================================================
-// Render command types
-// ============================================================================
-
 #[derive(Debug, Clone)]
 pub struct InternalRenderCommand<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     pub bounding_box: BoundingBox,
@@ -611,10 +539,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for InternalR
     }
 }
 
-// ============================================================================
-// Scroll container data (public)
-// ============================================================================
-
 #[derive(Debug, Clone, Copy)]
 pub struct ScrollContainerData {
     pub scroll_position: Vector2,
@@ -637,10 +561,6 @@ impl Default for ScrollContainerData {
         }
     }
 }
-
-// ============================================================================
-// PlyContext - the main layout engine context
-// ============================================================================
 
 pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     // Settings
@@ -712,10 +632,10 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     layout_element_tree_roots: Vec<LayoutElementTreeRoot>,
 
     // Layout element map: element id -> element data (bounding box, hover callback, etc.)
-    layout_element_map: HashMap<u32, LayoutElementHashMapItem>,
+    layout_element_map: FxHashMap<u32, LayoutElementHashMapItem>,
 
     // Text measurement cache: content hash -> measured dimensions and words
-    measure_text_cache: HashMap<u32, MeasureTextCacheItem>,
+    measure_text_cache: FxHashMap<u32, MeasureTextCacheItem>,
     measured_words: Vec<MeasuredWord>,
     measured_words_free_list: Vec<i32>,
 
@@ -728,11 +648,11 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     // Accessibility / focus
     pub focused_element_id: u32, // 0 = no focus
     focusable_elements: Vec<FocusableEntry>,
-    pub(crate) accessibility_configs: HashMap<u32, crate::accessibility::AccessibilityConfig>,
+    pub(crate) accessibility_configs: FxHashMap<u32, crate::accessibility::AccessibilityConfig>,
     pub(crate) accessibility_element_order: Vec<u32>,
 
     // Text input
-    pub(crate) text_edit_states: HashMap<u32, crate::text_input::TextEditState>,
+    pub(crate) text_edit_states: FxHashMap<u32, crate::text_input::TextEditState>,
     text_input_configs: Vec<crate::text_input::TextInputConfig>,
     /// Set of element IDs that are text inputs this frame.
     pub(crate) text_input_element_ids: Vec<u32>,
@@ -754,12 +674,12 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     // Dynamic string data (for int-to-string etc.)
     dynamic_string_data: Vec<u8>,
 
+    // Font height cache: (font_id, font_size) -> height in pixels.
+    // Avoids repeated calls to measure_fn("Mg", ...) which are expensive.
+    font_height_cache: FxHashMap<u32, f32>,
+
     // Debug view: heap-allocated strings that survive the frame
 }
-
-// ============================================================================
-// Hash functions
-// ============================================================================
 
 fn hash_data_scalar(data: &[u8]) -> u64 {
     let mut hash: u64 = 0;
@@ -851,10 +771,6 @@ fn hash_string_contents_with_config(
     hash.wrapping_add(1)
 }
 
-// ============================================================================
-// Helper functions
-// ============================================================================
-
 fn float_equal(left: f32, right: f32) -> bool {
     let diff = left - right;
     diff < EPSILON && diff > -EPSILON
@@ -866,10 +782,6 @@ fn point_is_inside_rect(point: Vector2, rect: BoundingBox) -> bool {
         && point.y >= rect.y
         && point.y <= rect.y + rect.height
 }
-
-// ============================================================================
-// PlyContext implementation
-// ============================================================================
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElementData> {
     pub fn new(dimensions: Dimensions) -> Self {
@@ -917,8 +829,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             wrapped_text_lines: Vec::new(),
             tree_node_array: Vec::new(),
             layout_element_tree_roots: Vec::new(),
-            layout_element_map: HashMap::new(),
-            measure_text_cache: HashMap::new(),
+            layout_element_map: FxHashMap::default(),
+            measure_text_cache: FxHashMap::default(),
             measured_words: Vec::new(),
             measured_words_free_list: Vec::new(),
             open_clip_element_stack: Vec::new(),
@@ -927,9 +839,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             scroll_container_datas: Vec::new(),
             focused_element_id: 0,
             focusable_elements: Vec::new(),
-            accessibility_configs: HashMap::new(),
+            accessibility_configs: FxHashMap::default(),
             accessibility_element_order: Vec::new(),
-            text_edit_states: HashMap::new(),
+            text_edit_states: FxHashMap::default(),
             text_input_configs: Vec::new(),
             text_input_element_ids: Vec::new(),
             pending_text_click: None,
@@ -941,13 +853,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             frame_delta_time: 0.0,
             tree_node_visited: Vec::new(),
             dynamic_string_data: Vec::new(),
+            font_height_cache: FxHashMap::default(),
         };
         ctx
     }
-
-    // ========================================================================
-    // Internal helpers
-    // ========================================================================
 
     fn get_open_layout_element(&self) -> usize {
         let idx = *self.open_layout_element_stack.last().unwrap();
@@ -1083,10 +992,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    // ========================================================================
-    // Store config functions
-    // ========================================================================
-
     pub fn store_text_element_config(
         &mut self,
         config: TextConfig,
@@ -1116,10 +1021,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             config_index,
         });
     }
-
-    // ========================================================================
-    // Element open / close / configure
-    // ========================================================================
 
     pub fn open_element(&mut self) {
         if self.boolean_warnings.max_elements_exceeded {
@@ -1792,10 +1693,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    // ========================================================================
-    // Text elements
-    // ========================================================================
-
     pub fn open_text_element(
         &mut self,
         text: &str,
@@ -1896,9 +1793,27 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.layout_elements[parent_idx].children_length += 1;
     }
 
-    // ========================================================================
-    // Text measurement cache
-    // ========================================================================
+    /// Returns the cached font height for the given (font_id, font_size) pair.
+    /// Measures `"Mg"` on the first call for each pair and caches the result.
+    fn font_height(&mut self, font_id: u16, font_size: u16) -> f32 {
+        // Pack (font_id, font_size) into a single u32 key.
+        let key = (font_id as u32) << 16 | font_size as u32;
+        if let Some(&h) = self.font_height_cache.get(&key) {
+            return h;
+        }
+        let h = if let Some(ref measure_fn) = self.measure_text_fn {
+            let config = TextConfig {
+                font_id,
+                font_size,
+                ..Default::default()
+            };
+            measure_fn("Mg", &config).height
+        } else {
+            font_size as f32
+        };
+        self.font_height_cache.insert(key, h);
+        h
+    }
 
     fn measure_text_cached(
         &mut self,
@@ -2054,10 +1969,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         new_index
     }
 
-    // ========================================================================
-    // Begin / End layout
-    // ========================================================================
-
     pub fn begin_layout(&mut self) {
         self.initialize_ephemeral_memory();
         self.generation += 1;
@@ -2181,10 +2092,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.text_input_configs.clear();
         self.text_input_element_ids.clear();
     }
-
-    // ========================================================================
-    // Layout algorithm
-    // ========================================================================
 
     fn size_containers_along_axis(&mut self, x_axis: bool) {
         let mut bfs_buffer: Vec<i32> = Vec::new();
@@ -3291,16 +3198,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     };
 
                                     // Measure font height for cursor
-                                    let font_height = if let Some(ref measure_fn) = self.measure_text_fn {
-                                        let config = crate::text::TextConfig {
-                                            font_id: ti_config.font_id,
-                                            font_size: ti_config.font_size,
-                                            ..Default::default()
-                                        };
-                                        measure_fn("Mg", &config).height
-                                    } else {
-                                        ti_config.font_size as f32
-                                    };
+                                    let font_height = self.font_height(ti_config.font_id, ti_config.font_size);
 
                                     // Clip text content to the element's bounding box
                                     self.add_render_command(InternalRenderCommand {
@@ -4036,10 +3934,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    // ========================================================================
-    // Public API
-    // ========================================================================
-
     pub fn set_layout_dimensions(&mut self, dimensions: Dimensions) {
         self.layout_dimensions = dimensions;
     }
@@ -4493,6 +4387,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     /// Fire the on_press callback for the element with the given u32 ID.
     /// Used by screen reader action handling.
+    #[allow(dead_code)]
     pub(crate) fn fire_press(&mut self, element_id: u32) {
         if let Some(item) = self.layout_element_map.get_mut(&element_id) {
             let id_copy = item.element_id.clone();
@@ -4761,7 +4656,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     }
                     #[cfg(feature = "text-styling")]
                     {
-                        // TODO: multiline + text-styling visual line home
                         state.move_home_styled(shift);
                     }
                 }
@@ -4975,12 +4869,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     measure_fn.as_ref(),
                                 );
                                 let cursor_x = line_positions.get(cursor_col).copied().unwrap_or(0.0);
-                                let font_config = crate::text::TextConfig {
-                                    font_id: cfg.font_id,
-                                    font_size: cfg.font_size,
-                                    ..Default::default()
-                                };
-                                let line_height = measure_fn("Mg", &font_config).height;
+                                let line_height = self.font_height(cfg.font_id, cfg.font_size);
                                 if let Some(state_mut) = self.text_edit_states.get_mut(&focused) {
                                     state_mut.ensure_cursor_visible(cursor_x, visible_width);
                                     state_mut.ensure_cursor_visible_vertical(cursor_line, line_height, visible_height);
@@ -5184,14 +5073,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         font_size,
                         measure_fn.as_ref(),
                     );
-                    let font_height = {
-                        let config = crate::text::TextConfig {
-                            font_id,
-                            font_size,
-                            ..Default::default()
-                        };
-                        measure_fn("Mg", &config).height
-                    };
+                    let font_height = self.font_height(font_id, font_size);
                     let total_height = visual_lines.len() as f32 * font_height;
                     let max_scroll = (total_height - visible_height).max(0.0);
                     if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {
@@ -5332,7 +5214,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         scd.bounding_box.height,
                     ),
                     content_dimensions: scd.content_size,
-                    horizontal: false, // TODO
+                    horizontal: false,
                     vertical: false,
                     found: true,
                 };
@@ -5351,10 +5233,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
         Vector2::default()
     }
-
-    // ========================================================================
-    // Debug View
-    // ========================================================================
 
     const DEBUG_VIEW_WIDTH: f32 = 400.0;
     const DEBUG_VIEW_ROW_HEIGHT: f32 = 30.0;
@@ -7248,10 +7126,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    // ========================================================================
-    // Public settings
-    // ========================================================================
-
     pub fn set_max_element_count(&mut self, count: i32) {
         self.max_element_count = count;
     }
@@ -7277,5 +7151,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         f: Box<dyn Fn(&str, &TextConfig) -> Dimensions>,
     ) {
         self.measure_text_fn = Some(f);
+        // Invalidate the font height cache since the measurement function changed.
+        self.font_height_cache.clear();
     }
 }

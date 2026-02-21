@@ -5,12 +5,12 @@ use crate::{math::BoundingBox, render_commands::{CornerRadii, RenderCommand, Ren
 #[cfg(feature = "text-styling")]
 use crate::text_styling::{render_styled_text, StyledSegment};
 #[cfg(feature = "text-styling")]
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 const PIXELS_PER_POINT: f32 = 2.0;
 
 #[cfg(feature = "text-styling")]
-static ANIMATION_TRACKER: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (usize, f64)>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+static ANIMATION_TRACKER: std::sync::LazyLock<std::sync::Mutex<FxHashMap<String, (usize, f64)>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(FxHashMap::default()));
 
 /// Represents an asset that can be loaded as a texture. This can be either a file path or embedded bytes.
 #[derive(Debug)]
@@ -78,7 +78,7 @@ pub static TEXTURE_MANAGER: std::sync::LazyLock<std::sync::Mutex<TextureManager>
 /// 
 /// You can adjust `max_frames_not_used` to control how many frames a texture can go unused before being unloaded.
 pub struct TextureManager {
-    textures: std::collections::HashMap<String, TextureData>,
+    textures: rustc_hash::FxHashMap<String, TextureData>,
     pub max_frames_not_used: usize,
 }
 struct TextureData {
@@ -88,7 +88,7 @@ struct TextureData {
 impl TextureManager {
     pub fn new() -> Self {
         Self {
-            textures: std::collections::HashMap::new(),
+            textures: rustc_hash::FxHashMap::default(),
             max_frames_not_used: 1,
         }
     }
@@ -160,10 +160,6 @@ impl TextureManager {
     }
 }
 
-// ============================================================================
-// MaterialManager — caches compiled GPU materials (shaders)
-// ============================================================================
-
 /// Default passthrough vertex shader used for all shader effects.
 const DEFAULT_VERTEX_SHADER: &str = "#version 100
 attribute vec3 position;
@@ -204,9 +200,9 @@ pub static MATERIAL_MANAGER: std::sync::LazyLock<std::sync::Mutex<MaterialManage
 /// shaders. Update stored sources with [`set_source`](Self::set_source); the old
 /// compiled material is evicted automatically when the source changes.
 pub struct MaterialManager {
-    materials: std::collections::HashMap<std::borrow::Cow<'static, str>, MaterialData>,
+    materials: rustc_hash::FxHashMap<std::borrow::Cow<'static, str>, MaterialData>,
     /// Runtime shader storage: name → fragment source.
-    shader_storage: std::collections::HashMap<String, String>,
+    shader_storage: rustc_hash::FxHashMap<String, String>,
     /// How many frames a material can go unused before being evicted.
     pub max_frames_not_used: usize,
 }
@@ -219,8 +215,8 @@ struct MaterialData {
 impl MaterialManager {
     pub fn new() -> Self {
         Self {
-            materials: std::collections::HashMap::new(),
-            shader_storage: std::collections::HashMap::new(),
+            materials: rustc_hash::FxHashMap::default(),
+            shader_storage: rustc_hash::FxHashMap::default(),
             max_frames_not_used: 60, // Keep materials longer than textures
         }
     }
@@ -377,8 +373,7 @@ fn ply_to_macroquad_color(ply_color: &crate::color::Color) -> Color {
 }
 
 /// Draws a rounded rectangle as a single triangle-fan mesh.
-/// This avoids the visual artifacts of multi-shape rendering (seams, separate
-/// shapes getting individual shader effects) and handles alpha correctly.
+/// This avoids the visual artifacts of multi-shape rendering and handles alpha correctly.
 fn draw_good_rounded_rectangle(x: f32, y: f32, w: f32, h: f32, cr: &CornerRadii, color: Color) {
     use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -645,7 +640,6 @@ fn flip_corner_radii(cr: &CornerRadii, flip_x: bool, flip_y: bool) -> CornerRadi
 struct RenderState {
     clip: Option<(i32, i32, i32, i32)>,
     /// Render target stack for group effects (shaders and/or visual rotation).
-    /// Each entry: (render_target, shader_config, visual_rotation, bounding_box)
     rt_stack: Vec<(RenderTarget, Option<crate::shaders::ShaderConfig>, Option<crate::engine::VisualRotationConfig>, BoundingBox)>,
     #[cfg(feature = "text-styling")]
     style_stack: Vec<String>,
@@ -1353,6 +1347,7 @@ fn resize(texture: &Texture2D, height: f32, width: f32, clip: &Option<(i32, i32,
     render_target.texture
 }
 
+/// Draws all render commands to the screen using macroquad.
 pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
     commands: Vec<RenderCommand<CustomElementData>>,
     fonts: &[Font],
@@ -1699,16 +1694,11 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 }
 
                 let normal_render = || {
-                    let x_scale = if config.letter_spacing > 0 {
-                        bb.width / measure_text(
-                            &config.text,
-                            font,
-                            config.font_size as u16,
-                            1.0
-                        ).width
-                    } else {
-                        1.0
-                    };
+                    let x_scale = compute_letter_spacing_x_scale(
+                        bb.width,
+                        count_visible_chars(&config.text),
+                        config.letter_spacing,
+                    );
                     draw_text_ex(
                         &config.text,
                         bb.x,
@@ -1813,16 +1803,11 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     let cursor_y = bb.y + bb.height;
                     let mut pending_renders = Vec::new();
                     
-                    let x_scale = if config.letter_spacing > 0 {
-                        bb.width / measure_text(
-                            &config.text,
-                            Some(&fonts[config.font_id as usize]),
-                            config.font_size as u16,
-                            1.0
-                        ).width
-                    } else {
-                        1.0
-                    };
+                    let x_scale = compute_letter_spacing_x_scale(
+                        bb.width,
+                        count_visible_chars(&config.text),
+                        config.letter_spacing,
+                    );
                     {
                         let mut tracker = ANIMATION_TRACKER.lock().unwrap();
                         let ts_default = crate::color::Color::rgba(
@@ -1914,16 +1899,11 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     gl_use_material(material);
                 }
 
-                let x_scale = if config.letter_spacing > 0 {
-                    bb.width / measure_text(
-                        &config.text,
-                        Some(&fonts[config.font_id as usize]),
-                        config.font_size as u16,
-                        1.0
-                    ).width
-                } else {
-                    1.0
-                };
+                let x_scale = compute_letter_spacing_x_scale(
+                    bb.width,
+                    config.text.chars().count(),
+                    config.letter_spacing,
+                );
                 draw_text_ex(
                     &config.text,
                     bb.x,
@@ -2255,7 +2235,46 @@ pub fn create_measure_text_function(
             config.font_size,
             1.0,
         );
-        let added_space = (text.chars().count().max(1) - 1) as f32 * config.letter_spacing as f32;
+        let added_space = (cleaned_text.chars().count().max(1) - 1) as f32 * config.letter_spacing as f32;
         crate::Dimensions::new(measured.width + added_space, measured.height)
+    }
+}
+
+/// Count visible characters in text, skipping style tag markup.
+/// This handles `{style_name|` openers, `}` closers, and `\` escapes.
+#[cfg(feature = "text-styling")]
+fn count_visible_chars(text: &str) -> usize {
+    let mut count = 0;
+    let mut in_style_def = false;
+    let mut escaped = false;
+    for c in text.chars() {
+        if escaped { count += 1; escaped = false; continue; }
+        match c {
+            '\\' => { escaped = true; }
+            '{' => { in_style_def = true; }
+            '|' => { if in_style_def { in_style_def = false; } else { count += 1; } }
+            '}' => { }
+            _ => { if !in_style_def { count += 1; } }
+        }
+    }
+    count
+}
+
+/// Compute the horizontal scale factor needed to visually apply letter-spacing.
+///
+/// The bounding-box width already includes the total letter-spacing contribution
+/// (`(visible_chars - 1) * letter_spacing`). By dividing out that contribution we
+/// recover the raw text width, and the ratio `bb_width / raw_width` gives the
+/// scale factor that macroquad should use to stretch each glyph.
+fn compute_letter_spacing_x_scale(bb_width: f32, visible_char_count: usize, letter_spacing: u16) -> f32 {
+    if letter_spacing == 0 || visible_char_count <= 1 {
+        return 1.0;
+    }
+    let total_spacing = (visible_char_count as f32 - 1.0) * letter_spacing as f32;
+    let raw_width = bb_width - total_spacing;
+    if raw_width > 0.0 {
+        bb_width / raw_width
+    } else {
+        1.0
     }
 }

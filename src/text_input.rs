@@ -558,10 +558,6 @@ impl TextEditState {
     }
 }
 
-// =============================================================================
-// Styled text editing operations (text-styling feature)
-// =============================================================================
-
 /// When the `text-styling` feature is enabled, these methods operate on `TextEditState`
 /// using visual (display) cursor positions. The internal `text` field contains raw markup,
 /// but `cursor_pos` and `selection_anchor` always represent visual positions.
@@ -1135,10 +1131,6 @@ impl TextEditState {
     }
 }
 
-// =============================================================================
-// Visual configuration for text input elements
-// =============================================================================
-
 /// Configuration for a text input element's visual appearance.
 /// Stored per-frame in `PlyContext::text_input_configs`.
 #[derive(Debug, Clone)]
@@ -1303,10 +1295,6 @@ impl TextInputBuilder {
     }
 }
 
-// =============================================================================
-// Helper functions
-// =============================================================================
-
 /// Convert a character index to a byte index in the string.
 pub fn char_index_to_byte(s: &str, char_idx: usize) -> usize {
     s.char_indices()
@@ -1314,10 +1302,6 @@ pub fn char_index_to_byte(s: &str, char_idx: usize) -> usize {
         .map(|(byte_pos, _)| byte_pos)
         .unwrap_or(s.len())
 }
-
-// =============================================================================
-// Multiline helper functions
-// =============================================================================
 
 /// Find the char index of the start of the line containing `char_pos`.
 /// A "line" is delimited by '\n'. Returns 0 for the first line.
@@ -1402,10 +1386,6 @@ pub fn split_lines(text: &str) -> Vec<(usize, &str)> {
     result.push((char_start, &text[byte_start..]));
     result
 }
-
-// =============================================================================
-// Word wrapping
-// =============================================================================
 
 /// A single visual line after word-wrapping.
 #[derive(Debug, Clone)]
@@ -1767,10 +1747,6 @@ pub fn display_text(text: &str, placeholder: &str, is_password: bool) -> String 
     }
 }
 
-// =============================================================================
-// Text-styling cursor mapping (feature-gated)
-// =============================================================================
-
 /// When text-styling is enabled, the raw string contains markup like `{red|...}` and
 /// escape sequences like `\{`. The user-visible "visual" positions ignore all markup.
 ///
@@ -2005,9 +1981,6 @@ pub mod styling_cursor {
         p
     }
 
-    /// Like `visual_to_raw`, but additionally enters empty style tags at the boundary.
-    /// Use this for cursor positioning and insertion, where the cursor should be
-    /// placed inside an empty `{name|}` tag so typed text goes into the style.
     /// Like `visual_to_raw`, but also enters empty style tags at the boundary
     /// when the basic position lands right before one.
     /// Use this for cursor positioning and single-point insertion.
@@ -2295,7 +2268,7 @@ pub mod styling_cursor {
         result
     }
 
-    /// Convert a "new visual" position (includes } and empty content markers)
+    /// Convert a "structural visual" position (includes } and empty content markers)
     /// to a "content position" (just visible chars, matching strip_styling output).
     /// Content position is clamped to stripped text length.
     pub fn visual_to_content_pos(raw: &str, visual_pos: usize) -> usize {
@@ -2343,7 +2316,7 @@ pub mod styling_cursor {
     }
 
     /// Convert a "content position" (from strip_styling output) back to a
-    /// "new visual" position (includes } and empty content markers).
+    /// "structural visual" position (includes } and empty content markers).
     pub fn content_to_visual_pos(raw: &str, content_pos: usize) -> usize {
         let chars: Vec<char> = raw.chars().collect();
         let len = chars.len();
@@ -3650,10 +3623,6 @@ mod tests {
         assert!(!state.undo());
         assert!(!state.redo());
     }
-
-    // =========================================================================
-    // no_styles_movement tests
-    // =========================================================================
 
     #[cfg(feature = "text-styling")]
     fn make_no_styles_state(raw: &str) -> TextEditState {

@@ -11,11 +11,7 @@
 use crate::accessibility::{AccessibilityRole, LiveRegionMode};
 
 #[cfg(target_arch = "wasm32")]
-use std::collections::HashSet;
-
-// ============================================================================
-// JS plugin function declarations (resolved at WASM load time)
-// ============================================================================
+use rustc_hash::FxHashSet;
 
 #[cfg(target_arch = "wasm32")]
 extern "C" {
@@ -45,10 +41,6 @@ extern "C" {
     fn ply_a11y_set_description(id: u32, desc_ptr: *const u8, desc_len: u32);
     fn ply_a11y_reorder(ids_ptr: *const u32, count: u32);
 }
-
-// ============================================================================
-// Role mapping
-// ============================================================================
 
 #[cfg(target_arch = "wasm32")]
 fn role_to_aria_string(role: &AccessibilityRole) -> &'static str {
@@ -81,14 +73,10 @@ fn role_to_aria_string(role: &AccessibilityRole) -> &'static str {
     }
 }
 
-// ============================================================================
-// Sync state
-// ============================================================================
-
 #[cfg(target_arch = "wasm32")]
 pub struct WebAccessibilityState {
     initialized: bool,
-    previous_ids: HashSet<u32>,
+    previous_ids: FxHashSet<u32>,
     previous_focus: u32,
     previous_order: Vec<u32>,
 }
@@ -98,21 +86,17 @@ impl Default for WebAccessibilityState {
     fn default() -> Self {
         Self {
             initialized: false,
-            previous_ids: HashSet::new(),
+            previous_ids: FxHashSet::default(),
             previous_focus: 0,
             previous_order: Vec::new(),
         }
     }
 }
 
-// ============================================================================
-// Sync function (called each frame after layout)
-// ============================================================================
-
 #[cfg(target_arch = "wasm32")]
 pub fn sync_accessibility_tree(
     state: &mut WebAccessibilityState,
-    accessibility_configs: &std::collections::HashMap<u32, crate::accessibility::AccessibilityConfig>,
+    accessibility_configs: &rustc_hash::FxHashMap<u32, crate::accessibility::AccessibilityConfig>,
     accessibility_element_order: &[u32],
     focused_element_id: u32,
 ) {
@@ -123,7 +107,7 @@ pub fn sync_accessibility_tree(
     }
 
     // Track which IDs exist this frame
-    let mut current_ids = HashSet::with_capacity(accessibility_configs.len());
+    let mut current_ids = FxHashSet::with_capacity_and_hasher(accessibility_configs.len(), Default::default());
 
     // Iterate in layout order (not HashMap order)
     for &elem_id in accessibility_element_order {

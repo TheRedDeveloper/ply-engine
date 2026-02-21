@@ -1,3 +1,4 @@
+/// An RGBA color with floating-point components (0.0–255.0 range).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
 pub struct Color {

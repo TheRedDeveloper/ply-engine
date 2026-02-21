@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::f32::consts::PI;
 use crate::color::Color;
 
@@ -141,7 +141,7 @@ pub fn render_styled_text<F1, F2>(
     time: f64, 
     font_size: f32,
     default_color: Color,
-    animation_tracker: &mut HashMap<String, (usize, f64)>,
+    animation_tracker: &mut FxHashMap<String, (usize, f64)>,
     total_char_index: &mut usize,
     mut render_fn: F1,
     mut render_shadow_fn: F2
@@ -149,7 +149,7 @@ pub fn render_styled_text<F1, F2>(
     F1: FnMut(&str, Transform, Color),
     F2: FnMut(&str, Transform, Color)
 {
-    let named_colors: HashMap<String, Color> = [
+    let named_colors: FxHashMap<String, Color> = [
         ("white", (255.0, 255.0, 255.0)), ("black", (0.0, 0.0, 0.0)),
         ("lightgray", (191.25, 191.25, 191.25)), ("darkgray", (94.35, 94.35, 94.35)),
         ("red", (229.5, 0.0, 0.0)), ("orange", (255.0, 140.25, 0.0)),
@@ -250,7 +250,7 @@ pub fn render_styled_text<F1, F2>(
                     (first_part, None)
                 };
 
-                let mut args: HashMap<&str, &str> = parts.map(|arg| {
+                let mut args: FxHashMap<&str, &str> = parts.map(|arg| {
                     let mut kv = arg.split('=');
                     (kv.next().unwrap_or(""), kv.next().unwrap_or(""))
                 }).collect();
@@ -496,7 +496,7 @@ mod tests {
     fn test_render_simple_text() {
         let lines = vec!["Hello".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -513,7 +513,7 @@ mod tests {
     fn test_render_color_named() {
         let lines = vec!["{color=red|R}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -530,7 +530,7 @@ mod tests {
     fn test_render_color_hex() {
         let lines = vec!["{color=#FF0000|R}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -546,7 +546,7 @@ mod tests {
     fn test_render_color_rgb() {
         let lines = vec!["{color=(255,128,0)|O}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -562,7 +562,7 @@ mod tests {
     fn test_render_opacity() {
         let lines = vec!["{opacity=0.5|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -576,7 +576,7 @@ mod tests {
     fn test_render_transform_translate() {
         let lines = vec!["{transform_translate=0.5,0.5|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -591,7 +591,7 @@ mod tests {
     fn test_render_transform_scale() {
         let lines = vec!["{transform_scale=2.0|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -606,7 +606,7 @@ mod tests {
     fn test_render_transform_scale_xy() {
         let lines = vec!["{transform_scale=2.0,0.5|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -621,7 +621,7 @@ mod tests {
     fn test_render_transform_rotate() {
         let lines = vec!["{transform_rotate=45|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -635,7 +635,7 @@ mod tests {
     fn test_render_wave_effect() {
         let lines = vec!["{wave|ABC}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -650,7 +650,7 @@ mod tests {
     fn test_render_wave_with_params() {
         let lines = vec!["{wave_w=2.0_f=1.0_a=0.5|AB}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -665,7 +665,7 @@ mod tests {
     fn test_render_pulse_effect() {
         let lines = vec!["{pulse|ABC}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -680,7 +680,7 @@ mod tests {
     fn test_render_swing_effect() {
         let lines = vec!["{swing|ABC}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -695,7 +695,7 @@ mod tests {
     fn test_render_jitter_effect() {
         let lines = vec!["{jitter_radii=0.1,0.1|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered_t1 = Vec::new();
         let mut rendered_t2 = Vec::new();
         
@@ -714,7 +714,7 @@ mod tests {
     fn test_render_gradient_effect() {
         let lines = vec!["{gradient_stops=0:#FF0000,3:#0000FF|ABC}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -730,7 +730,7 @@ mod tests {
     fn test_render_hide_effect() {
         let lines = vec!["{hide|ABC}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -744,7 +744,7 @@ mod tests {
     fn test_render_shadow_effect() {
         let lines = vec!["{shadow|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         let mut shadows = Vec::new();
         
@@ -762,7 +762,7 @@ mod tests {
     fn test_render_shadow_with_color() {
         let lines = vec!["{shadow_color=red|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut shadows = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -776,7 +776,7 @@ mod tests {
     fn test_render_shadow_offset() {
         let lines = vec!["{shadow_offset=0.5,0.5|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         let mut shadows = Vec::new();
         
@@ -792,7 +792,7 @@ mod tests {
     fn test_render_type_animation() {
         let lines = vec!["{type_in_id=t1_cursor=\\||ABC}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -815,7 +815,7 @@ mod tests {
     fn test_render_fade_animation() {
         let lines = vec!["{fade_in_id=f1|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -837,7 +837,7 @@ mod tests {
     fn test_render_scale_animation() {
         let lines = vec!["{scale_in_id=s1|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -858,7 +858,7 @@ mod tests {
     fn test_render_nested_wave_pulse() {
         let lines = vec!["{wave|{pulse|ABC}}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -874,7 +874,7 @@ mod tests {
     fn test_render_nested_color_wave() {
         let lines = vec!["{color=red|{wave|ABC}}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -891,7 +891,7 @@ mod tests {
     fn test_render_multiple_same_effect_nested() {
         let lines = vec!["{wave|A{wave|B}C}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.5, 16.0, WHITE, &mut tracker, &mut 0,
@@ -908,7 +908,7 @@ mod tests {
     fn test_render_gradient_over_time() {
         let lines = vec!["{gradient_speed=10|AB}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered_t1 = Vec::new();
         let mut rendered_t2 = Vec::new();
         
@@ -927,7 +927,7 @@ mod tests {
     fn test_render_all_effects_combined() {
         let lines = vec!["{wave|{pulse|{swing|{color=cyan|ABC}}}}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.5, 16.0, WHITE, &mut tracker, &mut 0,
@@ -945,7 +945,7 @@ mod tests {
     fn test_render_color_overwrite_nested() {
         let lines = vec!["{color=red|A{color=blue|B}C}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -962,7 +962,7 @@ mod tests {
     fn test_render_transform_accumulation() {
         let lines = vec!["{transform_translate=0.5,0|{transform_translate=0,0.5|A}}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -977,7 +977,7 @@ mod tests {
     fn test_render_opacity_accumulation() {
         let lines = vec!["{opacity=0.5|{opacity=0.5|A}}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -991,7 +991,7 @@ mod tests {
     fn test_render_shadow_with_transform() {
         let lines = vec!["{transform_scale=2|{shadow|A}}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         let mut shadows = Vec::new();
         
@@ -1007,7 +1007,7 @@ mod tests {
     fn test_render_empty_text() {
         let lines = vec!["".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -1021,7 +1021,7 @@ mod tests {
     fn test_render_unicode_with_effects() {
         let lines = vec!["{wave|你好🌍}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -1038,7 +1038,7 @@ mod tests {
     fn test_render_type_out_animation() {
         let lines = vec!["{type_out_id=t2|ABC}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -1059,7 +1059,7 @@ mod tests {
     fn test_render_fade_out_animation() {
         let lines = vec!["{fade_out_id=f2|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,
@@ -1081,7 +1081,7 @@ mod tests {
     fn test_render_scale_out_animation() {
         let lines = vec!["{scale_out_id=s2|A}".to_string()];
         let segments = parse_text_lines(lines).unwrap();
-        let mut tracker = HashMap::new();
+        let mut tracker = FxHashMap::default();
         let mut rendered = Vec::new();
         
         render_styled_text(&segments[0], 0.0, 16.0, WHITE, &mut tracker, &mut 0,

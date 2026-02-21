@@ -7,7 +7,6 @@ pub mod align;
 pub mod color;
 pub mod elements;
 pub mod engine;
-pub mod errors;
 pub mod id;
 pub mod layout;
 pub mod math;
@@ -95,7 +94,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     /// Sets the corner radius.
     /// Accepts `f32` (all corners) or `(f32, f32, f32, f32)` in CSS order (top-left, top-right, bottom-right, bottom-left).
     #[inline]
-    pub fn corner_radius(mut self, radius: impl Into<engine::CornerRadius>) -> Self {
+    pub fn corner_radius(mut self, radius: impl Into<layout::CornerRadius>) -> Self {
         self.inner.corner_radius = radius.into();
         self
     }
@@ -161,19 +160,19 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     /// Sets the image data for this element.
     ///
     /// Accepts anything that implements `Into<ImageSource>`:
-    /// - `&'static GraphicAsset` — static file path or embedded bytes
-    /// - `Texture2D` — pre-existing GPU texture handle
-    /// - `tinyvg::format::Image` — procedural TinyVG scene graph (requires `tinyvg` feature)
+    /// - `&'static GraphicAsset`: static file path or embedded bytes
+    /// - `Texture2D`: pre-existing GPU texture handle
+    /// - `tinyvg::format::Image`: procedural TinyVG scene graph (requires `tinyvg` feature)
     #[inline]
     pub fn image(mut self, data: impl Into<renderer::ImageSource>) -> Self {
         self.inner.image_data = Some(data.into());
         self
     }
 
-    /// Adds a per-element shader effect using a closure-based uniform API.
+    /// Adds a per-element shader effect.
     ///
     /// The shader modifies the fragment output of the element's draw call directly.
-    /// Multiple `.effect()` calls are supported — each adds to the effects list.
+    /// Multiple `.effect()` calls are supported.
     ///
     /// # Example
     /// ```rust,ignore
@@ -192,10 +191,10 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
-    /// Adds a group shader that captures all children to an offscreen buffer,
+    /// Adds a group shader that captures the lement and its children to an offscreen buffer,
     /// then applies a fragment shader as a post-process.
     ///
-    /// Multiple `.shader()` calls are supported — each adds a nesting level.
+    /// Multiple `.shader()` calls are supported, each adds a nesting level.
     /// The first shader is applied innermost (directly to children), subsequent
     /// shaders wrap earlier ones.
     ///
@@ -221,7 +220,9 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     /// Applies a visual rotation to the element and all its children.
     ///
     /// This renders the element to an offscreen buffer and draws it back with
-    /// rotation, flip, and pivot applied. It does **not** affect layout.
+    /// rotation, flip, and pivot applied.
+    ///
+    /// It does not affect layout.
     ///
     /// When combined with `.shader()`, the rotation shares the same render
     /// target (no extra GPU cost).
@@ -249,10 +250,11 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     /// Applies vertex-level shape rotation to this element's geometry.
     ///
     /// Rotates the element's own rectangle / image / border at the vertex level
-    /// and adjusts its layout bounding box to the AABB of the rotated shape.
+    /// and adjusts its layout bounding box.
+    ///
     /// Children, text, and shaders are **not** affected.
     ///
-    /// There is no pivot — shape rotation always rotates around the center.
+    /// There is no pivot.
     ///
     /// # Example
     /// ```rust,ignore
@@ -270,7 +272,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
-    /// Configures accessibility properties using a closure.
+    /// Configures accessibility properties and disable focus highlight.
     ///
     /// # Example
     /// ```rust,ignore
@@ -293,9 +295,8 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
-    /// When set, clicking this element will not steal focus from a text input
-    /// (or any other focused element). Use this for toolbar buttons that
-    /// modify a text input's content without unfocusing it.
+    /// When set, clicking this element will not steal focus.
+    /// Use this for toolbar buttons that modify a text input's content without unfocusing it.
     #[inline]
     pub fn preserve_focus(mut self) -> Self {
         self.inner.preserve_focus = true;
@@ -345,7 +346,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
-    /// Configures this element as a text input using a closure-based builder.
+    /// Configures this element as a text input.
     ///
     /// The element will capture keyboard input when focused and render
     /// text, cursor, and selection internally.
@@ -457,6 +458,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
         self.ply.context.open_text_element(text, text_config_index);
     }
 
+    /// Registers a callback invoked when the pointer hovers over this element.
     pub fn on_hover<F>(&mut self, callback: F)
     where
         F: FnMut(Id, engine::PointerData) + 'static,
@@ -464,26 +466,9 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
         self.ply.context.on_hover(Box::new(callback));
     }
 
+    /// Returns the current scroll offset of the open scroll container.
     pub fn scroll_offset(&self) -> Vector2 {
         self.ply.context.get_scroll_offset()
-    }
-
-    /// Generates a locally unique ID based on the given `label`.
-    ///
-    /// The ID is unique within a specific local scope but not globally.
-    #[inline]
-    pub fn id_local(&self, label: &'static str) -> id::Id {
-        let parent_id = self.ply.context.get_parent_element_id();
-        id::Id::new_index_local_with_parent(label, 0, parent_id)
-    }
-
-    /// Generates a locally unique indexed ID based on the given `label` and `index`.
-    ///
-    /// This is useful for differentiating elements within a local scope while keeping their labels consistent.
-    #[inline]
-    pub fn id_index_local(&self, label: &'static str, index: u32) -> id::Id {
-        let parent_id = self.ply.context.get_parent_element_id();
-        id::Id::new_index_local_with_parent(label, index, parent_id)
     }
 
     /// Returns if the current element you are creating is hovered
@@ -504,6 +489,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData> {
+    /// Starts a new frame, returning a [`Ui`] handle for building the element tree.
     pub fn begin(
         &mut self,
     ) -> Ui<'_, CustomElementData> {
@@ -811,11 +797,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     }
 
     /// Create a new Ply engine with the given fonts.
-    ///
-    /// Screen dimensions are obtained automatically from macroquad.
-    /// Text measurement is set up automatically from the provided fonts.
-    /// For custom text measurement, use [`Ply::new_headless`] and
-    /// [`Ply::set_measure_text_function`].
     pub fn new(fonts: Vec<macroquad::prelude::Font>) -> Self {
         let dimensions = Dimensions::new(
             macroquad::prelude::screen_width(),
@@ -860,8 +841,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         }
     }
 
-    /// Generates a locally unique ID based on the given `label`.
-    ///
+    /// Returns `true` if the pointer is currently over the element with the given ID.
     pub fn pointer_over(&self, cfg: Id) -> bool {
         self.context.pointer_over(cfg)
     }
@@ -927,18 +907,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         self.context.set_culling_enabled(enable);
     }
 
-    /// Sets the dimensions of the global layout, use if, for example the window size you render to
-    /// changed
+    /// Sets the dimensions of the global layout.
+    /// Use if, for example the window size you render changed.
     pub fn set_layout_dimensions(&mut self, dimensions: Dimensions) {
         self.context.set_layout_dimensions(dimensions);
     }
 
-    /// Updates the state of the pointer for ply. Used to update scroll containers and for
-    /// interactions functions
+    /// Updates the state of the pointer for ply.
+    /// Used to update scroll containers and for interactions functions.
     pub fn pointer_state(&mut self, position: Vector2, is_down: bool) {
         self.context.set_pointer_state(position, is_down);
     }
 
+    /// Processes scroll containers using the current pointer state and scroll delta.
     pub fn update_scroll_containers(
         &mut self,
         drag_scrolling_enabled: bool,
@@ -998,16 +979,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         self.context.set_selection(id.into().id, anchor, cursor);
     }
 
-    /// Returns true if the given element is currently pressed
-    /// (pointer held down on it).
+    /// Returns true if the given element is currently pressed.
     pub fn is_pressed(&self, id: impl Into<Id>) -> bool {
         self.context.is_element_pressed(id.into().id)
     }
 
+    /// Returns the bounding box of the element with the given ID, if it exists.
     pub fn bounding_box(&self, id: Id) -> Option<math::BoundingBox> {
         self.context.get_element_data(id)
     }
 
+    /// Returns scroll container state for the element with the given ID, if it is a scroll container.
     pub fn scroll_container_data(&self, id: Id) -> Option<engine::ScrollContainerData> {
         let data = self.context.get_scroll_container_data(id);
         if data.found {
@@ -1969,10 +1951,6 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // Shape rotation tests (Phase 2)
-    // =====================================================================
-
     #[rustfmt::skip]
     #[test]
     fn test_shape_rotation_emits_with_rotation() {
@@ -2163,10 +2141,6 @@ mod tests {
         assert_eq!(items[0].bounding_box.height, 100.0);
     }
 
-    // =====================================================================
-    // Math tests
-    // =====================================================================
-
     #[test]
     fn test_classify_angle() {
         use math::{classify_angle, AngleType};
@@ -2185,7 +2159,7 @@ mod tests {
     #[test]
     fn test_compute_rotated_aabb_zero() {
         use math::compute_rotated_aabb;
-        use engine::CornerRadius;
+        use layout::CornerRadius;
         let cr = CornerRadius::default();
         let (w, h) = compute_rotated_aabb(100.0, 50.0, &cr, 0.0);
         assert_eq!(w, 100.0);
@@ -2195,7 +2169,7 @@ mod tests {
     #[test]
     fn test_compute_rotated_aabb_90() {
         use math::compute_rotated_aabb;
-        use engine::CornerRadius;
+        use layout::CornerRadius;
         let cr = CornerRadius::default();
         let (w, h) = compute_rotated_aabb(200.0, 100.0, &cr, std::f32::consts::FRAC_PI_2);
         assert!((w - 100.0).abs() < 0.1, "w should be 100, got {}", w);
@@ -2205,7 +2179,7 @@ mod tests {
     #[test]
     fn test_compute_rotated_aabb_45_sharp() {
         use math::compute_rotated_aabb;
-        use engine::CornerRadius;
+        use layout::CornerRadius;
         let cr = CornerRadius::default();
         let theta = std::f32::consts::FRAC_PI_4;
         let (w, h) = compute_rotated_aabb(100.0, 100.0, &cr, theta);
@@ -2217,7 +2191,7 @@ mod tests {
     #[test]
     fn test_compute_rotated_aabb_45_rounded() {
         use math::compute_rotated_aabb;
-        use engine::CornerRadius;
+        use layout::CornerRadius;
         let cr = CornerRadius { top_left: 10.0, top_right: 10.0, bottom_left: 10.0, bottom_right: 10.0 };
         let theta = std::f32::consts::FRAC_PI_4;
         let (w, h) = compute_rotated_aabb(100.0, 100.0, &cr, theta);

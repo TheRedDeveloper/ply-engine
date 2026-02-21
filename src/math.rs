@@ -36,6 +36,7 @@ impl From<(f32, f32)> for Dimensions {
     }
 }
 
+/// An axis-aligned rectangle defined by its top-left position and dimensions.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
 pub struct BoundingBox {
@@ -55,10 +56,6 @@ impl BoundingBox {
         }
     }
 }
-
-// ============================================================================
-// Angle Classification
-// ============================================================================
 
 /// Classifies a rotation angle into common fast-path categories.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -93,11 +90,7 @@ pub fn classify_angle(radians: f32) -> AngleType {
     }
 }
 
-// ============================================================================
-// AABB for rotated rounded rectangles (Minkowski sum approach)
-// ============================================================================
-
-use crate::engine::CornerRadius;
+use crate::layout::CornerRadius;
 
 /// Computes the axis-aligned bounding box of a rounded rectangle after rotation.
 ///

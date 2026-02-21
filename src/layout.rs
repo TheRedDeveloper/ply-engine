@@ -1,6 +1,49 @@
 use crate::align::{AlignX, AlignY};
 use crate::engine;
 
+/// Per-corner border radius for rounded rectangles.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CornerRadius {
+    pub top_left: f32,
+    pub top_right: f32,
+    pub bottom_left: f32,
+    pub bottom_right: f32,
+}
+
+impl CornerRadius {
+    /// Returns `true` when all four corners have a radius of zero.
+    pub fn is_zero(&self) -> bool {
+        self.top_left == 0.0
+            && self.top_right == 0.0
+            && self.bottom_left == 0.0
+            && self.bottom_right == 0.0
+    }
+}
+
+impl From<f32> for CornerRadius {
+    /// Creates a corner radius with the same value for all corners.
+    fn from(value: f32) -> Self {
+        Self {
+            top_left: value,
+            top_right: value,
+            bottom_left: value,
+            bottom_right: value,
+        }
+    }
+}
+
+impl From<(f32, f32, f32, f32)> for CornerRadius {
+    /// Creates corner radii from a tuple in CSS order: (top-left, top-right, bottom-right, bottom-left).
+    fn from((tl, tr, br, bl): (f32, f32, f32, f32)) -> Self {
+        Self {
+            top_left: tl,
+            top_right: tr,
+            bottom_left: bl,
+            bottom_right: br,
+        }
+    }
+}
+
 /// Defines different sizing behaviors for an element.
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
