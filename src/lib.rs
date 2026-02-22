@@ -115,11 +115,12 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
-    /// Sets clipping on the element.
+    /// Configures overflow (clip and scroll) properties.
     #[inline]
-    pub fn clip(mut self, horizontal: bool, vertical: bool) -> Self {
-        self.inner.clip.horizontal = horizontal;
-        self.inner.clip.vertical = vertical;
+    pub fn overflow(mut self, f: impl for<'a> FnOnce(&'a mut elements::OverflowBuilder) -> &'a mut elements::OverflowBuilder) -> Self {
+        let mut builder = elements::OverflowBuilder { config: self.inner.clip };
+        f(&mut builder);
+        self.inner.clip = builder.config;
         self
     }
 

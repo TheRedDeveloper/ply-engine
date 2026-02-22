@@ -228,6 +228,8 @@ pub struct FloatingConfig {
 pub struct ClipConfig {
     pub horizontal: bool,
     pub vertical: bool,
+    pub scroll_x: bool,
+    pub scroll_y: bool,
     pub child_offset: Vector2,
 }
 
@@ -1220,10 +1222,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             let elem_id = self.layout_elements[open_idx].id;
 
             // Auto-apply stored scroll position as child_offset
-            for scd in &self.scroll_container_datas {
-                if scd.element_id == elem_id {
-                    clip.child_offset = scd.scroll_position;
-                    break;
+            if clip.scroll_x || clip.scroll_y {
+                for scd in &self.scroll_container_datas {
+                    if scd.element_id == elem_id {
+                        clip.child_offset = scd.scroll_position;
+                        break;
+                    }
                 }
             }
 
@@ -1234,23 +1238,25 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             self.open_clip_element_stack.push(elem_id as i32);
 
             // Track scroll container
-            let mut found_existing = false;
-            for scd in &mut self.scroll_container_datas {
-                if elem_id == scd.element_id {
-                    scd.layout_element_index = open_idx as i32;
-                    scd.open_this_frame = true;
-                    found_existing = true;
-                    break;
+            if clip.scroll_x || clip.scroll_y {
+                let mut found_existing = false;
+                for scd in &mut self.scroll_container_datas {
+                    if elem_id == scd.element_id {
+                        scd.layout_element_index = open_idx as i32;
+                        scd.open_this_frame = true;
+                        found_existing = true;
+                        break;
+                    }
                 }
-            }
-            if !found_existing {
-                self.scroll_container_datas.push(ScrollContainerDataInternal {
-                    layout_element_index: open_idx as i32,
-                    scroll_origin: Vector2::new(-1.0, -1.0),
-                    element_id: elem_id,
-                    open_this_frame: true,
-                    ..Default::default()
-                });
+                if !found_existing {
+                    self.scroll_container_datas.push(ScrollContainerDataInternal {
+                        layout_element_index: open_idx as i32,
+                        scroll_origin: Vector2::new(-1.0, -1.0),
+                        element_id: elem_id,
+                        open_this_frame: true,
+                        ..Default::default()
+                    });
+                }
             }
         }
 
@@ -3575,6 +3581,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                         // Update scroll container content size
                         if let Some(si) = _scroll_container_data_idx {
+                            let child_gap_total = children_length.saturating_sub(1) as f32
+                                * layout_config.child_gap as f32;
                             let content_w: f32 = (0..children_length)
                                 .map(|ci| {
                                     let idx = self.layout_element_children[children_start + ci]
@@ -3582,7 +3590,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     self.layout_elements[idx].dimensions.width
                                 })
                                 .sum::<f32>()
-                                + (layout_config.padding.left + layout_config.padding.right) as f32;
+                                + (layout_config.padding.left + layout_config.padding.right) as f32
+                                + if layout_config.layout_direction == LayoutDirection::LeftToRight {
+                                    child_gap_total
+                                } else {
+                                    0.0
+                                };
                             let content_h: f32 = (0..children_length)
                                 .map(|ci| {
                                     let idx = self.layout_element_children[children_start + ci]
@@ -3590,7 +3603,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     self.layout_elements[idx].dimensions.height
                                 })
                                 .sum::<f32>()
-                                + (layout_config.padding.top + layout_config.padding.bottom) as f32;
+                                + (layout_config.padding.top + layout_config.padding.bottom) as f32
+                                + if layout_config.layout_direction == LayoutDirection::TopToBottom {
+                                    child_gap_total
+                                } else {
+                                    0.0
+                                };
                             self.scroll_container_datas[si].content_size =
                                 Dimensions::new(content_w, content_h);
                         }
@@ -5340,7 +5358,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             ElementConfigType::Aspect => ("Aspect", Color::rgba(101.0, 149.0, 194.0, 255.0)),
             ElementConfigType::Image => ("Image", Color::rgba(121.0, 189.0, 154.0, 255.0)),
             ElementConfigType::Floating => ("Floating", Color::rgba(250.0, 105.0, 0.0, 255.0)),
-            ElementConfigType::Clip => ("Scroll", Color::rgba(242.0, 196.0, 90.0, 255.0)),
+            ElementConfigType::Clip => ("Overflow", Color::rgba(242.0, 196.0, 90.0, 255.0)),
             ElementConfigType::Border => ("Border", Color::rgba(108.0, 91.0, 123.0, 255.0)),
             ElementConfigType::Custom => ("Custom", Color::rgba(11.0, 72.0, 107.0, 255.0)),
             ElementConfigType::TextInput => ("TextInput", Color::rgba(52.0, 152.0, 219.0, 255.0)),
@@ -6399,6 +6417,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 clip: ClipConfig {
                     horizontal: true,
                     vertical: true,
+                    scroll_x: true,
+                    scroll_y: true,
                     child_offset: self.get_scroll_offset(),
                 },
                 ..Default::default()
@@ -6521,6 +6541,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             background_color: Self::DEBUG_COLOR_2,
             clip: ClipConfig {
                 vertical: true,
+                scroll_y: true,
                 child_offset: self.get_scroll_offset(),
                 ..Default::default()
             },
@@ -6831,10 +6852,30 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             ..Default::default()
                         });
                         {
-                            self.debug_text("Vertical", info_title_config);
-                            self.debug_text(if clip_config.vertical { "true" } else { "false" }, info_text_config);
-                            self.debug_text("Horizontal", info_title_config);
-                            self.debug_text(if clip_config.horizontal { "true" } else { "false" }, info_text_config);
+                            self.debug_text("Overflow", info_title_config);
+                            self.debug_open(&ElementDeclaration::default());
+                            {
+                                let x_label = if clip_config.scroll_x {
+                                    "SCROLL"
+                                } else if clip_config.horizontal {
+                                    "CLIP"
+                                } else {
+                                    "OVERFLOW"
+                                };
+                                let y_label = if clip_config.scroll_y {
+                                    "SCROLL"
+                                } else if clip_config.vertical {
+                                    "CLIP"
+                                } else {
+                                    "OVERFLOW"
+                                };
+                                self.debug_text("{ x: ", info_text_config);
+                                self.debug_text(x_label, info_text_config);
+                                self.debug_text(", y: ", info_text_config);
+                                self.debug_text(y_label, info_text_config);
+                                self.debug_text(" }", info_text_config);
+                            }
+                            self.close_element();
                         }
                         self.close_element();
                     }

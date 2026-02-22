@@ -122,6 +122,61 @@ impl FloatingBuilder {
     }
 }
 
+/// Builder for configuring overflow (clip/scroll) properties using a closure.
+pub struct OverflowBuilder {
+    pub(crate) config: engine::ClipConfig,
+}
+
+impl OverflowBuilder {
+    /// Clips horizontal overflow without enabling scrolling.
+    #[inline]
+    pub fn clip_x(&mut self) -> &mut Self {
+        self.config.horizontal = true;
+        self
+    }
+
+    /// Clips vertical overflow without enabling scrolling.
+    #[inline]
+    pub fn clip_y(&mut self) -> &mut Self {
+        self.config.vertical = true;
+        self
+    }
+
+    /// Clips both axes without enabling scrolling.
+    #[inline]
+    pub fn clip(&mut self) -> &mut Self {
+        self.config.horizontal = true;
+        self.config.vertical = true;
+        self
+    }
+
+    /// Enables horizontal scrolling (implies clip on this axis).
+    #[inline]
+    pub fn scroll_x(&mut self) -> &mut Self {
+        self.config.horizontal = true;
+        self.config.scroll_x = true;
+        self
+    }
+
+    /// Enables vertical scrolling (implies clip on this axis).
+    #[inline]
+    pub fn scroll_y(&mut self) -> &mut Self {
+        self.config.vertical = true;
+        self.config.scroll_y = true;
+        self
+    }
+
+    /// Enables scrolling on both axes (implies clip on both axes).
+    #[inline]
+    pub fn scroll(&mut self) -> &mut Self {
+        self.config.horizontal = true;
+        self.config.vertical = true;
+        self.config.scroll_x = true;
+        self.config.scroll_y = true;
+        self
+    }
+}
+
 /// Builder for configuring border properties using a closure.
 pub struct BorderBuilder {
     pub(crate) config: engine::BorderConfig,
