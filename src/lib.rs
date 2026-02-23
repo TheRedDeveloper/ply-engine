@@ -843,8 +843,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     }
 
     /// Returns `true` if the pointer is currently over the element with the given ID.
-    pub fn pointer_over(&self, cfg: Id) -> bool {
-        self.context.pointer_over(cfg)
+    pub fn pointer_over(&self, cfg: impl Into<Id>) -> bool {
+        self.context.pointer_over(cfg.into())
     }
 
     /// Z-sorted list of element IDs that the cursor is currently over
@@ -932,13 +932,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     }
 
     /// Returns the ID of the currently focused element, or None.
-    pub fn focused_element(&self) -> Option<u32> {
+    pub fn focused_element(&self) -> Option<Id> {
         self.context.focused_element()
     }
 
     /// Sets focus to the element with the given ID.
-    pub fn set_focus(&mut self, id: Id) {
-        self.context.set_focus(id.id);
+    pub fn set_focus(&mut self, id: impl Into<Id>) {
+        self.context.set_focus(id.into().id);
     }
 
     /// Clears focus (no element is focused).
@@ -986,13 +986,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     }
 
     /// Returns the bounding box of the element with the given ID, if it exists.
-    pub fn bounding_box(&self, id: Id) -> Option<math::BoundingBox> {
-        self.context.get_element_data(id)
+    pub fn bounding_box(&self, id: impl Into<Id>) -> Option<math::BoundingBox> {
+        self.context.get_element_data(id.into())
     }
 
     /// Returns scroll container state for the element with the given ID, if it is a scroll container.
-    pub fn scroll_container_data(&self, id: Id) -> Option<engine::ScrollContainerData> {
-        let data = self.context.get_scroll_container_data(id);
+    pub fn scroll_container_data(&self, id: impl Into<Id>) -> Option<engine::ScrollContainerData> {
+        let data = self.context.get_scroll_container_data(id.into());
         if data.found {
             Some(data)
         } else {

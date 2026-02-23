@@ -644,7 +644,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     // Clip/scroll
     open_clip_element_stack: Vec<i32>,
     pointer_over_ids: Vec<Id>,
-    pressed_element_id: Option<u32>,
+    pressed_element_ids: Vec<Id>,
     scroll_container_datas: Vec<ScrollContainerDataInternal>,
 
     // Accessibility / focus
@@ -845,7 +845,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             measured_words_free_list: Vec::new(),
             open_clip_element_stack: Vec::new(),
             pointer_over_ids: Vec::new(),
-            pressed_element_id: None,
+            pressed_element_ids: Vec::new(),
             scroll_container_datas: Vec::new(),
             focused_element_id: 0,
             focus_from_keyboard: false,
@@ -4110,7 +4110,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             // lib.rs will set shift via a dedicated method if needed.
                             self.pending_text_click = Some((top.id, click_x, click_y, false));
                         }
-                        self.pressed_element_id = Some(top.id);
+                        self.pressed_element_ids = self.pointer_over_ids.clone();
                     }
                 } else {
                     // Check if any element in the pointer stack preserves focus
@@ -4126,24 +4126,24 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         self.change_focus(0);
                     }
 
-                    // Press the topmost hovered element (last in pointer_over_ids)
-                    if let Some(top) = self.pointer_over_ids.last().cloned() {
-                        self.pressed_element_id = Some(top.id);
-                        if let Some(item) = self.layout_element_map.get_mut(&top.id) {
+                    // Mark all hovered elements as pressed and fire on_press callbacks
+                    self.pressed_element_ids = self.pointer_over_ids.clone();
+                    for eid in self.pointer_over_ids.clone().iter() {
+                        if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
                             if let Some(ref mut callback) = item.on_press_fn {
-                                callback(top);
+                                callback(eid.clone());
                             }
                         }
                     }
                 }
             }
             PointerDataInteractionState::ReleasedThisFrame => {
-                // Fire on_release for the element that was pressed
-                if let Some(elem_id) = self.pressed_element_id.take() {
-                    if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-                        let id_copy = item.element_id.clone();
+                // Fire on_release for all elements that were in the pressed chain
+                let pressed = std::mem::take(&mut self.pressed_element_ids);
+                for eid in pressed.iter() {
+                    if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
                         if let Some(ref mut callback) = item.on_release_fn {
-                            callback(id_copy);
+                            callback(eid.clone());
                         }
                     }
                 }
@@ -4343,7 +4343,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     pub fn pressed(&self) -> bool {
         let open_idx = self.get_open_layout_element();
         let elem_id = self.layout_elements[open_idx].id;
-        self.pressed_element_id == Some(elem_id)
+        self.pressed_element_ids.iter().any(|eid| eid.id == elem_id)
     }
 
     pub fn set_press_callbacks(
@@ -4367,9 +4367,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     }
 
     /// Returns the currently focused element's ID, or None.
-    pub fn focused_element(&self) -> Option<u32> {
+    pub fn focused_element(&self) -> Option<Id> {
         if self.focused_element_id != 0 {
-            Some(self.focused_element_id)
+            self.layout_element_map
+                .get(&self.focused_element_id)
+                .map(|item| item.element_id.clone())
         } else {
             None
         }
@@ -4548,7 +4550,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     /// Returns true if the given element ID is currently pressed.
     pub fn is_element_pressed(&self, element_id: u32) -> bool {
-        self.pressed_element_id == Some(element_id)
+        self.pressed_element_ids.iter().any(|eid| eid.id == element_id)
     }
 
     /// Process a character input event for the focused text input.
@@ -5199,12 +5201,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             return;
         }
         if pressed {
-            self.pressed_element_id = Some(self.focused_element_id);
             let id_copy = self
                 .layout_element_map
                 .get(&self.focused_element_id)
                 .map(|item| item.element_id.clone());
             if let Some(id) = id_copy {
+                self.pressed_element_ids = vec![id.clone()];
                 if let Some(item) = self.layout_element_map.get_mut(&self.focused_element_id) {
                     if let Some(ref mut callback) = item.on_press_fn {
                         callback(id);
@@ -5213,11 +5215,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
         }
         if released {
-            if let Some(elem_id) = self.pressed_element_id.take() {
-                if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-                    let id_copy = item.element_id.clone();
+            let pressed = std::mem::take(&mut self.pressed_element_ids);
+            for eid in pressed.iter() {
+                if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
                     if let Some(ref mut callback) = item.on_release_fn {
-                        callback(id_copy);
+                        callback(eid.clone());
                     }
                 }
             }

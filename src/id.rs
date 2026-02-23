@@ -1,7 +1,7 @@
 use crate::engine;
 
 /// Owned string for debug/display purposes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StringId {
     text: String,
 }
@@ -29,7 +29,7 @@ impl StringId {
 }
 
 /// A hashed identifier used to uniquely address UI elements across frames.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Id {
     pub id: u32,
     pub offset: u32,
