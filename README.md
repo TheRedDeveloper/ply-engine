@@ -56,11 +56,11 @@ fn window_conf() -> macroquad::conf::Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    // Load fonts
-    let fonts = vec![load_ttf_font("assets/lexend.ttf").await.unwrap()];
+    // Define your default font
+    static DEFAULT_FONT: FontAsset = FontAsset::Path("assets/lexend.ttf");
 
     // Create the engine
-    let mut ply = Ply::<()>::new(fonts);
+    let mut ply = Ply::<()>::new(&DEFAULT_FONT).await;
 
     loop {
         clear_background(MacroquadColor::new(0.0, 0.0, 0.0, 1.0));

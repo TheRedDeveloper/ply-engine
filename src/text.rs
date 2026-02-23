@@ -1,5 +1,6 @@
 use crate::align::AlignX;
 use crate::color::Color;
+use crate::renderer::FontAsset;
 use crate::shaders::{ShaderAsset, ShaderBuilder, ShaderConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -21,8 +22,8 @@ pub struct TextConfig {
     pub(crate) user_data: usize,
     /// The color of the text.
     pub color: Color,
-    /// Ply does not manage fonts. It is up to the user to order their fonts correctly.
-    pub font_id: u16,
+    /// The font asset to use. `None` means use the default font.
+    pub font_asset: Option<&'static FontAsset>,
     /// The font size of the text.
     pub font_size: u16,
     /// The spacing between letters.
@@ -52,10 +53,10 @@ impl TextConfig {
         self
     }
 
-    /// Sets the font ID. The user is responsible for assigning unique font IDs.
+    /// Sets the font to use for this text element.
     #[inline]
-    pub fn font_id(&mut self, id: u16) -> &mut Self {
-        self.font_id = id;
+    pub fn font(&mut self, asset: &'static FontAsset) -> &mut Self {
+        self.font_asset = Some(asset);
         self
     }
 
@@ -120,13 +121,13 @@ impl Default for TextConfig {
         Self {
             user_data: 0,
             color: Color::rgba(0., 0., 0., 0.),
-            font_id: 0,
             font_size: 0,
             letter_spacing: 0,
             line_height: 0,
             wrap_mode: WrapMode::Words,
             alignment: AlignX::Left,
             effects: Vec::new(),
+            font_asset: None,
             accessible: false,
         }
     }

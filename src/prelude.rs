@@ -9,6 +9,7 @@ pub use crate::Ply;
 pub use crate::Ui;
 pub use crate::id::Id;
 pub use crate::renderer::GraphicAsset;
+pub use crate::renderer::FontAsset;
 pub use crate::shaders::ShaderAsset;
 
 // Utility functions

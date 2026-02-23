@@ -16,14 +16,14 @@ pub struct Text {
     pub text: String,
     /// The color of the text.
     pub color: Color,
-    /// The ID of the font used.
-    pub font_id: u16,
     /// The font size.
     pub font_size: u16,
     /// The spacing between letters.
     pub letter_spacing: u16,
     /// The line height.
     pub line_height: u16,
+    /// The font asset, if specified via `.font()`.
+    pub font_asset: Option<&'static crate::renderer::FontAsset>,
 }
 
 /// Defines individual corner radii for an element.
@@ -136,14 +136,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
                 }
             }
             engine::RenderCommandType::Text => {
-                if let engine::InternalRenderData::Text { text, text_color, font_id, font_size, letter_spacing, line_height } = &value.render_data {
+                if let engine::InternalRenderData::Text { text, text_color, font_size, letter_spacing, line_height, font_asset } = &value.render_data {
                     Self::Text(Text {
                         text: text.clone(),
                         color: *text_color,
-                        font_id: *font_id,
                         font_size: *font_size,
                         letter_spacing: *letter_spacing,
                         line_height: *line_height,
+                        font_asset: *font_asset,
                     })
                 } else {
                     Self::None()

@@ -71,6 +71,136 @@ impl From<tinyvg::format::Image> for ImageSource {
     }
 }
 
+/// Represents a font asset that can be loaded. This can be either a file path or embedded bytes.
+#[derive(Debug)]
+pub enum FontAsset {
+    /// A file path to a `.ttf` font file (e.g. `"assets/fonts/lexend.ttf"`).
+    Path(&'static str),
+    /// Embedded font bytes, typically via `include_bytes!`.
+    Bytes {
+        file_name: &'static str,
+        data: &'static [u8],
+    },
+}
+
+impl FontAsset {
+    /// Returns a unique key string for this asset (the path or file name).
+    pub fn key(&self) -> &'static str {
+        match self {
+            FontAsset::Path(path) => path,
+            FontAsset::Bytes { file_name, .. } => file_name,
+        }
+    }
+}
+
+/// Global FontManager. Manages font loading, caching, and eviction.
+pub static FONT_MANAGER: std::sync::LazyLock<std::sync::Mutex<FontManager>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(FontManager::new()));
+
+/// Manages fonts, loading and caching them as needed.
+pub struct FontManager {
+    fonts: rustc_hash::FxHashMap<&'static str, FontData>,
+    default_font: Option<DefaultFont>,
+    pub max_frames_not_used: usize,
+}
+struct DefaultFont {
+    key: &'static str,
+    font: Font,
+}
+struct FontData {
+    pub frames_not_used: usize,
+    pub font: Font,
+}
+impl FontManager {
+    pub fn new() -> Self {
+        Self {
+            fonts: rustc_hash::FxHashMap::default(),
+            default_font: None,
+            max_frames_not_used: 60,
+        }
+    }
+
+    /// Get a cached font by its asset key.
+    pub fn get(&mut self, asset: &'static FontAsset) -> Option<&Font> {
+        let key = asset.key();
+        if let Some(data) = self.fonts.get_mut(key) {
+            return Some(&data.font);
+        }
+        // Fall back to the default font if the key matches
+        self.default_font.as_ref()
+            .filter(|d| d.key == key)
+            .map(|d| &d.font)
+    }
+
+    /// Get the default font (set via [`load_default`](FontManager::load_default)).
+    /// Returns `None` if no default font has been set.
+    pub fn get_default(&self) -> Option<&Font> {
+        self.default_font.as_ref().map(|d| &d.font)
+    }
+
+    /// Load the default font. Stored outside the cache and never evicted.
+    pub async fn load_default(asset: &'static FontAsset) {
+        let font = match asset {
+            FontAsset::Bytes { data, .. } => {
+                macroquad::text::load_ttf_font_from_bytes(data)
+                    .expect("Failed to load font from bytes")
+            }
+            FontAsset::Path(path) => {
+                macroquad::text::load_ttf_font(path).await
+                    .unwrap_or_else(|e| panic!("Failed to load font '{}': {:?}", path, e))
+            }
+        };
+        let mut fm = FONT_MANAGER.lock().unwrap();
+        fm.default_font = Some(DefaultFont { key: asset.key(), font });
+    }
+
+    /// Ensure a font is loaded (no-op if already cached).
+    pub async fn ensure(asset: &'static FontAsset) {
+        // Check if already loaded (quick lock)
+        {
+            let mut fm = FONT_MANAGER.lock().unwrap();
+            // Already the default font?
+            if fm.default_font.as_ref().map(|d| d.key) == Some(asset.key()) {
+                return;
+            }
+            // Already in cache?
+            if let Some(data) = fm.fonts.get_mut(asset.key()) {
+                data.frames_not_used = 0;
+                return;
+            }
+        }
+
+        // Load outside the lock
+        let font = match asset {
+            FontAsset::Bytes { data, .. } => {
+                macroquad::text::load_ttf_font_from_bytes(data)
+                    .expect("Failed to load font from bytes")
+            }
+            FontAsset::Path(path) => {
+                macroquad::text::load_ttf_font(path).await
+                    .unwrap_or_else(|e| panic!("Failed to load font '{}': {:?}", path, e))
+            }
+        };
+
+        // Insert with lock
+        let mut fm = FONT_MANAGER.lock().unwrap();
+        let key = asset.key();
+        fm.fonts.entry(key).or_insert(FontData { frames_not_used: 0, font });
+    }
+
+    pub fn clean(&mut self) {
+        self.fonts.retain(|_, data| data.frames_not_used <= self.max_frames_not_used);
+        for (_, data) in self.fonts.iter_mut() {
+            data.frames_not_used += 1;
+        }
+    }
+
+    /// Returns the number of currently loaded fonts.
+    pub fn size(&self) -> usize {
+        self.fonts.len()
+    }
+}
+
 /// Global TextureManager. Can also be used outside the renderer to manage your own macroquad textures.
 pub static TEXTURE_MANAGER: std::sync::LazyLock<std::sync::Mutex<TextureManager>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(TextureManager::new()));
 
@@ -1350,7 +1480,6 @@ fn resize(texture: &Texture2D, height: f32, width: f32, clip: &Option<(i32, i32,
 /// Draws all render commands to the screen using macroquad.
 pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
     commands: Vec<RenderCommand<CustomElementData>>,
-    fonts: &[Font],
     handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
 ) {
     let mut state = RenderState::new();
@@ -1680,7 +1809,17 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
             RenderCommandConfig::Text(config) => {
                 let bb = command.bounding_box;
                 let font_size = config.font_size as f32;
-                let font = Some(&fonts[config.font_id as usize]);
+                // Ensure font is loaded
+                if let Some(asset) = config.font_asset {
+                    FontManager::ensure(asset).await;
+                }
+                // Hold the FM lock for the duration of text rendering — no clone needed
+                let mut fm = FONT_MANAGER.lock().unwrap();
+                let font = if let Some(asset) = config.font_asset {
+                    fm.get(asset)
+                } else {
+                    fm.get_default()
+                };
                 let default_color = ply_to_macroquad_color(&config.color);
 
                 // Activate effect material if present
@@ -1888,6 +2027,17 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
             RenderCommandConfig::Text(config) => {
                 let bb = command.bounding_box;
                 let color = ply_to_macroquad_color(&config.color);
+                // Ensure font is loaded
+                if let Some(asset) = config.font_asset {
+                    FontManager::ensure(asset).await;
+                }
+                // Hold the FM lock for the duration of text rendering — no clone needed
+                let mut fm = FONT_MANAGER.lock().unwrap();
+                let font = if let Some(asset) = config.font_asset {
+                    fm.get(asset)
+                } else {
+                    fm.get_default()
+                };
 
                 // Activate effect material if present
                 let has_effect = !command.effects.is_empty();
@@ -1910,7 +2060,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     bb.y + bb.height,
                     TextParams {
                         font_size: config.font_size as u16,
-                        font: Some(&fonts[config.font_id as usize]),
+                        font,
                         font_scale: 1.0,
                         font_scale_aspect: x_scale,
                         rotation: 0.0,
@@ -2180,10 +2330,10 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
     }
     TEXTURE_MANAGER.lock().unwrap().clean();
     MATERIAL_MANAGER.lock().unwrap().clean();
+    FONT_MANAGER.lock().unwrap().clean();
 }
 
 pub fn create_measure_text_function(
-    fonts: Vec<Font>,
 ) -> impl Fn(&str, &crate::TextConfig) -> crate::Dimensions + 'static {
     move |text: &str, config: &crate::TextConfig| {
         #[cfg(feature = "text-styling")]
@@ -2229,9 +2379,16 @@ pub fn create_measure_text_function(
         };
         #[cfg(not(feature = "text-styling"))]
         let cleaned_text = text.to_string();
+        let mut fm = FONT_MANAGER.lock().unwrap();
+        // Resolve font: use asset font if available, otherwise default
+        let font = if let Some(asset) = config.font_asset {
+            fm.get(asset)
+        } else {
+            fm.get_default()
+        };
         let measured = macroquad::text::measure_text(
             &cleaned_text,
-            Some(&fonts[config.font_id as usize]),
+            font,
             config.font_size,
             1.0,
         );

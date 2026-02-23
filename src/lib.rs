@@ -33,7 +33,6 @@ pub use color::Color;
 pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     context: engine::PlyContext<CustomElementData>,
     headless: bool,
-    fonts: Vec<macroquad::prelude::Font>,
     /// Key repeat tracking for text input control keys
     text_input_repeat_key: u32,
     text_input_repeat_first: f64,
@@ -797,8 +796,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         }
     }
 
-    /// Create a new Ply engine with the given fonts.
-    pub fn new(fonts: Vec<macroquad::prelude::Font>) -> Self {
+    /// Create a new Ply engine with the given default font.
+    pub async fn new(default_font: &'static renderer::FontAsset) -> Self {
+        renderer::FontManager::load_default(default_font).await;
+
         let dimensions = Dimensions::new(
             macroquad::prelude::screen_width(),
             macroquad::prelude::screen_height(),
@@ -806,7 +807,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         let mut ply = Self {
             context: engine::PlyContext::new(dimensions),
             headless: false,
-            fonts: fonts.clone(),
             text_input_repeat_key: 0,
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
@@ -817,7 +817,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
             native_a11y_state: accessibility_native::NativeAccessibilityState::default(),
         };
-        ply.set_measure_text_function(renderer::create_measure_text_function(fonts));
+        ply.context.default_font_key = default_font.key();
+        ply.set_measure_text_function(renderer::create_measure_text_function());
         ply
     }
 
@@ -829,7 +830,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         Self {
             context: engine::PlyContext::new(dimensions),
             headless: true,
-            fonts: vec![],
             text_input_repeat_key: 0,
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
@@ -1049,7 +1049,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
     ) {
         let commands = self.eval();
-        renderer::render(commands, &self.fonts, handle_custom_command).await;
+        renderer::render(commands, handle_custom_command).await;
     }
 }
 

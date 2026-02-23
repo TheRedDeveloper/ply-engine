@@ -493,10 +493,10 @@ pub enum InternalRenderData<CustomElementData: Clone + Default + std::fmt::Debug
     Text {
         text: String,
         text_color: Color,
-        font_id: u16,
         font_size: u16,
         letter_spacing: u16,
         line_height: u16,
+        font_asset: Option<&'static crate::renderer::FontAsset>,
     },
     Image {
         background_color: Color,
@@ -678,9 +678,12 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     // Dynamic string data (for int-to-string etc.)
     dynamic_string_data: Vec<u8>,
 
-    // Font height cache: (font_id, font_size) -> height in pixels.
+    // Font height cache: (font_key, font_size) -> height in pixels.
     // Avoids repeated calls to measure_fn("Mg", ...) which are expensive.
-    font_height_cache: FxHashMap<u32, f32>,
+    font_height_cache: FxHashMap<(&'static str, u16), f32>,
+
+    // The key of the default font (set by Ply::new, used in debug view)
+    pub(crate) default_font_key: &'static str,
 
     // Debug view: heap-allocated strings that survive the frame
 }
@@ -760,9 +763,12 @@ fn hash_string_contents_with_config(
     config: &TextConfig,
 ) -> u32 {
     let mut hash: u32 = (hash_data_scalar(text.as_bytes()) % u32::MAX as u64) as u32;
-    hash = hash.wrapping_add(config.font_id as u32);
-    hash = hash.wrapping_add(hash << 10);
-    hash ^= hash >> 6;
+    // Fold in font key bytes
+    for &b in config.font_asset.map(|a| a.key()).unwrap_or("").as_bytes() {
+        hash = hash.wrapping_add(b as u32);
+        hash = hash.wrapping_add(hash << 10);
+        hash ^= hash >> 6;
+    }
     hash = hash.wrapping_add(config.font_size as u32);
     hash = hash.wrapping_add(hash << 10);
     hash ^= hash >> 6;
@@ -859,6 +865,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             tree_node_visited: Vec::new(),
             dynamic_string_data: Vec::new(),
             font_height_cache: FxHashMap::default(),
+            default_font_key: "",
         };
         ctx
     }
@@ -1353,13 +1360,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 let visual_lines = crate::text_input::wrap_lines(
                                     &disp_text,
                                     elem_width,
-                                    ti_config.font_id,
+                                    ti_config.font_asset,
                                     ti_config.font_size,
                                     measure_fn.as_ref(),
                                 );
                                 let font_height = {
                                     let config = crate::text::TextConfig {
-                                        font_id: ti_config.font_id,
+                                        font_asset: ti_config.font_asset,
                                         font_size: ti_config.font_size,
                                         ..Default::default()
                                     };
@@ -1372,7 +1379,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 let vl = &visual_lines[clicked_line];
                                 let line_char_x_positions = crate::text_input::compute_char_x_positions(
                                     &vl.text,
-                                    ti_config.font_id,
+                                    ti_config.font_asset,
                                     ti_config.font_size,
                                     measure_fn.as_ref(),
                                 );
@@ -1414,7 +1421,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 // Single-line: existing behavior
                                 let char_x_positions = crate::text_input::compute_char_x_positions(
                                     &disp_text,
-                                    ti_config.font_id,
+                                    ti_config.font_asset,
                                     ti_config.font_size,
                                     measure_fn.as_ref(),
                                 );
@@ -1802,17 +1809,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.layout_elements[parent_idx].children_length += 1;
     }
 
-    /// Returns the cached font height for the given (font_id, font_size) pair.
+    /// Returns the cached font height for the given (font_asset, font_size) pair.
     /// Measures `"Mg"` on the first call for each pair and caches the result.
-    fn font_height(&mut self, font_id: u16, font_size: u16) -> f32 {
-        // Pack (font_id, font_size) into a single u32 key.
-        let key = (font_id as u32) << 16 | font_size as u32;
+    fn font_height(&mut self, font_asset: Option<&'static crate::renderer::FontAsset>, font_size: u16) -> f32 {
+        let font_key = font_asset.map(|a| a.key()).unwrap_or("");
+        let key = (font_key, font_size);
         if let Some(&h) = self.font_height_cache.get(&key) {
             return h;
         }
         let h = if let Some(ref measure_fn) = self.measure_text_fn {
             let config = TextConfig {
-                font_id,
+                font_asset,
                 font_size,
                 ..Default::default()
             };
@@ -3127,10 +3134,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         render_data: InternalRenderData::Text {
                                             text: line_text,
                                             text_color: text_config.color,
-                                            font_id: text_config.font_id,
                                             font_size: text_config.font_size,
                                             letter_spacing: text_config.letter_spacing,
                                             line_height: text_config.line_height,
+                                            font_asset: text_config.font_asset,
                                         },
                                         user_data: text_config.user_data,
                                         id: hash_number(line_index as u32, elem_id).id,
@@ -3207,7 +3214,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     };
 
                                     // Measure font height for cursor
-                                    let font_height = self.font_height(ti_config.font_id, ti_config.font_size);
+                                    let font_height = self.font_height(ti_config.font_asset, ti_config.font_size);
 
                                     // Clip text content to the element's bounding box
                                     self.add_render_command(InternalRenderCommand {
@@ -3234,7 +3241,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             crate::text_input::wrap_lines(
                                                 &disp_text,
                                                 current_bbox.width,
-                                                ti_config.font_id,
+                                                ti_config.font_asset,
                                                 ti_config.font_size,
                                                 measure_fn.as_ref(),
                                             )
@@ -3261,7 +3268,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             visual_lines.iter().map(|vl| {
                                                 crate::text_input::compute_char_x_positions(
                                                     &vl.text,
-                                                    ti_config.font_id,
+                                                    ti_config.font_asset,
                                                     ti_config.font_size,
                                                     measure_fn.as_ref(),
                                                 )
@@ -3334,10 +3341,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     render_data: InternalRenderData::Text {
                                                         text: vl.text.clone(),
                                                         text_color,
-                                                        font_id: ti_config.font_id,
                                                         font_size: ti_config.font_size,
                                                         letter_spacing: 0,
                                                         line_height: 0,
+                                                        font_asset: ti_config.font_asset,
                                                     },
                                                     user_data: 0,
                                                     id: hash_number(2000 + line_idx as u32, elem_id).id,
@@ -3379,7 +3386,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         let char_x_positions = if let Some(ref measure_fn) = self.measure_text_fn {
                                             crate::text_input::compute_char_x_positions(
                                                 &disp_text,
-                                                ti_config.font_id,
+                                                ti_config.font_asset,
                                                 ti_config.font_size,
                                                 measure_fn.as_ref(),
                                             )
@@ -3447,10 +3454,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 render_data: InternalRenderData::Text {
                                                     text: disp_text,
                                                     text_color,
-                                                    font_id: ti_config.font_id,
                                                     font_size: ti_config.font_size,
                                                     letter_spacing: 0,
                                                     line_height: 0,
+                                                    font_asset: ti_config.font_asset,
                                                 },
                                                 user_data: 0,
                                                 id: hash_number(1002, elem_id).id,
@@ -4596,10 +4603,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         // Get config for the focused element
         let config_idx = self.text_input_element_ids.iter()
             .position(|&id| id == elem_id);
-        let (max_length, is_multiline, font_id, font_size) = config_idx
+        let (max_length, is_multiline, font_asset, font_size) = config_idx
             .and_then(|idx| self.text_input_configs.get(idx))
-            .map(|cfg| (cfg.max_length, cfg.is_multiline, cfg.font_id, cfg.font_size))
-            .unwrap_or((None, false, 0, 16));
+            .map(|cfg| (cfg.max_length, cfg.is_multiline, cfg.font_asset, cfg.font_size))
+            .unwrap_or((None, false, None, 16));
 
         // For multiline visual navigation, compute visual lines
         let visual_lines_opt = if is_multiline {
@@ -4613,7 +4620,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         Some(crate::text_input::wrap_lines(
                             &state.text,
                             visible_width,
-                            font_id,
+                            font_asset,
                             font_size,
                             measure_fn.as_ref(),
                         ))
@@ -4877,7 +4884,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 let visual_lines = crate::text_input::wrap_lines(
                                     &disp_text,
                                     visible_width,
-                                    cfg.font_id,
+                                    cfg.font_asset,
                                     cfg.font_size,
                                     measure_fn.as_ref(),
                                 );
@@ -4889,12 +4896,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 let vl_text = visual_lines.get(cursor_line).map(|vl| vl.text.as_str()).unwrap_or("");
                                 let line_positions = crate::text_input::compute_char_x_positions(
                                     vl_text,
-                                    cfg.font_id,
+                                    cfg.font_asset,
                                     cfg.font_size,
                                     measure_fn.as_ref(),
                                 );
                                 let cursor_x = line_positions.get(cursor_col).copied().unwrap_or(0.0);
-                                let line_height = self.font_height(cfg.font_id, cfg.font_size);
+                                let line_height = self.font_height(cfg.font_asset, cfg.font_size);
                                 if let Some(state_mut) = self.text_edit_states.get_mut(&focused) {
                                     state_mut.ensure_cursor_visible(cursor_x, visible_width);
                                     state_mut.ensure_cursor_visible_vertical(cursor_line, line_height, visible_height);
@@ -4902,7 +4909,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             } else {
                                 let char_x_positions = crate::text_input::compute_char_x_positions(
                                     &disp_text,
-                                    cfg.font_id,
+                                    cfg.font_asset,
                                     cfg.font_size,
                                     measure_fn.as_ref(),
                                 );
@@ -5064,7 +5071,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 None => continue,
             };
 
-            let font_id = cfg.font_id;
+            let font_asset = cfg.font_asset;
             let font_size = cfg.font_size;
             let is_multiline = cfg.is_multiline;
             let is_password = cfg.is_password;
@@ -5094,11 +5101,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     let visual_lines = crate::text_input::wrap_lines(
                         &disp_text,
                         visible_width,
-                        font_id,
+                        font_asset,
                         font_size,
                         measure_fn.as_ref(),
                     );
-                    let font_height = self.font_height(font_id, font_size);
+                    let font_height = self.font_height(font_asset, font_size);
                     let total_height = visual_lines.len() as f32 * font_height;
                     let max_scroll = (total_height - visible_height).max(0.0);
                     if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {
@@ -5110,7 +5117,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     // Single-line: clamp horizontal scroll
                     let char_x_positions = crate::text_input::compute_char_x_positions(
                         &disp_text,
-                        font_id,
+                        font_asset,
                         font_size,
                         measure_fn.as_ref(),
                     );
@@ -6790,8 +6797,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         {
                             self.debug_text("Font Size", info_title_config);
                             self.debug_int_text(text_config.font_size as f32, info_text_config);
-                            self.debug_text("Font ID", info_title_config);
-                            self.debug_int_text(text_config.font_id as f32, info_text_config);
+                            self.debug_text("Font", info_title_config);
+                            {
+                                let label = if let Some(asset) = text_config.font_asset {
+                                    asset.key().to_string()
+                                } else {
+                                    format!("default ({})", self.default_font_key)
+                                };
+                                self.open_text_element(&label, info_text_config);
+                            }
                             self.debug_text("Line Height", info_title_config);
                             if text_config.line_height == 0 {
                                 self.debug_text("auto", info_text_config);
@@ -7032,8 +7046,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.debug_text("Font", info_title_config);
                             self.debug_open(&ElementDeclaration::default());
                             {
-                                self.debug_text("id: ", info_text_config);
-                                self.debug_int_text(ti_cfg.font_id as f32, info_text_config);
+                                let label = if let Some(asset) = ti_cfg.font_asset {
+                                    asset.key().to_string()
+                                } else {
+                                    format!("default ({})", self.default_font_key)
+                                };
+                                self.open_text_element(&label, info_text_config);
                                 self.debug_text(", size: ", info_text_config);
                                 self.debug_int_text(ti_cfg.font_size as f32, info_text_config);
                             }

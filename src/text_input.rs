@@ -1143,8 +1143,6 @@ pub struct TextInputConfig {
     pub is_password: bool,
     /// When true, the input supports multiple lines (Enter inserts newline).
     pub is_multiline: bool,
-    /// Font ID for the text (matches the user's font registry).
-    pub font_id: u16,
     /// Font size in pixels.
     pub font_size: u16,
     /// Color of the input text.
@@ -1157,6 +1155,8 @@ pub struct TextInputConfig {
     pub selection_color: Color,
     /// When true, cursor movement skips over `}` and empty content style positions.
     pub no_styles_movement: bool,
+    /// The font asset to use. Resolved by the renderer.
+    pub font_asset: Option<&'static crate::renderer::FontAsset>,
 }
 
 impl Default for TextInputConfig {
@@ -1166,13 +1166,13 @@ impl Default for TextInputConfig {
             max_length: None,
             is_password: false,
             is_multiline: false,
-            font_id: 0,
             font_size: 16,
             text_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
             placeholder_color: Color::rgba(0.5, 0.5, 0.5, 1.0),
             cursor_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
             selection_color: Color::rgba(0.27, 0.51, 0.71, 0.5),
             no_styles_movement: false,
+            font_asset: None,
         }
     }
 }
@@ -1221,10 +1221,12 @@ impl TextInputBuilder {
         self
     }
 
-    /// Sets the font ID.
+    /// Sets the font to use for this text input.
+    ///
+    /// The font is loaded asynchronously during rendering.
     #[inline]
-    pub fn font_id(&mut self, id: u16) -> &mut Self {
-        self.config.font_id = id;
+    pub fn font(&mut self, asset: &'static crate::renderer::FontAsset) -> &mut Self {
+        self.config.font_asset = Some(asset);
         self
     }
 
@@ -1404,12 +1406,12 @@ pub struct VisualLine {
 pub fn wrap_lines(
     text: &str,
     max_width: f32,
-    font_id: u16,
+    font_asset: Option<&'static crate::renderer::FontAsset>,
     font_size: u16,
     measure_fn: &dyn Fn(&str, &crate::text::TextConfig) -> crate::math::Dimensions,
 ) -> Vec<VisualLine> {
     let config = crate::text::TextConfig {
-        font_id,
+        font_asset,
         font_size,
         ..Default::default()
     };
@@ -2971,7 +2973,7 @@ pub mod styling_cursor {
 /// Uses the provided measure function to measure substrings.
 pub fn compute_char_x_positions(
     display_text: &str,
-    font_id: u16,
+    font_asset: Option<&'static crate::renderer::FontAsset>,
     font_size: u16,
     measure_fn: &dyn Fn(&str, &crate::text::TextConfig) -> crate::math::Dimensions,
 ) -> Vec<f32> {
@@ -2980,7 +2982,7 @@ pub fn compute_char_x_positions(
     positions.push(0.0);
 
     let config = crate::text::TextConfig {
-        font_id,
+        font_asset,
         font_size,
         ..Default::default()
     };
@@ -3424,7 +3426,7 @@ mod tests {
 
     #[test]
     fn test_wrap_lines_no_wrap_needed() {
-        let lines = wrap_lines("hello", 100.0, 0, 16, &fixed_measure);
+        let lines = wrap_lines("hello", 100.0, None, 16, &fixed_measure);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "hello");
         assert_eq!(lines[0].global_char_start, 0);
@@ -3433,7 +3435,7 @@ mod tests {
 
     #[test]
     fn test_wrap_lines_hard_break() {
-        let lines = wrap_lines("ab\ncd", 100.0, 0, 16, &fixed_measure);
+        let lines = wrap_lines("ab\ncd", 100.0, None, 16, &fixed_measure);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].text, "ab");
         assert_eq!(lines[0].global_char_start, 0);
@@ -3445,7 +3447,7 @@ mod tests {
     fn test_wrap_lines_word_wrap() {
         // "hello world" = 11 chars × 10px = 110px, max_width=60px
         // "hello " = 6 chars = 60px fits, then "world" = 5 chars = 50px fits
-        let lines = wrap_lines("hello world", 60.0, 0, 16, &fixed_measure);
+        let lines = wrap_lines("hello world", 60.0, None, 16, &fixed_measure);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].text, "hello ");
         assert_eq!(lines[0].global_char_start, 0);
@@ -3459,7 +3461,7 @@ mod tests {
     fn test_wrap_lines_char_level_break() {
         // "abcdefghij" = 10 chars × 10px = 100px, max_width=50px
         // No spaces → character-level break at 5 chars
-        let lines = wrap_lines("abcdefghij", 50.0, 0, 16, &fixed_measure);
+        let lines = wrap_lines("abcdefghij", 50.0, None, 16, &fixed_measure);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].text, "abcde");
         assert_eq!(lines[0].char_count, 5);
