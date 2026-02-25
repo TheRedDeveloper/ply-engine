@@ -36,6 +36,12 @@ pub use crate::accessibility::AccessibilityRole;
 #[cfg(feature = "built-in-shaders")]
 pub use crate::built_in_shaders::*;
 
+// Networking — feature-gated
+#[cfg(feature = "net")]
+pub use crate::net;
+#[cfg(feature = "net")]
+pub use crate::net::WsMessage;
+
 // Text styling cursor utilities — feature-gated
 #[cfg(feature = "text-styling")]
 pub use crate::text_input::styling_cursor;

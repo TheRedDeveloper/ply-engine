@@ -20,6 +20,8 @@ pub mod renderer;
 pub mod text_styling;
 #[cfg(feature = "built-in-shaders")]
 pub mod built_in_shaders;
+#[cfg(feature = "net")]
+pub mod net;
 pub mod prelude;
 
 use id::Id;
@@ -1009,6 +1011,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
 
     /// Evaluate the layout and return all render commands.
     pub fn eval(&mut self) -> Vec<RenderCommand<CustomElementData>> {
+        // Clean up stale networking entries (feature-gated)
+        #[cfg(feature = "net")]
+        net::NET_MANAGER.lock().unwrap().clean();
+
         let commands = self.context.end_layout();
         let mut result = Vec::new();
         for cmd in commands {
