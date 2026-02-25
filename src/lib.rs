@@ -273,7 +273,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
-    /// Configures accessibility properties and disable focus highlight.
+    /// Configures accessibility properties and focus ring styling.
     ///
     /// # Example
     /// ```rust,ignore

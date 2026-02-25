@@ -1,3 +1,4 @@
+use crate::color::Color;
 use crate::id::Id;
 
 /// Defines the semantic role of a UI element for screen readers and assistive technologies.
@@ -65,6 +66,8 @@ pub struct AccessibilityConfig {
     pub focus_up: Option<u32>,
     pub focus_down: Option<u32>,
     pub show_ring: bool,
+    pub ring_color: Option<Color>,
+    pub ring_width: Option<u16>,
     pub live_region: LiveRegionMode,
 }
 
@@ -230,6 +233,18 @@ impl AccessibilityBuilder {
         self
     }
 
+    /// Sets the color of the focus ring. Default is red `(255, 60, 40)`.
+    pub fn ring_color(&mut self, color: impl Into<Color>) -> &mut Self {
+        self.config.ring_color = Some(color.into());
+        self
+    }
+
+    /// Sets the width (thickness) of the focus ring in pixels. Default is `2`.
+    pub fn ring_width(&mut self, width: u16) -> &mut Self {
+        self.config.ring_width = Some(width);
+        self
+    }
+
     /// Sets the live region to polite — screen reader announces changes on next idle.
     pub fn live_region_polite(&mut self) -> &mut Self {
         self.config.live_region = LiveRegionMode::Polite;
@@ -308,5 +323,33 @@ mod tests {
         assert_eq!(builder.config.value, "75");
         assert_eq!(builder.config.value_min, Some(0.0));
         assert_eq!(builder.config.value_max, Some(100.0));
+    }
+
+    #[test]
+    fn builder_ring_styling() {
+        let mut builder = AccessibilityBuilder::new();
+        builder
+            .focusable()
+            .ring_color(Color::rgb(0.0, 120.0, 255.0))
+            .ring_width(3);
+
+        assert!(builder.config.show_ring);
+        assert_eq!(builder.config.ring_color, Some(Color::rgb(0.0, 120.0, 255.0)));
+        assert_eq!(builder.config.ring_width, Some(3));
+    }
+
+    #[test]
+    fn ring_color_accepts_into() {
+        let mut builder = AccessibilityBuilder::new();
+        builder.ring_color((0u8, 120u8, 255u8));
+        assert_eq!(builder.config.ring_color, Some(Color::rgb(0.0, 120.0, 255.0)));
+    }
+
+    #[test]
+    fn ring_defaults_are_none() {
+        let config = AccessibilityConfig::new();
+        assert!(config.show_ring);
+        assert!(config.ring_color.is_none());
+        assert!(config.ring_width.is_none());
     }
 }

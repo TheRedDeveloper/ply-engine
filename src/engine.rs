@@ -3900,48 +3900,53 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
         }
 
-        // Focus ring: render a red border around the focused element (keyboard focus only)
+        // Focus ring: render a border around the focused element (keyboard focus only)
         if self.focused_element_id != 0 && self.focus_from_keyboard {
-            if let Some(item) = self.layout_element_map.get(&self.focused_element_id) {
-                let bbox = item.bounding_box;
-                if !self.element_is_offscreen(&bbox) {
-                    let elem_idx = item.layout_element_index as usize;
-                    let corner_radius = self
-                        .find_element_config_index(elem_idx, ElementConfigType::Shared)
-                        .map(|idx| self.shared_element_configs[idx].corner_radius)
-                        .unwrap_or_default();
-                    let ring_width = 2u16;
-                    let ring_color = Color::rgba(255.0, 60.0, 40.0, 255.0);
-                    // Expand bounding box outward by ring width so the ring doesn't overlap content
-                    let expanded_bbox = BoundingBox::new(
-                        bbox.x - ring_width as f32,
-                        bbox.y - ring_width as f32,
-                        bbox.width + ring_width as f32 * 2.0,
-                        bbox.height + ring_width as f32 * 2.0,
-                    );
-                    self.add_render_command(InternalRenderCommand {
-                        bounding_box: expanded_bbox,
-                        command_type: RenderCommandType::Border,
-                        render_data: InternalRenderData::Border {
-                            color: ring_color,
-                            corner_radius: CornerRadius {
-                                top_left: corner_radius.top_left + ring_width as f32,
-                                top_right: corner_radius.top_right + ring_width as f32,
-                                bottom_left: corner_radius.bottom_left + ring_width as f32,
-                                bottom_right: corner_radius.bottom_right + ring_width as f32,
+            // Check if the element's accessibility config allows the ring
+            let a11y = self.accessibility_configs.get(&self.focused_element_id);
+            let show_ring = a11y.map_or(true, |c| c.show_ring);
+            if show_ring {
+                if let Some(item) = self.layout_element_map.get(&self.focused_element_id) {
+                    let bbox = item.bounding_box;
+                    if !self.element_is_offscreen(&bbox) {
+                        let elem_idx = item.layout_element_index as usize;
+                        let corner_radius = self
+                            .find_element_config_index(elem_idx, ElementConfigType::Shared)
+                            .map(|idx| self.shared_element_configs[idx].corner_radius)
+                            .unwrap_or_default();
+                        let ring_width = a11y.and_then(|c| c.ring_width).unwrap_or(2);
+                        let ring_color = a11y.and_then(|c| c.ring_color).unwrap_or(Color::rgba(255.0, 60.0, 40.0, 255.0));
+                        // Expand bounding box outward by ring width so the ring doesn't overlap content
+                        let expanded_bbox = BoundingBox::new(
+                            bbox.x - ring_width as f32,
+                            bbox.y - ring_width as f32,
+                            bbox.width + ring_width as f32 * 2.0,
+                            bbox.height + ring_width as f32 * 2.0,
+                        );
+                        self.add_render_command(InternalRenderCommand {
+                            bounding_box: expanded_bbox,
+                            command_type: RenderCommandType::Border,
+                            render_data: InternalRenderData::Border {
+                                color: ring_color,
+                                corner_radius: CornerRadius {
+                                    top_left: corner_radius.top_left + ring_width as f32,
+                                    top_right: corner_radius.top_right + ring_width as f32,
+                                    bottom_left: corner_radius.bottom_left + ring_width as f32,
+                                    bottom_right: corner_radius.bottom_right + ring_width as f32,
+                                },
+                                width: BorderWidth {
+                                    left: ring_width,
+                                    right: ring_width,
+                                    top: ring_width,
+                                    bottom: ring_width,
+                                    between_children: 0,
+                                },
                             },
-                            width: BorderWidth {
-                                left: ring_width,
-                                right: ring_width,
-                                top: ring_width,
-                                bottom: ring_width,
-                                between_children: 0,
-                            },
-                        },
-                        id: hash_number(self.focused_element_id, 0xF0C5).id,
-                        z_index: 32764, // just below debug panel
-                        ..Default::default()
-                    });
+                            id: hash_number(self.focused_element_id, 0xF0C5).id,
+                            z_index: 32764, // just below debug panel
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }
