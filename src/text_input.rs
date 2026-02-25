@@ -314,7 +314,7 @@ impl TextEditState {
         if self.delete_selection() {
             return;
         }
-        let target = find_word_boundary_right(&self.text, self.cursor_pos);
+        let target = find_word_delete_boundary_right(&self.text, self.cursor_pos);
         let byte_start = char_index_to_byte(&self.text, self.cursor_pos);
         let byte_end = char_index_to_byte(&self.text, target);
         self.text.drain(byte_start..byte_end);
@@ -564,8 +564,8 @@ impl TextEditState {
 #[cfg(feature = "text-styling")]
 impl TextEditState {
     /// Get the visual length of the text (ignoring markup).
-    fn visual_len_styled(&self) -> usize {
-        styling_cursor::visual_len(&self.text)
+    fn cursor_len_styled(&self) -> usize {
+        styling_cursor::cursor_len(&self.text)
     }
 
     /// Get the selected text in visual space, returning the visible chars.
@@ -584,12 +584,12 @@ impl TextEditState {
     pub fn delete_selection_styled(&mut self) -> bool {
         if let Some((start, end)) = self.selection_range() {
             if self.no_styles_movement {
-                let start_cp = styling_cursor::visual_to_content_pos(&self.text, start);
-                let end_cp = styling_cursor::visual_to_content_pos(&self.text, end);
+                let start_cp = styling_cursor::cursor_to_content(&self.text, start);
+                let end_cp = styling_cursor::cursor_to_content(&self.text, end);
                 if start_cp < end_cp {
                     self.text = styling_cursor::delete_content_range(&self.text, start_cp, end_cp);
                 }
-                self.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&self.text, start_cp);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, start_cp, true);
             } else {
                 self.text = styling_cursor::delete_visual_range(&self.text, start, end);
                 self.cursor_pos = start;
@@ -615,22 +615,22 @@ impl TextEditState {
     /// The input `s` should already be escaped if needed.
     pub fn insert_text_styled(&mut self, s: &str, max_length: Option<usize>) {
         self.delete_selection_styled();
-        let visual_count = self.visual_len_styled();
-        let insert_visual_len = styling_cursor::visual_len(s);
+        let visual_count = self.cursor_len_styled();
+        let insert_cursor_len = styling_cursor::cursor_len(s);
         let allowed = if let Some(max) = max_length {
             if visual_count >= max {
                 0
             } else {
-                insert_visual_len.min(max - visual_count)
+                insert_cursor_len.min(max - visual_count)
             }
         } else {
-            insert_visual_len
+            insert_cursor_len
         };
         if allowed == 0 {
             return;
         }
         // If we need to truncate the insertion, work on the visual chars
-        let insert_str = if allowed < insert_visual_len {
+        let insert_str = if allowed < insert_cursor_len {
             // Build truncated escaped string
             let stripped = styling_cursor::strip_styling(s);
             let truncated: String = stripped.chars().take(allowed).collect();
@@ -658,10 +658,10 @@ impl TextEditState {
             return;
         }
         if self.no_styles_movement {
-            let cp = styling_cursor::visual_to_content_pos(&self.text, self.cursor_pos);
+            let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
             if cp > 0 {
                 self.text = styling_cursor::delete_content_range(&self.text, cp - 1, cp);
-                self.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&self.text, cp - 1);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp - 1, true);
                 let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
@@ -684,18 +684,18 @@ impl TextEditState {
             return;
         }
         if self.no_styles_movement {
-            let cp = styling_cursor::visual_to_content_pos(&self.text, self.cursor_pos);
+            let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
             let content_len = styling_cursor::strip_styling(&self.text).chars().count();
             if cp < content_len {
                 self.text = styling_cursor::delete_content_range(&self.text, cp, cp + 1);
-                self.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&self.text, cp);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp, true);
                 let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
                 self.snap_to_content_pos();
             }
         } else {
-            let vis_len = self.visual_len_styled();
+            let vis_len = self.cursor_len_styled();
             if self.cursor_pos < vis_len {
                 self.text = styling_cursor::delete_visual_range(&self.text, self.cursor_pos, self.cursor_pos + 1);
                 let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
@@ -713,12 +713,12 @@ impl TextEditState {
             return;
         }
         if self.no_styles_movement {
-            let cp = styling_cursor::visual_to_content_pos(&self.text, self.cursor_pos);
+            let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
             let stripped = styling_cursor::strip_styling(&self.text);
             let target_cp = find_word_boundary_left(&stripped, cp);
             if target_cp < cp {
                 self.text = styling_cursor::delete_content_range(&self.text, target_cp, cp);
-                self.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&self.text, target_cp);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_cp, true);
                 let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
@@ -742,19 +742,19 @@ impl TextEditState {
             return;
         }
         if self.no_styles_movement {
-            let cp = styling_cursor::visual_to_content_pos(&self.text, self.cursor_pos);
+            let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
             let stripped = styling_cursor::strip_styling(&self.text);
-            let target_cp = find_word_boundary_right(&stripped, cp);
+            let target_cp = find_word_delete_boundary_right(&stripped, cp);
             if target_cp > cp {
                 self.text = styling_cursor::delete_content_range(&self.text, cp, target_cp);
-                self.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&self.text, cp);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp, true);
                 let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
                 self.snap_to_content_pos();
             }
         } else {
-            let target = styling_cursor::find_word_boundary_right_visual(&self.text, self.cursor_pos);
+            let target = styling_cursor::find_word_delete_boundary_right_visual(&self.text, self.cursor_pos);
             self.text = styling_cursor::delete_visual_range(&self.text, self.cursor_pos, target);
             let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
             self.text = cleaned;
@@ -797,11 +797,11 @@ impl TextEditState {
     /// Content-based left movement for `no_styles_movement` mode.
     /// Decrements in content space so the cursor skips structural positions.
     fn move_left_content(&mut self, shift: bool) {
-        let cp = styling_cursor::visual_to_content_pos(&self.text, self.cursor_pos);
+        let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
         if !shift {
             if let Some((start, _end)) = self.selection_range() {
-                let sc = styling_cursor::visual_to_content_pos(&self.text, start);
-                self.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&self.text, sc);
+                let sc = styling_cursor::cursor_to_content(&self.text, start);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, sc, true);
                 self.selection_anchor = None;
                 self.cleanup_after_move();
                 return;
@@ -811,7 +811,7 @@ impl TextEditState {
             if shift && self.selection_anchor.is_none() {
                 self.selection_anchor = Some(self.cursor_pos);
             }
-            self.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&self.text, cp - 1);
+            self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp - 1, true);
             if shift {
                 if self.selection_anchor == Some(self.cursor_pos) {
                     self.selection_anchor = None;
@@ -826,7 +826,7 @@ impl TextEditState {
 
     /// Move right in styled mode (visual space).
     pub fn move_right_styled(&mut self, shift: bool) {
-        let vis_len = self.visual_len_styled();
+        let vis_len = self.cursor_len_styled();
         if !shift {
             if let Some((_start, end)) = self.selection_range() {
                 self.cursor_pos = end;
@@ -896,7 +896,7 @@ impl TextEditState {
 
     /// Move to end in styled mode.
     pub fn move_end_styled(&mut self, shift: bool) {
-        let vis_len = self.visual_len_styled();
+        let vis_len = self.cursor_len_styled();
         if shift && self.selection_anchor.is_none() {
             self.selection_anchor = Some(self.cursor_pos);
         }
@@ -917,14 +917,17 @@ impl TextEditState {
             self.selection_anchor = Some(self.cursor_pos);
         }
 
-        let raw_cursor = styling_cursor::visual_to_raw_for_cursor(&self.text, self.cursor_pos);
+        let raw_cursor = styling_cursor::cursor_to_raw_for_insertion(&self.text, self.cursor_pos);
 
         if let Some(vl) = visual_lines {
             let (line_idx, _raw_col) = cursor_to_visual_pos(vl, raw_cursor);
 
-            // Compute visual column within current line
-            let line_start_visual = styling_cursor::raw_to_visual(&self.text, vl[line_idx].global_char_start);
-            let current_col = self.cursor_pos.saturating_sub(line_start_visual);
+            // Compute column in content space (visible characters only)
+            // so structural chars like `}` don't offset the column.
+            let line_start_visual = styling_cursor::raw_to_cursor(&self.text, vl[line_idx].global_char_start);
+            let content_start = styling_cursor::cursor_to_content(&self.text, line_start_visual);
+            let content_current = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+            let current_col = content_current.saturating_sub(content_start);
             let col = self.preferred_col.unwrap_or(current_col);
 
             if line_idx == 0 {
@@ -932,14 +935,16 @@ impl TextEditState {
                 self.cursor_pos = 0;
             } else {
                 let target = &vl[line_idx - 1];
-                let target_start_visual = styling_cursor::raw_to_visual(&self.text, target.global_char_start);
-                let target_end_visual = styling_cursor::raw_to_visual(
+                let target_start_visual = styling_cursor::raw_to_cursor(&self.text, target.global_char_start);
+                let target_end_visual = styling_cursor::raw_to_cursor(
                     &self.text,
                     target.global_char_start + target.char_count,
                 );
-                let target_visual_len = target_end_visual - target_start_visual;
-                let target_col = col.min(target_visual_len);
-                self.cursor_pos = target_start_visual + target_col;
+                let target_content_start = styling_cursor::cursor_to_content(&self.text, target_start_visual);
+                let target_content_end = styling_cursor::cursor_to_content(&self.text, target_end_visual);
+                let target_content_len = target_content_end - target_content_start;
+                let target_col = col.min(target_content_len);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_content_start + target_col, false);
             }
 
             self.preferred_col = Some(col);
@@ -948,7 +953,9 @@ impl TextEditState {
             let (line, _col) = styling_cursor::line_and_column_styled(&self.text, self.cursor_pos);
             let col = self.preferred_col.unwrap_or({
                 let line_start = styling_cursor::line_start_visual_styled(&self.text, line);
-                self.cursor_pos.saturating_sub(line_start)
+                let content_start = styling_cursor::cursor_to_content(&self.text, line_start);
+                let content_current = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+                content_current.saturating_sub(content_start)
             });
 
             if line == 0 {
@@ -956,9 +963,11 @@ impl TextEditState {
             } else {
                 let target_start = styling_cursor::line_start_visual_styled(&self.text, line - 1);
                 let target_end = styling_cursor::line_end_visual_styled(&self.text, line - 1);
-                let target_visual_len = target_end - target_start;
-                let target_col = col.min(target_visual_len);
-                self.cursor_pos = target_start + target_col;
+                let target_content_start = styling_cursor::cursor_to_content(&self.text, target_start);
+                let target_content_end = styling_cursor::cursor_to_content(&self.text, target_end);
+                let target_content_len = target_content_end - target_content_start;
+                let target_col = col.min(target_content_len);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_content_start + target_col, false);
             }
 
             self.preferred_col = Some(col);
@@ -978,14 +987,17 @@ impl TextEditState {
             self.selection_anchor = Some(self.cursor_pos);
         }
 
-        let vis_len = self.visual_len_styled();
-        let raw_cursor = styling_cursor::visual_to_raw_for_cursor(&self.text, self.cursor_pos);
+        let vis_len = self.cursor_len_styled();
+        let raw_cursor = styling_cursor::cursor_to_raw_for_insertion(&self.text, self.cursor_pos);
 
         if let Some(vl) = visual_lines {
             let (line_idx, _raw_col) = cursor_to_visual_pos(vl, raw_cursor);
 
-            let line_start_visual = styling_cursor::raw_to_visual(&self.text, vl[line_idx].global_char_start);
-            let current_col = self.cursor_pos.saturating_sub(line_start_visual);
+            // Compute column in content space (visible characters only)
+            let line_start_visual = styling_cursor::raw_to_cursor(&self.text, vl[line_idx].global_char_start);
+            let content_start = styling_cursor::cursor_to_content(&self.text, line_start_visual);
+            let content_current = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+            let current_col = content_current.saturating_sub(content_start);
             let col = self.preferred_col.unwrap_or(current_col);
 
             if line_idx >= vl.len() - 1 {
@@ -993,14 +1005,16 @@ impl TextEditState {
                 self.cursor_pos = vis_len;
             } else {
                 let target = &vl[line_idx + 1];
-                let target_start_visual = styling_cursor::raw_to_visual(&self.text, target.global_char_start);
-                let target_end_visual = styling_cursor::raw_to_visual(
+                let target_start_visual = styling_cursor::raw_to_cursor(&self.text, target.global_char_start);
+                let target_end_visual = styling_cursor::raw_to_cursor(
                     &self.text,
                     target.global_char_start + target.char_count,
                 );
-                let target_visual_len = target_end_visual - target_start_visual;
-                let target_col = col.min(target_visual_len);
-                self.cursor_pos = target_start_visual + target_col;
+                let target_content_start = styling_cursor::cursor_to_content(&self.text, target_start_visual);
+                let target_content_end = styling_cursor::cursor_to_content(&self.text, target_end_visual);
+                let target_content_len = target_content_end - target_content_start;
+                let target_col = col.min(target_content_len);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_content_start + target_col, false);
             }
 
             self.preferred_col = Some(col);
@@ -1010,7 +1024,9 @@ impl TextEditState {
             let line_count = styling_cursor::styled_line_count(&self.text);
             let col = self.preferred_col.unwrap_or({
                 let line_start = styling_cursor::line_start_visual_styled(&self.text, line);
-                self.cursor_pos.saturating_sub(line_start)
+                let content_start = styling_cursor::cursor_to_content(&self.text, line_start);
+                let content_current = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+                content_current.saturating_sub(content_start)
             });
 
             if line >= line_count - 1 {
@@ -1018,9 +1034,11 @@ impl TextEditState {
             } else {
                 let target_start = styling_cursor::line_start_visual_styled(&self.text, line + 1);
                 let target_end = styling_cursor::line_end_visual_styled(&self.text, line + 1);
-                let target_visual_len = target_end - target_start;
-                let target_col = col.min(target_visual_len);
-                self.cursor_pos = target_start + target_col;
+                let target_content_start = styling_cursor::cursor_to_content(&self.text, target_start);
+                let target_content_end = styling_cursor::cursor_to_content(&self.text, target_end);
+                let target_content_len = target_content_end - target_content_start;
+                let target_col = col.min(target_content_len);
+                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_content_start + target_col, false);
             }
 
             self.preferred_col = Some(col);
@@ -1036,7 +1054,7 @@ impl TextEditState {
 
     /// Select all in styled mode.
     pub fn select_all_styled(&mut self) {
-        let vis_len = self.visual_len_styled();
+        let vis_len = self.cursor_len_styled();
         if vis_len > 0 {
             self.selection_anchor = Some(0);
             self.cursor_pos = vis_len;
@@ -1080,12 +1098,12 @@ impl TextEditState {
     /// No-op when `no_styles_movement` is false.
     fn snap_to_content_pos(&mut self) {
         if !self.no_styles_movement { return; }
-        let cp = styling_cursor::visual_to_content_pos(&self.text, self.cursor_pos);
-        self.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&self.text, cp);
+        let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+        self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp, true);
         if let Some(anchor) = self.selection_anchor {
-            let ac = styling_cursor::visual_to_content_pos(&self.text, anchor);
+            let ac = styling_cursor::cursor_to_content(&self.text, anchor);
             self.selection_anchor = Some(
-                styling_cursor::content_to_visual_pos_no_structural(&self.text, ac),
+                styling_cursor::content_to_cursor(&self.text, ac, true),
             );
             if self.selection_anchor == Some(self.cursor_pos) {
                 self.selection_anchor = None;
@@ -1111,19 +1129,19 @@ impl TextEditState {
     /// Convert the visual cursor_pos to a raw position for rendering.
     /// Enters empty style tags at the cursor boundary.
     pub fn cursor_pos_raw(&self) -> usize {
-        styling_cursor::visual_to_raw_for_cursor(&self.text, self.cursor_pos)
+        styling_cursor::cursor_to_raw_for_insertion(&self.text, self.cursor_pos)
     }
 
     /// Convert the visual selection_anchor to a raw position for rendering.
     pub fn selection_anchor_raw(&self) -> Option<usize> {
-        self.selection_anchor.map(|a| styling_cursor::visual_to_raw(&self.text, a))
+        self.selection_anchor.map(|a| styling_cursor::cursor_to_raw(&self.text, a))
     }
 
     /// Get the selection range in raw positions for rendering.
     pub fn selection_range_raw(&self) -> Option<(usize, usize)> {
         self.selection_anchor.map(|anchor| {
-            let raw_anchor = styling_cursor::visual_to_raw(&self.text, anchor);
-            let raw_cursor = styling_cursor::visual_to_raw(&self.text, self.cursor_pos);
+            let raw_anchor = styling_cursor::cursor_to_raw(&self.text, anchor);
+            let raw_cursor = styling_cursor::cursor_to_raw(&self.text, self.cursor_pos);
             let start = raw_anchor.min(raw_cursor);
             let end = raw_anchor.max(raw_cursor);
             (start, end)
@@ -1166,11 +1184,11 @@ impl Default for TextInputConfig {
             max_length: None,
             is_password: false,
             is_multiline: false,
-            font_size: 16,
-            text_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
-            placeholder_color: Color::rgba(0.5, 0.5, 0.5, 1.0),
-            cursor_color: Color::rgba(1.0, 1.0, 1.0, 1.0),
-            selection_color: Color::rgba(0.27, 0.51, 0.71, 0.5),
+            font_size: 0,
+            text_color: Color::rgba(255.0, 255.0, 255.0, 255.0),
+            placeholder_color: Color::rgba(128.0, 128.0, 128.0, 255.0),
+            cursor_color: Color::rgba(255.0, 255.0, 255.0, 255.0),
+            selection_color: Color::rgba(69.0, 130.0, 181.0, 128.0),
             no_styles_movement: false,
             font_asset: None,
         }
@@ -1685,7 +1703,28 @@ pub fn find_word_boundary_left(text: &str, pos: usize) -> usize {
 }
 
 /// Find the word boundary to the right of `pos` (for Ctrl+Right / Ctrl+Delete).
+/// Skips whitespace first, then stops at the end of the next word.
 pub fn find_word_boundary_right(text: &str, pos: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if pos >= len {
+        return len;
+    }
+    let mut i = pos;
+    // Skip whitespace to the right
+    while i < len && chars[i].is_whitespace() {
+        i += 1;
+    }
+    // Skip non-whitespace (word) to the right
+    while i < len && !chars[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+/// Find the delete boundary to the right of `pos` (for Ctrl+Delete).
+/// Deletes the current word AND trailing whitespace (skips word → skips spaces).
+pub fn find_word_delete_boundary_right(text: &str, pos: usize) -> usize {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
     if pos >= len {
@@ -1796,7 +1835,7 @@ pub mod styling_cursor {
     /// Position 0 always maps to raw 0.
     /// For visible char positions, the result is advanced past any following
     /// `{name|` headers so the cursor lands inside the tag content.
-    pub fn visual_to_raw(raw: &str, visual_pos: usize) -> usize {
+    pub fn cursor_to_raw(raw: &str, visual_pos: usize) -> usize {
         if visual_pos == 0 {
             return 0;
         }
@@ -1895,7 +1934,7 @@ pub mod styling_cursor {
 
     /// Convert a raw char position to a visual (display) cursor position.
     /// Accounts for `}` and empty content positions.
-    pub fn raw_to_visual(raw: &str, raw_pos: usize) -> usize {
+    pub fn raw_to_cursor(raw: &str, raw_pos: usize) -> usize {
         let chars: Vec<char> = raw.chars().collect();
         let len = chars.len();
         let mut visual = 0usize;
@@ -1952,8 +1991,8 @@ pub mod styling_cursor {
 
     /// Count the total number of visual positions in a raw styled string.
     /// Includes visible chars, `}` exit positions, and empty content positions.
-    pub fn visual_len(raw: &str) -> usize {
-        raw_to_visual(raw, raw.chars().count())
+    pub fn cursor_len(raw: &str) -> usize {
+        raw_to_cursor(raw, raw.chars().count())
     }
 
     /// If `pos` (a raw char index) points to the start of an empty `{name|}` tag,
@@ -1983,11 +2022,11 @@ pub mod styling_cursor {
         p
     }
 
-    /// Like `visual_to_raw`, but also enters empty style tags at the boundary
+    /// Like `cursor_to_raw`, but also enters empty style tags at the boundary
     /// when the basic position lands right before one.
     /// Use this for cursor positioning and single-point insertion.
-    pub fn visual_to_raw_for_cursor(raw: &str, visual_pos: usize) -> usize {
-        let pos = visual_to_raw(raw, visual_pos);
+    pub fn cursor_to_raw_for_insertion(raw: &str, visual_pos: usize) -> usize {
+        let pos = cursor_to_raw(raw, visual_pos);
         let chars: Vec<char> = raw.chars().collect();
         // If pos lands right at the start of an empty {name|} tag, enter it
         enter_empty_tags_at(&chars, pos)
@@ -1997,13 +2036,13 @@ pub mod styling_cursor {
     /// Returns the new raw string and the new visual cursor position after insertion.
     /// Enters empty style tags at the cursor boundary so typed text goes inside them.
     pub fn insert_at_visual(raw: &str, visual_pos: usize, insert: &str) -> (String, usize) {
-        let raw_pos = visual_to_raw_for_cursor(raw, visual_pos);
+        let raw_pos = cursor_to_raw_for_insertion(raw, visual_pos);
         let byte_pos = super::char_index_to_byte(raw, raw_pos);
         let mut new_raw = String::with_capacity(raw.len() + insert.len());
         new_raw.push_str(&raw[..byte_pos]);
         new_raw.push_str(insert);
         new_raw.push_str(&raw[byte_pos..]);
-        let inserted_visual = visual_len(insert);
+        let inserted_visual = cursor_len(insert);
         (new_raw, visual_pos + inserted_visual)
     }
 
@@ -2234,7 +2273,7 @@ pub mod styling_cursor {
 
     /// Get the visual character at a given visual position, or None if past end.
     pub fn visual_char_at(raw: &str, visual_pos: usize) -> Option<char> {
-        let raw_pos = visual_to_raw(raw, visual_pos);
+        let raw_pos = cursor_to_raw(raw, visual_pos);
         let chars: Vec<char> = raw.chars().collect();
         if raw_pos >= chars.len() {
             return None;
@@ -2273,7 +2312,7 @@ pub mod styling_cursor {
     /// Convert a "structural visual" position (includes } and empty content markers)
     /// to a "content position" (just visible chars, matching strip_styling output).
     /// Content position is clamped to stripped text length.
-    pub fn visual_to_content_pos(raw: &str, visual_pos: usize) -> usize {
+    pub fn cursor_to_content(raw: &str, cursor_pos: usize) -> usize {
         let chars: Vec<char> = raw.chars().collect();
         let len = chars.len();
         let mut visual = 0usize;
@@ -2282,7 +2321,7 @@ pub mod styling_cursor {
         let mut in_style_def = false;
 
         for i in 0..len {
-            if visual >= visual_pos {
+            if visual >= cursor_pos {
                 break;
             }
             let c = chars[i];
@@ -2319,59 +2358,13 @@ pub mod styling_cursor {
 
     /// Convert a "content position" (from strip_styling output) back to a
     /// "structural visual" position (includes } and empty content markers).
-    pub fn content_to_visual_pos(raw: &str, content_pos: usize) -> usize {
-        let chars: Vec<char> = raw.chars().collect();
-        let len = chars.len();
-        let mut visual = 0usize;
-        let mut content = 0usize;
-        let mut escaped = false;
-        let mut in_style_def = false;
-
-        for i in 0..len {
-            if content >= content_pos {
-                break;
-            }
-            let c = chars[i];
-
-            if escaped {
-                visual += 1;
-                content += 1;
-                escaped = false;
-                continue;
-            }
-
-            match c {
-                '\\' => { escaped = true; }
-                '{' if !in_style_def => { in_style_def = true; }
-                '|' if in_style_def => {
-                    in_style_def = false;
-                    if i + 1 < len && chars[i + 1] == '}' {
-                        visual += 1; // empty content
-                    }
-                }
-                '}' if !in_style_def => {
-                    visual += 1; // } position
-                }
-                _ if in_style_def => {}
-                _ => {
-                    visual += 1;
-                    content += 1;
-                }
-            }
-        }
-
-        visual
-    }
-
-    /// Convert a content position to a visual position, skipping structural
-    /// positions (`}` exit markers and empty content markers).  Unlike
-    /// `content_to_visual_pos`, this returns the visual position immediately
-    /// before the `content_pos`-th visible character — or at the end of the
-    /// visual text when `content_pos` equals the content length.
     ///
-    /// Used by the `no_styles_movement` mode so the cursor only lands on
-    /// visible-character boundaries.
-    pub fn content_to_visual_pos_no_structural(raw: &str, content_pos: usize) -> usize {
+    /// When `skip_structural` is true, returns the visual position immediately
+    /// before the `content_pos`-th visible character — or at the end of the
+    /// visual text when `content_pos` equals the content length.  This means
+    /// the cursor only ever lands on visible-character boundaries (used by
+    /// `no_styles_movement`).
+    pub fn content_to_cursor(raw: &str, content_pos: usize, snap_to_content: bool) -> usize {
         let chars: Vec<char> = raw.chars().collect();
         let len = chars.len();
         let mut visual = 0usize;
@@ -2379,38 +2372,75 @@ pub mod styling_cursor {
         let mut escaped = false;
         let mut in_style_def = false;
 
-        for i in 0..len {
-            let c = chars[i];
+        if snap_to_content {
+            // No-structural mode: check `content >= content_pos` BEFORE advancing
+            for i in 0..len {
+                let c = chars[i];
 
-            if escaped {
-                if content >= content_pos {
-                    return visual;
-                }
-                visual += 1;
-                content += 1;
-                escaped = false;
-                continue;
-            }
-
-            match c {
-                '\\' => { escaped = true; }
-                '{' if !in_style_def => { in_style_def = true; }
-                '|' if in_style_def => {
-                    in_style_def = false;
-                    if i + 1 < len && chars[i + 1] == '}' {
-                        visual += 1; // empty content marker — skip
-                    }
-                }
-                '}' if !in_style_def => {
-                    visual += 1; // } exit marker — skip
-                }
-                _ if in_style_def => {}
-                _ => {
+                if escaped {
                     if content >= content_pos {
                         return visual;
                     }
                     visual += 1;
                     content += 1;
+                    escaped = false;
+                    continue;
+                }
+
+                match c {
+                    '\\' => { escaped = true; }
+                    '{' if !in_style_def => { in_style_def = true; }
+                    '|' if in_style_def => {
+                        in_style_def = false;
+                        if i + 1 < len && chars[i + 1] == '}' {
+                            visual += 1; // empty content marker — skip
+                        }
+                    }
+                    '}' if !in_style_def => {
+                        visual += 1; // } exit marker — skip
+                    }
+                    _ if in_style_def => {}
+                    _ => {
+                        if content >= content_pos {
+                            return visual;
+                        }
+                        visual += 1;
+                        content += 1;
+                    }
+                }
+            }
+        } else {
+            // Structural mode: break when `content >= content_pos` at top of loop
+            for i in 0..len {
+                if content >= content_pos {
+                    break;
+                }
+                let c = chars[i];
+
+                if escaped {
+                    visual += 1;
+                    content += 1;
+                    escaped = false;
+                    continue;
+                }
+
+                match c {
+                    '\\' => { escaped = true; }
+                    '{' if !in_style_def => { in_style_def = true; }
+                    '|' if in_style_def => {
+                        in_style_def = false;
+                        if i + 1 < len && chars[i + 1] == '}' {
+                            visual += 1; // empty content
+                        }
+                    }
+                    '}' if !in_style_def => {
+                        visual += 1; // } position
+                    }
+                    _ if in_style_def => {}
+                    _ => {
+                        visual += 1;
+                        content += 1;
+                    }
                 }
             }
         }
@@ -2480,28 +2510,37 @@ pub mod styling_cursor {
     /// Find word boundary left in visual space.
     /// Returns a visual position.
     pub fn find_word_boundary_left_visual(raw: &str, visual_pos: usize) -> usize {
-        let cp = visual_to_content_pos(raw, visual_pos);
+        let cp = cursor_to_content(raw, visual_pos);
         let stripped = strip_styling(raw);
         let boundary = super::find_word_boundary_left(&stripped, cp);
-        content_to_visual_pos(raw, boundary)
+        content_to_cursor(raw, boundary, false)
     }
 
     /// Find word boundary right in visual space.
     /// Returns a visual position.
     pub fn find_word_boundary_right_visual(raw: &str, visual_pos: usize) -> usize {
-        let cp = visual_to_content_pos(raw, visual_pos);
+        let cp = cursor_to_content(raw, visual_pos);
         let stripped = strip_styling(raw);
         let boundary = super::find_word_boundary_right(&stripped, cp);
-        content_to_visual_pos(raw, boundary)
+        content_to_cursor(raw, boundary, false)
+    }
+
+    /// Find word delete boundary right in visual space (skips word then spaces).
+    /// Used for Ctrl+Delete to delete word + trailing whitespace.
+    pub fn find_word_delete_boundary_right_visual(raw: &str, visual_pos: usize) -> usize {
+        let cp = cursor_to_content(raw, visual_pos);
+        let stripped = strip_styling(raw);
+        let boundary = super::find_word_delete_boundary_right(&stripped, cp);
+        content_to_cursor(raw, boundary, false)
     }
 
     /// Find word at a visual position (for double-click selection).
     /// Returns (start, end) in visual positions.
     pub fn find_word_at_visual(raw: &str, visual_pos: usize) -> (usize, usize) {
-        let cp = visual_to_content_pos(raw, visual_pos);
+        let cp = cursor_to_content(raw, visual_pos);
         let stripped = strip_styling(raw);
         let (s, e) = super::find_word_at(&stripped, cp);
-        (content_to_visual_pos(raw, s), content_to_visual_pos(raw, e))
+        (content_to_cursor(raw, s, false), content_to_cursor(raw, e, false))
     }
 
     /// Count the number of hard lines (\n-separated) in a styled raw string.
@@ -2665,82 +2704,82 @@ pub mod styling_cursor {
         }
 
         #[test]
-        fn test_visual_to_raw_no_styling() {
+        fn test_cursor_to_raw_no_styling() {
             // Plain text: visual == raw
-            assert_eq!(visual_to_raw("hello", 0), 0);
-            assert_eq!(visual_to_raw("hello", 3), 3);
-            assert_eq!(visual_to_raw("hello", 5), 5);
+            assert_eq!(cursor_to_raw("hello", 0), 0);
+            assert_eq!(cursor_to_raw("hello", 3), 3);
+            assert_eq!(cursor_to_raw("hello", 5), 5);
         }
 
         #[test]
-        fn test_visual_to_raw_with_escape() {
+        fn test_cursor_to_raw_with_escape() {
             // "hel\{lo" → visual "hel{lo"
             let raw = r"hel\{lo";
-            assert_eq!(visual_to_raw(raw, 0), 0); // before h
-            assert_eq!(visual_to_raw(raw, 3), 3); // before \{  → raw pos 3 (the \)
-            assert_eq!(visual_to_raw(raw, 4), 5); // after { → raw pos 5 (l)
-            assert_eq!(visual_to_raw(raw, 5), 6); // after l → raw pos 6 (o)
-            assert_eq!(visual_to_raw(raw, 6), 7); // end
+            assert_eq!(cursor_to_raw(raw, 0), 0); // before h
+            assert_eq!(cursor_to_raw(raw, 3), 3); // before \{  → raw pos 3 (the \)
+            assert_eq!(cursor_to_raw(raw, 4), 5); // after { → raw pos 5 (l)
+            assert_eq!(cursor_to_raw(raw, 5), 6); // after l → raw pos 6 (o)
+            assert_eq!(cursor_to_raw(raw, 6), 7); // end
         }
 
         #[test]
-        fn test_visual_to_raw_with_style() {
+        fn test_cursor_to_raw_with_style() {
             // "{red|world}" → visual positions: w(1) o(2) r(3) l(4) d(5) }(6)
             let raw = "{red|world}";
-            assert_eq!(visual_to_raw(raw, 0), 0);  // before tag = raw 0
+            assert_eq!(cursor_to_raw(raw, 0), 0);  // before tag = raw 0
             // Position 0 with skip_tag_headers: raw 0 is the { → skip {red| → raw 5
             // But visual_pos == 0 returns raw 0 directly!
-            assert_eq!(visual_to_raw(raw, 1), 6);  // after 'w' (raw 5), returns raw 6
-            assert_eq!(visual_to_raw(raw, 5), 10); // after 'd' (raw 9), returns raw 10
-            assert_eq!(visual_to_raw(raw, 6), 11); // after '}' (raw 10), returns raw 11
+            assert_eq!(cursor_to_raw(raw, 1), 6);  // after 'w' (raw 5), returns raw 6
+            assert_eq!(cursor_to_raw(raw, 5), 10); // after 'd' (raw 9), returns raw 10
+            assert_eq!(cursor_to_raw(raw, 6), 11); // after '}' (raw 10), returns raw 11
         }
 
         #[test]
-        fn test_visual_to_raw_mixed() {
+        fn test_cursor_to_raw_mixed() {
             // "hel\{lo{red|world}" → visual: h(1) e(2) l(3) \{(4) l(5) o(6) w(7) o(8) r(9) l(10) d(11) }(12)
             let raw = r"hel\{lo{red|world}";
-            assert_eq!(visual_to_raw(raw, 0), 0);  // before everything
-            assert_eq!(visual_to_raw(raw, 3), 3);  // after 'l', before \{
-            assert_eq!(visual_to_raw(raw, 4), 5);  // after \{, before 'l'
-            assert_eq!(visual_to_raw(raw, 6), 12); // after 'o', skip {red| → raw 12 (before 'w')
-            assert_eq!(visual_to_raw(raw, 11), 17); // after 'd', before '}'
-            assert_eq!(visual_to_raw(raw, 12), 18); // after '}' = end
+            assert_eq!(cursor_to_raw(raw, 0), 0);  // before everything
+            assert_eq!(cursor_to_raw(raw, 3), 3);  // after 'l', before \{
+            assert_eq!(cursor_to_raw(raw, 4), 5);  // after \{, before 'l'
+            assert_eq!(cursor_to_raw(raw, 6), 12); // after 'o', skip {red| → raw 12 (before 'w')
+            assert_eq!(cursor_to_raw(raw, 11), 17); // after 'd', before '}'
+            assert_eq!(cursor_to_raw(raw, 12), 18); // after '}' = end
         }
 
         #[test]
-        fn test_raw_to_visual_no_styling() {
-            assert_eq!(raw_to_visual("hello", 0), 0);
-            assert_eq!(raw_to_visual("hello", 3), 3);
-            assert_eq!(raw_to_visual("hello", 5), 5);
+        fn test_raw_to_cursor_no_styling() {
+            assert_eq!(raw_to_cursor("hello", 0), 0);
+            assert_eq!(raw_to_cursor("hello", 3), 3);
+            assert_eq!(raw_to_cursor("hello", 5), 5);
         }
 
         #[test]
-        fn test_raw_to_visual_with_escape() {
+        fn test_raw_to_cursor_with_escape() {
             let raw = r"hel\{lo";
-            assert_eq!(raw_to_visual(raw, 0), 0);
-            assert_eq!(raw_to_visual(raw, 3), 3); // at the \ 
-            assert_eq!(raw_to_visual(raw, 5), 4); // at l after \{
-            assert_eq!(raw_to_visual(raw, 7), 6); // end
+            assert_eq!(raw_to_cursor(raw, 0), 0);
+            assert_eq!(raw_to_cursor(raw, 3), 3); // at the \ 
+            assert_eq!(raw_to_cursor(raw, 5), 4); // at l after \{
+            assert_eq!(raw_to_cursor(raw, 7), 6); // end
         }
 
         #[test]
-        fn test_raw_to_visual_with_style() {
+        fn test_raw_to_cursor_with_style() {
             // "{red|world}" → visual: w(1) o(2) r(3) l(4) d(5) }(6)
             let raw = "{red|world}";
-            assert_eq!(raw_to_visual(raw, 0), 0);
-            assert_eq!(raw_to_visual(raw, 5), 0);  // just after {red| (before content starts)
-            assert_eq!(raw_to_visual(raw, 6), 1);  // after 'w'
-            assert_eq!(raw_to_visual(raw, 10), 5); // after 'd'
-            assert_eq!(raw_to_visual(raw, 11), 6); // after '}' — the exit tag position
+            assert_eq!(raw_to_cursor(raw, 0), 0);
+            assert_eq!(raw_to_cursor(raw, 5), 0);  // just after {red| (before content starts)
+            assert_eq!(raw_to_cursor(raw, 6), 1);  // after 'w'
+            assert_eq!(raw_to_cursor(raw, 10), 5); // after 'd'
+            assert_eq!(raw_to_cursor(raw, 11), 6); // after '}' — the exit tag position
         }
 
         #[test]
-        fn test_visual_len() {
-            assert_eq!(visual_len("hello"), 5);
-            assert_eq!(visual_len("{red|world}"), 6);  // 5 chars + 1 for }
-            assert_eq!(visual_len(r"hel\{lo{red|world}"), 12); // 11 chars + 1 for }
-            assert_eq!(visual_len(r"\\\{"), 2); // \\ → \, \{ → {
-            assert_eq!(visual_len("{red|}"), 2); // empty content + }
+        fn test_cursor_len() {
+            assert_eq!(cursor_len("hello"), 5);
+            assert_eq!(cursor_len("{red|world}"), 6);  // 5 chars + 1 for }
+            assert_eq!(cursor_len(r"hel\{lo{red|world}"), 12); // 11 chars + 1 for }
+            assert_eq!(cursor_len(r"\\\{"), 2); // \\ → \, \{ → {
+            assert_eq!(cursor_len("{red|}"), 2); // empty content + }
         }
 
         #[test]
@@ -2822,7 +2861,7 @@ pub mod styling_cursor {
             // Deeply nested non-empty tags shouldn't inflate visual counter
             let raw = "aaa{r|{g|{b|xyz}}}end";
             // Visual: a(1)a(2)a(3) x(4)y(5)z(6) }(7) }(8) }(9) e(10)n(11)d(12)
-            let vl = visual_len(raw);
+            let vl = cursor_len(raw);
             assert_eq!(vl, 12);
             let (result, new_cursor) = cleanup_empty_styles(raw, vl);
             assert_eq!(result, raw);
@@ -2836,7 +2875,7 @@ pub mod styling_cursor {
             // to exceed content length, crashing find_word_boundary_left.
             let raw = "aaa{r|{r|{r|bbb}}} ccc";
             // Visual: a(1)a(2)a(3) b(4)b(5)b(6) }(7) }(8) }(9) (10)c(11)c(12)c(13)
-            let vl = visual_len(raw);
+            let vl = cursor_len(raw);
             assert_eq!(vl, 13);
 
             // Word boundary at end should work
@@ -2856,12 +2895,12 @@ pub mod styling_cursor {
             // cleanup_empty_styles was inflating visual counter, then word
             // boundary was called with the resulting bad cursor position.
             let raw = "aaa{color=red|{color=red|bbb}}} ccc";
-            let vl = visual_len(raw);
+            let vl = cursor_len(raw);
             // First, do a cleanup (simulating move_word_left_styled)
             let (cleaned, cursor) = cleanup_empty_styles(raw, vl);
-            let cleaned_vl = visual_len(&cleaned);
+            let cleaned_vl = cursor_len(&cleaned);
             assert!(cursor <= cleaned_vl,
-                "cursor {} should be <= visual_len {} after cleanup",
+                "cursor {} should be <= cursor_len {} after cleanup",
                 cursor, cleaned_vl);
 
             // Now call word boundary on the cleaned text
@@ -2871,49 +2910,49 @@ pub mod styling_cursor {
         #[test]
         fn test_roundtrip_visual_raw() {
             let raw = r"hel\{lo{red|world}";
-            // visual_len = 12 (11 visible chars + 1 for })
+            // cursor_len = 12 (11 visible chars + 1 for })
             for v in 0..=12 {
-                let r = visual_to_raw(raw, v);
-                let v2 = raw_to_visual(raw, r);
+                let r = cursor_to_raw(raw, v);
+                let v2 = raw_to_cursor(raw, r);
                 assert_eq!(v, v2, "visual {} → raw {} → visual {} (expected {})", v, r, v2, v);
             }
         }
 
         #[test]
-        fn test_visual_to_raw_for_cursor_enters_empty_tag() {
+        fn test_cursor_to_raw_for_insertion_enters_empty_tag() {
             // "test{red|}" — visual: t(1) e(2) s(3) t(4) [empty content](5) }(6)
             let raw = "test{red|}";
             // Position 4 skips tag header: raw 4 → skip {red| → raw 9 (inside empty tag)
-            assert_eq!(visual_to_raw(raw, 4), 9);
+            assert_eq!(cursor_to_raw(raw, 4), 9);
             // Position 5 = empty content marker → raw 9
-            assert_eq!(visual_to_raw(raw, 5), 9);
+            assert_eq!(cursor_to_raw(raw, 5), 9);
             // Position 6 = after } → raw 10
-            assert_eq!(visual_to_raw(raw, 6), 10);
-            // Cursor variant at pos 4: visual_to_raw returns 9, enter_empty_tags finds nothing
-            assert_eq!(visual_to_raw_for_cursor(raw, 4), 9);
+            assert_eq!(cursor_to_raw(raw, 6), 10);
+            // Cursor variant at pos 4: cursor_to_raw returns 9, enter_empty_tags finds nothing
+            assert_eq!(cursor_to_raw_for_insertion(raw, 4), 9);
         }
 
         #[test]
-        fn test_visual_to_raw_for_cursor_nonempty_tag_not_entered() {
+        fn test_cursor_to_raw_for_insertion_nonempty_tag_not_entered() {
             // "test{red|x}" — visual: t(1) e(2) s(3) t(4) x(5) }(6)
             let raw = "test{red|x}";
             // Position 4 skips tag header: raw 4 → skip {red| → raw 9 (inside tag, before 'x')
-            assert_eq!(visual_to_raw(raw, 4), 9);
-            assert_eq!(visual_to_raw_for_cursor(raw, 4), 9);
+            assert_eq!(cursor_to_raw(raw, 4), 9);
+            assert_eq!(cursor_to_raw_for_insertion(raw, 4), 9);
         }
 
         #[test]
-        fn test_visual_to_raw_for_cursor_at_start() {
+        fn test_cursor_to_raw_for_insertion_at_start() {
             // "{red|}hello" — visual: [empty content](1) }(2) h(3) e(4) l(5) l(6) o(7)
             let raw = "{red|}hello";
             // Position 0 = raw 0 (before everything)
-            assert_eq!(visual_to_raw(raw, 0), 0);
+            assert_eq!(cursor_to_raw(raw, 0), 0);
             // Cursor variant enters the empty tag at raw 0 → {red|} → raw 5
-            assert_eq!(visual_to_raw_for_cursor(raw, 0), 5);
+            assert_eq!(cursor_to_raw_for_insertion(raw, 0), 5);
             // Position 1 = empty content → raw 5
-            assert_eq!(visual_to_raw(raw, 1), 5);
+            assert_eq!(cursor_to_raw(raw, 1), 5);
             // Position 2 = after } → raw 6
-            assert_eq!(visual_to_raw(raw, 2), 6);
+            assert_eq!(cursor_to_raw(raw, 2), 6);
         }
 
         #[test]
@@ -3088,8 +3127,8 @@ mod tests {
 
     #[test]
     fn test_word_boundary_right() {
-        assert_eq!(find_word_boundary_right("hello world", 0), 6);
-        assert_eq!(find_word_boundary_right("hello world", 5), 6); // from space, skip past it to start of "world"
+        assert_eq!(find_word_boundary_right("hello world", 0), 5);  // end of "hello"
+        assert_eq!(find_word_boundary_right("hello world", 5), 11); // skip space, end of "world"
         assert_eq!(find_word_boundary_right("hello world", 6), 11);
         assert_eq!(find_word_boundary_right("hello", 5), 5);
     }
@@ -3638,23 +3677,23 @@ mod tests {
 
     #[test]
     #[cfg(feature = "text-styling")]
-    fn test_content_to_visual_pos_no_structural_basic() {
-        use crate::text_input::styling_cursor::content_to_visual_pos_no_structural as c2v;
+    fn test_content_to_cursor_no_structural_basic() {
+        use crate::text_input::styling_cursor::content_to_cursor;
         // "a{red|}b" — visual: a@0, empty@1, }@2, b@3. content: a,b
-        assert_eq!(c2v("a{red|}b", 0), 0);  // before 'a'
-        assert_eq!(c2v("a{red|}b", 1), 3);  // before 'b' (skip empty + })
-        assert_eq!(c2v("a{red|}b", 2), 4);  // after 'b'
+        assert_eq!(content_to_cursor("a{red|}b", 0, true), 0);  // before 'a'
+        assert_eq!(content_to_cursor("a{red|}b", 1, true), 3);  // before 'b' (skip empty + })
+        assert_eq!(content_to_cursor("a{red|}b", 2, true), 4);  // after 'b'
     }
 
     #[test]
     #[cfg(feature = "text-styling")]
-    fn test_content_to_visual_pos_no_structural_nested() {
-        use crate::text_input::styling_cursor::content_to_visual_pos_no_structural as c2v;
+    fn test_content_to_cursor_no_structural_nested() {
+        use crate::text_input::styling_cursor::content_to_cursor;
         // "a{red|b}{blue|c}" — visual: a@0, b@1, }@2, c@3, }@4. content: a,b,c
-        assert_eq!(c2v("a{red|b}{blue|c}", 0), 0);
-        assert_eq!(c2v("a{red|b}{blue|c}", 1), 1);  // before 'b'
-        assert_eq!(c2v("a{red|b}{blue|c}", 2), 3);  // before 'c' (skip } + header)
-        assert_eq!(c2v("a{red|b}{blue|c}", 3), 5);  // after last } (end of text)
+        assert_eq!(content_to_cursor("a{red|b}{blue|c}", 0, true), 0);
+        assert_eq!(content_to_cursor("a{red|b}{blue|c}", 1, true), 1);  // before 'b'
+        assert_eq!(content_to_cursor("a{red|b}{blue|c}", 2, true), 3);  // before 'c' (skip } + header)
+        assert_eq!(content_to_cursor("a{red|b}{blue|c}", 3, true), 5);  // after last } (end of text)
     }
 
     #[test]
@@ -3684,7 +3723,7 @@ mod tests {
         // move right again → after 'b' (end)
         s.move_right_styled(false);
         assert_eq!(s.cursor_pos, 2);
-        assert_eq!(styling_cursor::visual_to_content_pos(&s.text, s.cursor_pos), 2);
+        assert_eq!(styling_cursor::cursor_to_content(&s.text, s.cursor_pos), 2);
     }
 
     #[test]
@@ -3693,14 +3732,14 @@ mod tests {
         let mut s = make_no_styles_state("a{red|}b");
         // Put cursor at end — the empty {red|} tag will be cleaned up since
         // cursor at end is not inside it. Text becomes "ab", cursor at 2.
-        s.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&s.text, 2);
+        s.cursor_pos = styling_cursor::content_to_cursor(&s.text, 2, true);
         // Trigger cleanup to normalise
         s.move_end_styled(false);
         assert_eq!(s.text, "ab");
         assert_eq!(s.cursor_pos, 2);
         // move left → before 'b' (content 1)
         s.move_left_styled(false);
-        let cp = styling_cursor::visual_to_content_pos(&s.text, s.cursor_pos);
+        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 1);
         // move left → before 'a' (content 0)
         s.move_left_styled(false);
@@ -3712,12 +3751,12 @@ mod tests {
     fn test_no_styles_move_left_skips_closing_brace() {
         let mut s = make_no_styles_state("a{red|b}c");
         // visual: a@0, b@1, }@2, c@3. Set cursor before 'c' (content 2 → visual 3).
-        s.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&s.text, 2);
+        s.cursor_pos = styling_cursor::content_to_cursor(&s.text, 2, true);
         // 'b' is at visual 1, '}' at 2, 'c' at 3.  cursor should be at visual 3.
         assert_eq!(s.cursor_pos, 3);
         // Move left → before 'b' (content 1, visual 1)
         s.move_left_styled(false);
-        let cp = styling_cursor::visual_to_content_pos(&s.text, s.cursor_pos);
+        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 1);
     }
 
@@ -3726,13 +3765,13 @@ mod tests {
     fn test_no_styles_backspace() {
         let mut s = make_no_styles_state("a{red|b}c");
         // Put cursor at content 2 (before 'c')
-        s.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&s.text, 2);
+        s.cursor_pos = styling_cursor::content_to_cursor(&s.text, 2, true);
         s.backspace_styled();
         // Should delete 'b', leaving "a...c"
         let stripped = styling_cursor::strip_styling(&s.text);
         assert_eq!(stripped, "ac");
         // Cursor should be at content 1 (between a and c)
-        let cp = styling_cursor::visual_to_content_pos(&s.text, s.cursor_pos);
+        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 1);
     }
 
@@ -3741,11 +3780,11 @@ mod tests {
     fn test_no_styles_delete_forward() {
         let mut s = make_no_styles_state("{red|abc}");
         // Put cursor at content 1 (before 'b')
-        s.cursor_pos = styling_cursor::content_to_visual_pos_no_structural(&s.text, 1);
+        s.cursor_pos = styling_cursor::content_to_cursor(&s.text, 1, true);
         s.delete_forward_styled();
         let stripped = styling_cursor::strip_styling(&s.text);
         assert_eq!(stripped, "ac");
-        let cp = styling_cursor::visual_to_content_pos(&s.text, s.cursor_pos);
+        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 1);
     }
 
@@ -3755,11 +3794,11 @@ mod tests {
         let mut s = make_no_styles_state("{red|}hello{blue|}");
         // Home — should be at the first content char
         s.move_home_styled(false);
-        let cp = styling_cursor::visual_to_content_pos(&s.text, s.cursor_pos);
+        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 0);
         // End
         s.move_end_styled(false);
-        let cp = styling_cursor::visual_to_content_pos(&s.text, s.cursor_pos);
+        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
         let content_len = styling_cursor::strip_styling(&s.text).chars().count();
         assert_eq!(cp, content_len);
     }

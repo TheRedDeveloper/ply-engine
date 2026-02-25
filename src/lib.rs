@@ -58,8 +58,9 @@ pub struct ElementBuilder<'ply, CustomElementData: Clone + Default + std::fmt::D
     ply: &'ply mut Ply<CustomElementData>,
     inner: engine::ElementDeclaration<CustomElementData>,
     id: Option<Id>,
-    on_press_fn: Option<Box<dyn FnMut(Id) + 'static>>,
-    on_release_fn: Option<Box<dyn FnMut(Id) + 'static>>,
+    on_hover_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'static>>,
+    on_press_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'static>>,
+    on_release_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'static>>,
     on_focus_fn: Option<Box<dyn FnMut(Id) + 'static>>,
     on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'static>>,
     text_input_on_changed_fn: Option<Box<dyn FnMut(&str) + 'static>>,
@@ -303,12 +304,22 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
+    /// Registers a callback invoked every frame the pointer is over this element.
+    #[inline]
+    pub fn on_hover<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(Id, engine::PointerData) + 'static,
+    {
+        self.on_hover_fn = Some(Box::new(callback));
+        self
+    }
+
     /// Registers a callback that fires once when the element is pressed
     /// (pointer click or Enter/Space on focused element).
     #[inline]
     pub fn on_press<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id) + 'static,
+        F: FnMut(Id, engine::PointerData) + 'static,
     {
         self.on_press_fn = Some(Box::new(callback));
         self
@@ -319,7 +330,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_release<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id) + 'static,
+        F: FnMut(Id, engine::PointerData) + 'static,
     {
         self.on_release_fn = Some(Box::new(callback));
         self
@@ -381,7 +392,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     pub fn children(self, f: impl FnOnce(&mut Ui<'_, CustomElementData>)) -> Id {
         let ElementBuilder {
             ply, inner, id,
-            on_press_fn, on_release_fn, on_focus_fn, on_unfocus_fn,
+            on_hover_fn, on_press_fn, on_release_fn, on_focus_fn, on_unfocus_fn,
             text_input_on_changed_fn, text_input_on_submit_fn,
         } = self;
         if let Some(ref id) = id {
@@ -392,6 +403,9 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         ply.context.configure_open_element(&inner);
         let element_id = ply.context.get_open_element_id();
 
+        if let Some(hover_fn) = on_hover_fn {
+            ply.context.on_hover(hover_fn);
+        }
         if on_press_fn.is_some() || on_release_fn.is_some() {
             ply.context.set_press_callbacks(on_press_fn, on_release_fn);
         }
@@ -441,6 +455,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
             ply: &mut *self.ply,
             inner: engine::ElementDeclaration::default(),
             id: None,
+            on_hover_fn: None,
             on_press_fn: None,
             on_release_fn: None,
             on_focus_fn: None,
@@ -456,14 +471,6 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
         config_fn(&mut config);
         let text_config_index = self.ply.context.store_text_element_config(config);
         self.ply.context.open_text_element(text, text_config_index);
-    }
-
-    /// Registers a callback invoked when the pointer hovers over this element.
-    pub fn on_hover<F>(&mut self, callback: F)
-    where
-        F: FnMut(Id, engine::PointerData) + 'static,
-    {
-        self.ply.context.on_hover(Box::new(callback));
     }
 
     /// Returns the current scroll offset of the open scroll container.
@@ -2230,8 +2237,8 @@ mod tests {
                 .id("btn")
                 .width(fixed!(100.0))
                 .height(fixed!(100.0))
-                .on_press(move |_| { *pc.borrow_mut() += 1; })
-                .on_release(move |_| { *rc.borrow_mut() += 1; })
+                .on_press(move |_, _| { *pc.borrow_mut() += 1; })
+                .on_release(move |_, _| { *rc.borrow_mut() += 1; })
                 .empty();
             ui.eval();
         }

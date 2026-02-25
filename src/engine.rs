@@ -215,7 +215,6 @@ pub struct FloatingAttachPoints {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FloatingConfig {
     pub offset: Vector2,
-    pub expand: Dimensions,
     pub parent_id: u32,
     pub z_index: i16,
     pub attach_points: FloatingAttachPoints,
@@ -362,8 +361,8 @@ struct LayoutElementHashMapItem {
     element_id: Id,
     layout_element_index: i32,
     on_hover_fn: Option<Box<dyn FnMut(Id, PointerData)>>,
-    on_press_fn: Option<Box<dyn FnMut(Id)>>,
-    on_release_fn: Option<Box<dyn FnMut(Id)>>,
+    on_press_fn: Option<Box<dyn FnMut(Id, PointerData)>>,
+    on_release_fn: Option<Box<dyn FnMut(Id, PointerData)>>,
     on_focus_fn: Option<Box<dyn FnMut(Id)>>,
     on_unfocus_fn: Option<Box<dyn FnMut(Id)>>,
     on_text_changed_fn: Option<Box<dyn FnMut(&str)>>,
@@ -1391,7 +1390,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
                                     #[cfg(feature = "text-styling")]
                                     {
-                                        let visual_pos = crate::text_input::styling_cursor::raw_to_visual(&state.text, global_pos);
+                                        let visual_pos = crate::text_input::styling_cursor::raw_to_cursor(&state.text, global_pos);
                                         if is_double_click {
                                             state.select_word_at_styled(visual_pos);
                                         } else {
@@ -1433,7 +1432,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     );
                                     #[cfg(feature = "text-styling")]
                                     {
-                                        let visual_pos = crate::text_input::styling_cursor::raw_to_visual(&state.text, raw_click_pos);
+                                        let visual_pos = crate::text_input::styling_cursor::raw_to_cursor(&state.text, raw_click_pos);
                                         if is_double_click {
                                             state.select_word_at_styled(visual_pos);
                                         } else {
@@ -2898,26 +2897,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 if !visited[buf_idx] {
                     visited[buf_idx] = true;
 
-                    let mut current_bbox = BoundingBox::new(
+                    let current_bbox = BoundingBox::new(
                         current_node.position.x,
                         current_node.position.y,
                         self.layout_elements[current_elem_idx].dimensions.width,
                         self.layout_elements[current_elem_idx].dimensions.height,
                     );
-
-                    // Expand for floating elements
-                    if self.element_has_config(current_elem_idx, ElementConfigType::Floating) {
-                        if let Some(float_cfg_idx) = self.find_element_config_index(
-                            current_elem_idx,
-                            ElementConfigType::Floating,
-                        ) {
-                            let expand = self.floating_element_configs[float_cfg_idx].expand;
-                            current_bbox.x -= expand.width;
-                            current_bbox.width += expand.width * 2.0;
-                            current_bbox.y -= expand.height;
-                            current_bbox.height += expand.height * 2.0;
-                        }
-                    }
 
                     // Apply scroll offset
                     let mut _scroll_container_data_idx: Option<usize> = None;
@@ -4131,7 +4116,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     for eid in self.pointer_over_ids.clone().iter() {
                         if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
                             if let Some(ref mut callback) = item.on_press_fn {
-                                callback(eid.clone());
+                                callback(eid.clone(), self.pointer_info);
                             }
                         }
                     }
@@ -4143,7 +4128,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 for eid in pressed.iter() {
                     if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
                         if let Some(ref mut callback) = item.on_release_fn {
-                            callback(eid.clone());
+                            callback(eid.clone(), self.pointer_info);
                         }
                     }
                 }
@@ -4348,8 +4333,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     pub fn set_press_callbacks(
         &mut self,
-        on_press: Option<Box<dyn FnMut(Id)>>,
-        on_release: Option<Box<dyn FnMut(Id)>>,
+        on_press: Option<Box<dyn FnMut(Id, PointerData)>>,
+        on_release: Option<Box<dyn FnMut(Id, PointerData)>>,
     ) {
         let open_idx = self.get_open_layout_element();
         let elem_id = self.layout_elements[open_idx].id;
@@ -4426,7 +4411,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         if let Some(item) = self.layout_element_map.get_mut(&element_id) {
             let id_copy = item.element_id.clone();
             if let Some(ref mut callback) = item.on_press_fn {
-                callback(id_copy);
+                callback(id_copy, PointerData::default());
             }
         }
     }
@@ -4490,7 +4475,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         if let Some(state) = self.text_edit_states.get_mut(&element_id) {
             state.text = value.to_string();
             #[cfg(feature = "text-styling")]
-            let max_pos = crate::text_input::styling_cursor::visual_len(&state.text);
+            let max_pos = crate::text_input::styling_cursor::cursor_len(&state.text);
             #[cfg(not(feature = "text-styling"))]
             let max_pos = state.text.chars().count();
             if state.cursor_pos > max_pos {
@@ -4516,7 +4501,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     pub fn set_cursor_pos(&mut self, element_id: u32, pos: usize) {
         if let Some(state) = self.text_edit_states.get_mut(&element_id) {
             #[cfg(feature = "text-styling")]
-            let max_pos = crate::text_input::styling_cursor::visual_len(&state.text);
+            let max_pos = crate::text_input::styling_cursor::cursor_len(&state.text);
             #[cfg(not(feature = "text-styling"))]
             let max_pos = state.text.chars().count();
             state.cursor_pos = pos.min(max_pos);
@@ -4539,7 +4524,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     pub fn set_selection(&mut self, element_id: u32, anchor: usize, cursor: usize) {
         if let Some(state) = self.text_edit_states.get_mut(&element_id) {
             #[cfg(feature = "text-styling")]
-            let max_pos = crate::text_input::styling_cursor::visual_len(&state.text);
+            let max_pos = crate::text_input::styling_cursor::cursor_len(&state.text);
             #[cfg(not(feature = "text-styling"))]
             let max_pos = state.text.chars().count();
             state.selection_anchor = Some(anchor.min(max_pos));
@@ -5209,7 +5194,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 self.pressed_element_ids = vec![id.clone()];
                 if let Some(item) = self.layout_element_map.get_mut(&self.focused_element_id) {
                     if let Some(ref mut callback) = item.on_press_fn {
-                        callback(id);
+                        callback(id, PointerData::default());
                     }
                 }
             }
@@ -5219,7 +5204,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             for eid in pressed.iter() {
                 if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
                     if let Some(ref mut callback) = item.on_release_fn {
-                        callback(eid.clone());
+                        callback(eid.clone(), PointerData::default());
                     }
                 }
             }
@@ -6915,17 +6900,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 self.debug_int_text(float_config.offset.x, info_text_config);
                                 self.debug_text(", y: ", info_text_config);
                                 self.debug_int_text(float_config.offset.y, info_text_config);
-                                self.debug_text(" }", info_text_config);
-                            }
-                            self.close_element();
-
-                            self.debug_text("Expand", info_title_config);
-                            self.debug_open(&ElementDeclaration::default());
-                            {
-                                self.debug_text("{ width: ", info_text_config);
-                                self.debug_int_text(float_config.expand.width, info_text_config);
-                                self.debug_text(", height: ", info_text_config);
-                                self.debug_int_text(float_config.expand.height, info_text_config);
                                 self.debug_text(" }", info_text_config);
                             }
                             self.close_element();

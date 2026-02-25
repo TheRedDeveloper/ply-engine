@@ -1,6 +1,6 @@
 use crate::align::{AlignX, AlignY};
 use crate::id::Id;
-use crate::{color::Color, Dimensions, Vector2, engine};
+use crate::{color::Color, Vector2, engine};
 
 /// Specifies how pointer capture should behave for floating elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -49,13 +49,6 @@ impl FloatingBuilder {
     #[inline]
     pub fn offset(&mut self, x: f32, y: f32) -> &mut Self {
         self.config.offset = Vector2::new(x, y);
-        self
-    }
-
-    /// Sets the floating element's dimensions.
-    #[inline]
-    pub fn dimensions(&mut self, dimensions: Dimensions) -> &mut Self {
-        self.config.expand = dimensions;
         self
     }
 
