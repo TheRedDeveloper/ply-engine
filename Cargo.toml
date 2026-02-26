@@ -18,6 +18,7 @@ built-in-shaders = []
 native-a11y = ["dep:accesskit", "dep:accesskit_unix", "dep:accesskit_macos", "dep:accesskit_windows", "dep:accesskit_android"]
 net = ["dep:ureq", "dep:tokio", "dep:tokio-tungstenite", "dep:rustls", "dep:futures", "dep:sapp-jsutils"]
 net-json = ["net", "dep:serde", "dep:serde_json"]
+audio = ["macroquad/audio"]
 
 [dependencies]
 macroquad = { version = "0.4", git = "https://github.com/TheRedDeveloper/macroquad-fix" } # On ply's bleeding edge

@@ -51,3 +51,10 @@ pub use macroquad::prelude::*;
 pub use crate::color::Color;
 // Explicit alias for when users need macroquad's Color
 pub use macroquad::prelude::Color as MacroquadColor;
+
+// Re-export macroquad itself so users don't need it in their Cargo.toml
+pub use macroquad;
+
+// Audio — feature-gated
+#[cfg(feature = "audio")]
+pub use macroquad::audio::*;
