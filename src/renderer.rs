@@ -208,13 +208,39 @@ pub static TEXTURE_MANAGER: std::sync::LazyLock<std::sync::Mutex<TextureManager>
 /// 
 /// You can adjust `max_frames_not_used` to control how many frames a texture can go unused before being unloaded.
 pub struct TextureManager {
-    textures: rustc_hash::FxHashMap<String, TextureData>,
+    textures: rustc_hash::FxHashMap<String, CacheEntry>,
     pub max_frames_not_used: usize,
 }
-struct TextureData {
-    pub frames_not_used: usize,
-    pub texture: Texture2D,
+struct CacheEntry {
+    frames_not_used: usize,
+    owner: TextureOwner,
 }
+enum TextureOwner {
+    Standalone(Texture2D),
+    RenderTarget(RenderTarget),
+}
+
+impl TextureOwner {
+    pub fn texture(&self) -> &Texture2D {
+        match self {
+            TextureOwner::Standalone(tex) => tex,
+            TextureOwner::RenderTarget(rt) => &rt.texture,
+        }
+    }
+}
+
+impl From<Texture2D> for TextureOwner {
+    fn from(tex: Texture2D) -> Self {
+        TextureOwner::Standalone(tex)
+    }
+}
+
+impl From<RenderTarget> for TextureOwner {
+    fn from(rt: RenderTarget) -> Self {
+        TextureOwner::RenderTarget(rt)
+    }
+}
+
 impl TextureManager {
     pub fn new() -> Self {
         Self {
@@ -225,9 +251,9 @@ impl TextureManager {
 
     /// Get a cached texture by its key.
     pub fn get(&mut self, path: &str) -> Option<&Texture2D> {
-        if let Some(data) = self.textures.get_mut(path) {
-            data.frames_not_used = 0;
-            Some(&data.texture)
+        if let Some(entry) = self.textures.get_mut(path) {
+            entry.frames_not_used = 0;
+            Some(entry.owner.texture())
         } else {
             None
         }
@@ -237,51 +263,50 @@ impl TextureManager {
     pub async fn get_or_load(&mut self, path: &'static str) -> &Texture2D {
         if !self.textures.contains_key(path) {
             let texture = load_texture(path).await.unwrap();
-            self.textures.insert(path.to_owned(), TextureData { frames_not_used: 0, texture });
+            self.textures.insert(path.to_owned(), CacheEntry { frames_not_used: 0, owner: texture.into() });
         }
-
         let entry = self.textures.get_mut(path).unwrap();
-        entry.frames_not_used = 0; // Reset frame not used counter
-        &entry.texture
+        entry.frames_not_used = 0;
+        entry.owner.texture()
     }
 
     /// Get the cached texture by its key, or create it using the provided function and cache it.
-    pub fn get_or_create<F>(&mut self, key: String, create_fn: F) -> &Texture2D 
-    where F: FnOnce() -> Texture2D 
+    pub fn get_or_create<F>(&mut self, key: String, create_fn: F) -> &Texture2D
+    where F: FnOnce() -> Texture2D
     {
         if !self.textures.contains_key(&key) {
             let texture = create_fn();
-            self.textures.insert(key.clone(), TextureData { frames_not_used: 0, texture });
+            self.textures.insert(key.clone(), CacheEntry { frames_not_used: 0, owner: texture.into() });
         }
         let entry = self.textures.get_mut(&key).unwrap();
         entry.frames_not_used = 0;
-        &entry.texture
+        entry.owner.texture()
     }
 
-    pub async fn get_or_create_async<F, Fut>(&mut self, key: String, create_fn: F) -> &Texture2D 
+    pub async fn get_or_create_async<F, Fut>(&mut self, key: String, create_fn: F) -> &Texture2D
     where F: FnOnce() -> Fut,
           Fut: std::future::Future<Output = Texture2D>
     {
         if !self.textures.contains_key(&key) {
             let texture = create_fn().await;
-            self.textures.insert(key.clone(), TextureData { frames_not_used: 0, texture });
+            self.textures.insert(key.clone(), CacheEntry { frames_not_used: 0, owner: texture.into() });
         }
         let entry = self.textures.get_mut(&key).unwrap();
         entry.frames_not_used = 0;
-        &entry.texture
+        entry.owner.texture()
     }
 
-    /// Cache a texture with the given key.
-    pub fn cache(&mut self, key: String, texture: Texture2D) -> &Texture2D {
-        self.textures.insert(key.clone(), TextureData { frames_not_used: 0, texture: texture });
-        &self.textures.get(&key).unwrap().texture
+    /// Cache a value with the given key. Accepts `Texture2D` or `RenderTarget`.
+    #[allow(private_bounds)]
+    pub fn cache(&mut self, key: String, value: impl Into<TextureOwner>) -> &Texture2D {
+        self.textures.insert(key.clone(), CacheEntry { frames_not_used: 0, owner: value.into() });
+        self.textures.get(&key).unwrap().owner.texture()
     }
 
     pub fn clean(&mut self) {
-        self.textures.retain(|_, data| data.frames_not_used <= self.max_frames_not_used);
-
-        for (_, data) in self.textures.iter_mut() {
-            data.frames_not_used += 1;
+        self.textures.retain(|_, entry| entry.frames_not_used <= self.max_frames_not_used);
+        for (_, entry) in self.textures.iter_mut() {
+            entry.frames_not_used += 1;
         }
     }
 
@@ -838,7 +863,7 @@ fn rounded_rectangle_texture(cr: &CornerRadii, bb: &BoundingBox, clip: &Option<(
     render_target.texture
 }
 
-/// Render a TinyVG image to a Texture2D, scaled to fit the given dimensions.
+/// Render a TinyVG image to a RenderTarget, scaled to fit the given dimensions.
 /// Decodes from raw bytes, then delegates to `render_tinyvg_image`.
 #[cfg(feature = "tinyvg")]
 fn render_tinyvg_texture(
@@ -846,7 +871,7 @@ fn render_tinyvg_texture(
     dest_width: f32,
     dest_height: f32,
     clip: &Option<(i32, i32, i32, i32)>,
-) -> Option<Texture2D> {
+) -> Option<RenderTarget> {
     use tinyvg::Decoder;
     let decoder = Decoder::new(std::io::Cursor::new(tvg_data));
     let image = match decoder.decode() {
@@ -856,14 +881,14 @@ fn render_tinyvg_texture(
     render_tinyvg_image(&image, dest_width, dest_height, clip)
 }
 
-/// Render a decoded `tinyvg::format::Image` to a Texture2D, scaled to fit the given dimensions.
+/// Render a decoded `tinyvg::format::Image` to a RenderTarget, scaled to fit the given dimensions.
 #[cfg(feature = "tinyvg")]
 fn render_tinyvg_image(
     image: &tinyvg::format::Image,
     dest_width: f32,
     dest_height: f32,
     clip: &Option<(i32, i32, i32, i32)>,
-) -> Option<Texture2D> {
+) -> Option<RenderTarget> {
     use tinyvg::format::{Command, Style, Segment, SegmentCommandKind, Point as TvgPoint, Color as TvgColor};
     use kurbo::{BezPath, Point as KurboPoint, Vec2 as KurboVec2, ParamCurve, SvgArc, Arc as KurboArc, PathEl};
     use lyon::tessellation::{FillTessellator, FillOptions, VertexBuffers, BuffersBuilder, FillVertex, FillRule};
@@ -1447,7 +1472,7 @@ fn render_tinyvg_image(
         get_internal_gl().quad_gl.scissor(*clip);
     }
     
-    Some(render_target.texture)
+    Some(render_target)
 }
 
 fn resize(texture: &Texture2D, height: f32, width: f32, clip: &Option<(i32, i32, i32, i32)>) -> Texture2D {
@@ -1544,9 +1569,9 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     ImageSource::TinyVg(tvg_image) => {
                         // Procedural TinyVG — rasterize every frame (no caching, content may change)
                         let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
-                        if let Some(tvg_texture) = render_tinyvg_image(tvg_image, bb.width, bb.height, &state.clip) {
+                        if let Some(tvg_rt) = render_tinyvg_image(tvg_image, bb.width, bb.height, &state.clip) {
                             let final_texture = if has_corner_radii {
-                                let mut tvg_img: Image = tvg_texture.get_texture_data();
+                                let mut tvg_img: Image = tvg_rt.texture.get_texture_data();
                                 let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
                                 for i in 0..tvg_img.bytes.len()/4 {
                                     let this_alpha = tvg_img.bytes[i * 4 + 3] as f32 / 255.0;
@@ -1555,7 +1580,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 }
                                 Texture2D::from_image(&tvg_img)
                             } else {
-                                tvg_texture
+                                tvg_rt.texture.clone()
                             };
                             draw_texture_ex(
                                 &final_texture,
@@ -1590,34 +1615,35 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                             );
                             let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
                             let texture = if !has_corner_radii {
-                                match ga {
-                                    GraphicAsset::Path(path) => {
-                                        manager.get_or_create_async(key, async || {
+                                // No corner radii — cache the render target to keep its GL texture alive
+                                if let Some(cached) = manager.get(&key) {
+                                    cached
+                                } else {
+                                    match ga {
+                                        GraphicAsset::Path(path) => {
                                             match load_file(path).await {
                                                 Ok(tvg_bytes) => {
-                                                    if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
-                                                        tvg_texture
+                                                    if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                        manager.cache(key.clone(), tvg_rt)
                                                     } else {
                                                         warn!("Failed to load TinyVG image: {}", path);
-                                                        Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                                        manager.cache(key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
                                                     }
                                                 }
                                                 Err(error) => {
                                                     warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
-                                                    Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                                    manager.cache(key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
                                                 }
                                             }
-                                        }).await
-                                    }
-                                    GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
-                                        manager.get_or_create(key, || {
-                                            if let Some(tvg_texture) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &state.clip) {
-                                                tvg_texture
+                                        }
+                                        GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
+                                            if let Some(tvg_rt) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                manager.cache(key.clone(), tvg_rt)
                                             } else {
                                                 warn!("Failed to load TinyVG image: {}", file_name);
-                                                Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
+                                                manager.cache(key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
                                             }
-                                        })
+                                        }
                                     }
                                 }
                             } else {
@@ -1635,13 +1661,12 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                         GraphicAsset::Path(path) => {
                                             match load_file(path).await {
                                                 Ok(tvg_bytes) => {
-                                                    let texture = if let Some(tvg_texture) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
-                                                        tvg_texture
+                                                    if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                        manager.cache(zerocr_key.clone(), tvg_rt)
                                                     } else {
                                                         warn!("Failed to load TinyVG image: {}", path);
-                                                        Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
-                                                    };
-                                                    manager.cache(zerocr_key.clone(), texture)
+                                                        manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
+                                                    }
                                                 }
                                                 Err(error) => {
                                                     warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
@@ -1650,13 +1675,12 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                             }
                                         }
                                         GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
-                                            let texture = if let Some(tvg_texture) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &state.clip) {
-                                                tvg_texture
+                                            if let Some(tvg_rt) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                manager.cache(zerocr_key.clone(), tvg_rt)
                                             } else {
                                                 warn!("Failed to load TinyVG image: {}", file_name);
-                                                Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0])
-                                            };
-                                            manager.cache(zerocr_key.clone(), texture)
+                                                manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
+                                            }
                                         }
                                     }
                                 }.clone();
