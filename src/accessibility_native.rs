@@ -606,7 +606,7 @@ pub enum PendingA11yAction {
 /// Synchronise Ply's accessibility state with the platform screen reader.
 ///
 /// This is the native equivalent of `accessibility_web::sync_accessibility_tree`.
-/// It is called from `Ply::eval()` on every frame when the `native-a11y` feature
+/// It is called from `Ply::eval()` on every frame when the `a11y` feature
 /// is enabled and we are **not** compiling for WASM.
 ///
 /// Returns a list of actions requested by the screen reader (focus changes,

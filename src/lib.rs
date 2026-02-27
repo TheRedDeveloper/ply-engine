@@ -1,7 +1,7 @@
 pub mod accessibility;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "a11y", target_arch = "wasm32"))]
 pub mod accessibility_web;
-#[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
 pub mod accessibility_native;
 pub mod align;
 pub mod color;
@@ -44,9 +44,9 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     text_input_repeat_focus_id: u32,
     /// Track virtual keyboard state to avoid redundant show/hide calls
     was_text_input_focused: bool,
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
     web_a11y_state: accessibility_web::WebAccessibilityState,
-    #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
     native_a11y_state: accessibility_native::NativeAccessibilityState,
 }
 
@@ -821,9 +821,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             text_input_repeat_last: 0.0,
             text_input_repeat_focus_id: 0,
             was_text_input_focused: false,
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
-            #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
             native_a11y_state: accessibility_native::NativeAccessibilityState::default(),
         };
         ply.context.default_font_key = default_font.key();
@@ -844,9 +844,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             text_input_repeat_last: 0.0,
             text_input_repeat_focus_id: 0,
             was_text_input_focused: false,
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
-            #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
             native_a11y_state: accessibility_native::NativeAccessibilityState::default(),
         }
     }
@@ -1022,7 +1022,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         }
 
         // Sync the hidden DOM accessibility tree (web/WASM only)
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
         {
             accessibility_web::sync_accessibility_tree(
                 &mut self.web_a11y_state,
@@ -1033,7 +1033,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         }
 
         // Sync accessibility tree via AccessKit (native platforms)
-        #[cfg(all(feature = "native-a11y", not(target_arch = "wasm32")))]
+        #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
         {
             let a11y_actions = accessibility_native::sync_accessibility_tree(
                 &mut self.native_a11y_state,
