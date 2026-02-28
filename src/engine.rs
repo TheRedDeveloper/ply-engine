@@ -1392,7 +1392,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
                                     #[cfg(feature = "text-styling")]
                                     {
-                                        let visual_pos = crate::text_input::styling_cursor::raw_to_cursor(&state.text, global_pos);
+                                        let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, global_pos);
                                         if is_double_click {
                                             state.select_word_at_styled(visual_pos);
                                         } else {
@@ -1434,7 +1434,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     );
                                     #[cfg(feature = "text-styling")]
                                     {
-                                        let visual_pos = crate::text_input::styling_cursor::raw_to_cursor(&state.text, raw_click_pos);
+                                        let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_click_pos);
                                         if is_double_click {
                                             state.select_word_at_styled(visual_pos);
                                         } else {
@@ -4518,7 +4518,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             .or_insert_with(crate::text_input::TextEditState::default);
         state.text = value.to_string();
         #[cfg(feature = "text-styling")]
-        let max_pos = crate::text_input::styling_cursor::cursor_len(&state.text);
+        let max_pos = crate::text_input::styling::cursor_len(&state.text);
         #[cfg(not(feature = "text-styling"))]
         let max_pos = state.text.chars().count();
         if state.cursor_pos > max_pos {
@@ -4543,7 +4543,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     pub fn set_cursor_pos(&mut self, element_id: u32, pos: usize) {
         if let Some(state) = self.text_edit_states.get_mut(&element_id) {
             #[cfg(feature = "text-styling")]
-            let max_pos = crate::text_input::styling_cursor::cursor_len(&state.text);
+            let max_pos = crate::text_input::styling::cursor_len(&state.text);
             #[cfg(not(feature = "text-styling"))]
             let max_pos = state.text.chars().count();
             state.cursor_pos = pos.min(max_pos);
@@ -4566,7 +4566,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     pub fn set_selection(&mut self, element_id: u32, anchor: usize, cursor: usize) {
         if let Some(state) = self.text_edit_states.get_mut(&element_id) {
             #[cfg(feature = "text-styling")]
-            let max_pos = crate::text_input::styling_cursor::cursor_len(&state.text);
+            let max_pos = crate::text_input::styling::cursor_len(&state.text);
             #[cfg(not(feature = "text-styling"))]
             let max_pos = state.text.chars().count();
             state.selection_anchor = Some(anchor.min(max_pos));
@@ -4826,7 +4826,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 TextInputAction::Paste { text } => {
                     #[cfg(feature = "text-styling")]
                     {
-                        let escaped = crate::text_input::styling_cursor::escape_str(&text);
+                        let escaped = crate::text_input::styling::escape_str(&text);
                         state.insert_text_styled(&escaped, max_length);
                     }
                     #[cfg(not(feature = "text-styling"))]

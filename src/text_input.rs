@@ -565,13 +565,13 @@ impl TextEditState {
 impl TextEditState {
     /// Get the visual length of the text (ignoring markup).
     fn cursor_len_styled(&self) -> usize {
-        styling_cursor::cursor_len(&self.text)
+        styling::cursor_len(&self.text)
     }
 
     /// Get the selected text in visual space, returning the visible chars.
     pub fn selected_text_styled(&self) -> String {
         if let Some((start, end)) = self.selection_range() {
-            let stripped = styling_cursor::strip_styling(&self.text);
+            let stripped = styling::strip_styling(&self.text);
             let byte_start = char_index_to_byte(&stripped, start);
             let byte_end = char_index_to_byte(&stripped, end);
             stripped[byte_start..byte_end].to_string()
@@ -584,24 +584,24 @@ impl TextEditState {
     pub fn delete_selection_styled(&mut self) -> bool {
         if let Some((start, end)) = self.selection_range() {
             if self.no_styles_movement {
-                let start_cp = styling_cursor::cursor_to_content(&self.text, start);
-                let end_cp = styling_cursor::cursor_to_content(&self.text, end);
+                let start_cp = styling::cursor_to_content(&self.text, start);
+                let end_cp = styling::cursor_to_content(&self.text, end);
                 if start_cp < end_cp {
-                    self.text = styling_cursor::delete_content_range(&self.text, start_cp, end_cp);
+                    self.text = styling::delete_content_range(&self.text, start_cp, end_cp);
                 }
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, start_cp, true);
+                self.cursor_pos = styling::content_to_cursor(&self.text, start_cp, true);
             } else {
-                self.text = styling_cursor::delete_visual_range(&self.text, start, end);
+                self.text = styling::delete_visual_range(&self.text, start, end);
                 self.cursor_pos = start;
             }
             self.selection_anchor = None;
             // Cleanup empty styles (cursor is at start)
-            let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+            let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
             self.text = cleaned;
             self.cursor_pos = new_pos;
             self.snap_to_content_pos();
             // If no visible content remains after deletion, clear entirely
-            if styling_cursor::strip_styling(&self.text).is_empty() {
+            if styling::strip_styling(&self.text).is_empty() {
                 self.text = String::new();
                 self.cursor_pos = 0;
             }
@@ -616,7 +616,7 @@ impl TextEditState {
     pub fn insert_text_styled(&mut self, s: &str, max_length: Option<usize>) {
         self.delete_selection_styled();
         let visual_count = self.cursor_len_styled();
-        let insert_cursor_len = styling_cursor::cursor_len(s);
+        let insert_cursor_len = styling::cursor_len(s);
         let allowed = if let Some(max) = max_length {
             if visual_count >= max {
                 0
@@ -632,13 +632,13 @@ impl TextEditState {
         // If we need to truncate the insertion, work on the visual chars
         let insert_str = if allowed < insert_cursor_len {
             // Build truncated escaped string
-            let stripped = styling_cursor::strip_styling(s);
+            let stripped = styling::strip_styling(s);
             let truncated: String = stripped.chars().take(allowed).collect();
-            styling_cursor::escape_str(&truncated)
+            styling::escape_str(&truncated)
         } else {
             s.to_string()
         };
-        let (new_text, new_cursor) = styling_cursor::insert_at_visual(&self.text, self.cursor_pos, &insert_str);
+        let (new_text, new_cursor) = styling::insert_at_visual(&self.text, self.cursor_pos, &insert_str);
         self.text = new_text;
         self.cursor_pos = new_cursor;
         // Clean up any empty style tags the cursor has passed
@@ -648,7 +648,7 @@ impl TextEditState {
 
     /// Insert a single typed character in styled mode (auto-escapes).
     pub fn insert_char_styled(&mut self, ch: char, max_length: Option<usize>) {
-        let escaped = styling_cursor::escape_char(ch);
+        let escaped = styling::escape_char(ch);
         self.insert_text_styled(&escaped, max_length);
     }
 
@@ -658,19 +658,19 @@ impl TextEditState {
             return;
         }
         if self.no_styles_movement {
-            let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+            let cp = styling::cursor_to_content(&self.text, self.cursor_pos);
             if cp > 0 {
-                self.text = styling_cursor::delete_content_range(&self.text, cp - 1, cp);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp - 1, true);
-                let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+                self.text = styling::delete_content_range(&self.text, cp - 1, cp);
+                self.cursor_pos = styling::content_to_cursor(&self.text, cp - 1, true);
+                let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
                 self.snap_to_content_pos();
             }
         } else if self.cursor_pos > 0 {
-            self.text = styling_cursor::delete_visual_range(&self.text, self.cursor_pos - 1, self.cursor_pos);
+            self.text = styling::delete_visual_range(&self.text, self.cursor_pos - 1, self.cursor_pos);
             self.cursor_pos -= 1;
-            let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+            let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
             self.text = cleaned;
             self.cursor_pos = new_pos;
         }
@@ -684,12 +684,12 @@ impl TextEditState {
             return;
         }
         if self.no_styles_movement {
-            let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
-            let content_len = styling_cursor::strip_styling(&self.text).chars().count();
+            let cp = styling::cursor_to_content(&self.text, self.cursor_pos);
+            let content_len = styling::strip_styling(&self.text).chars().count();
             if cp < content_len {
-                self.text = styling_cursor::delete_content_range(&self.text, cp, cp + 1);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp, true);
-                let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+                self.text = styling::delete_content_range(&self.text, cp, cp + 1);
+                self.cursor_pos = styling::content_to_cursor(&self.text, cp, true);
+                let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
                 self.snap_to_content_pos();
@@ -697,8 +697,8 @@ impl TextEditState {
         } else {
             let vis_len = self.cursor_len_styled();
             if self.cursor_pos < vis_len {
-                self.text = styling_cursor::delete_visual_range(&self.text, self.cursor_pos, self.cursor_pos + 1);
-                let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+                self.text = styling::delete_visual_range(&self.text, self.cursor_pos, self.cursor_pos + 1);
+                let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
             }
@@ -713,22 +713,22 @@ impl TextEditState {
             return;
         }
         if self.no_styles_movement {
-            let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
-            let stripped = styling_cursor::strip_styling(&self.text);
+            let cp = styling::cursor_to_content(&self.text, self.cursor_pos);
+            let stripped = styling::strip_styling(&self.text);
             let target_cp = find_word_boundary_left(&stripped, cp);
             if target_cp < cp {
-                self.text = styling_cursor::delete_content_range(&self.text, target_cp, cp);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_cp, true);
-                let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+                self.text = styling::delete_content_range(&self.text, target_cp, cp);
+                self.cursor_pos = styling::content_to_cursor(&self.text, target_cp, true);
+                let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
                 self.snap_to_content_pos();
             }
         } else {
-            let target = styling_cursor::find_word_boundary_left_visual(&self.text, self.cursor_pos);
-            self.text = styling_cursor::delete_visual_range(&self.text, target, self.cursor_pos);
+            let target = styling::find_word_boundary_left_visual(&self.text, self.cursor_pos);
+            self.text = styling::delete_visual_range(&self.text, target, self.cursor_pos);
             self.cursor_pos = target;
-            let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+            let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
             self.text = cleaned;
             self.cursor_pos = new_pos;
         }
@@ -742,21 +742,21 @@ impl TextEditState {
             return;
         }
         if self.no_styles_movement {
-            let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
-            let stripped = styling_cursor::strip_styling(&self.text);
+            let cp = styling::cursor_to_content(&self.text, self.cursor_pos);
+            let stripped = styling::strip_styling(&self.text);
             let target_cp = find_word_delete_boundary_right(&stripped, cp);
             if target_cp > cp {
-                self.text = styling_cursor::delete_content_range(&self.text, cp, target_cp);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp, true);
-                let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+                self.text = styling::delete_content_range(&self.text, cp, target_cp);
+                self.cursor_pos = styling::content_to_cursor(&self.text, cp, true);
+                let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
                 self.text = cleaned;
                 self.cursor_pos = new_pos;
                 self.snap_to_content_pos();
             }
         } else {
-            let target = styling_cursor::find_word_delete_boundary_right_visual(&self.text, self.cursor_pos);
-            self.text = styling_cursor::delete_visual_range(&self.text, self.cursor_pos, target);
-            let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+            let target = styling::find_word_delete_boundary_right_visual(&self.text, self.cursor_pos);
+            self.text = styling::delete_visual_range(&self.text, self.cursor_pos, target);
+            let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
             self.text = cleaned;
             self.cursor_pos = new_pos;
         }
@@ -797,11 +797,11 @@ impl TextEditState {
     /// Content-based left movement for `no_styles_movement` mode.
     /// Decrements in content space so the cursor skips structural positions.
     fn move_left_content(&mut self, shift: bool) {
-        let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+        let cp = styling::cursor_to_content(&self.text, self.cursor_pos);
         if !shift {
             if let Some((start, _end)) = self.selection_range() {
-                let sc = styling_cursor::cursor_to_content(&self.text, start);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, sc, true);
+                let sc = styling::cursor_to_content(&self.text, start);
+                self.cursor_pos = styling::content_to_cursor(&self.text, sc, true);
                 self.selection_anchor = None;
                 self.cleanup_after_move();
                 return;
@@ -811,7 +811,7 @@ impl TextEditState {
             if shift && self.selection_anchor.is_none() {
                 self.selection_anchor = Some(self.cursor_pos);
             }
-            self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp - 1, true);
+            self.cursor_pos = styling::content_to_cursor(&self.text, cp - 1, true);
             if shift {
                 if self.selection_anchor == Some(self.cursor_pos) {
                     self.selection_anchor = None;
@@ -857,7 +857,7 @@ impl TextEditState {
         if shift && self.selection_anchor.is_none() {
             self.selection_anchor = Some(self.cursor_pos);
         }
-        self.cursor_pos = styling_cursor::find_word_boundary_left_visual(&self.text, self.cursor_pos);
+        self.cursor_pos = styling::find_word_boundary_left_visual(&self.text, self.cursor_pos);
         if !shift {
             self.selection_anchor = None;
         } else if self.selection_anchor == Some(self.cursor_pos) {
@@ -871,7 +871,7 @@ impl TextEditState {
         if shift && self.selection_anchor.is_none() {
             self.selection_anchor = Some(self.cursor_pos);
         }
-        self.cursor_pos = styling_cursor::find_word_boundary_right_visual(&self.text, self.cursor_pos);
+        self.cursor_pos = styling::find_word_boundary_right_visual(&self.text, self.cursor_pos);
         if !shift {
             self.selection_anchor = None;
         } else if self.selection_anchor == Some(self.cursor_pos) {
@@ -917,16 +917,16 @@ impl TextEditState {
             self.selection_anchor = Some(self.cursor_pos);
         }
 
-        let raw_cursor = styling_cursor::cursor_to_raw_for_insertion(&self.text, self.cursor_pos);
+        let raw_cursor = styling::cursor_to_raw_for_insertion(&self.text, self.cursor_pos);
 
         if let Some(vl) = visual_lines {
             let (line_idx, _raw_col) = cursor_to_visual_pos(vl, raw_cursor);
 
             // Compute column in content space (visible characters only)
             // so structural chars like `}` don't offset the column.
-            let line_start_visual = styling_cursor::raw_to_cursor(&self.text, vl[line_idx].global_char_start);
-            let content_start = styling_cursor::cursor_to_content(&self.text, line_start_visual);
-            let content_current = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+            let line_start_visual = styling::raw_to_cursor(&self.text, vl[line_idx].global_char_start);
+            let content_start = styling::cursor_to_content(&self.text, line_start_visual);
+            let content_current = styling::cursor_to_content(&self.text, self.cursor_pos);
             let current_col = content_current.saturating_sub(content_start);
             let col = self.preferred_col.unwrap_or(current_col);
 
@@ -935,39 +935,39 @@ impl TextEditState {
                 self.cursor_pos = 0;
             } else {
                 let target = &vl[line_idx - 1];
-                let target_start_visual = styling_cursor::raw_to_cursor(&self.text, target.global_char_start);
-                let target_end_visual = styling_cursor::raw_to_cursor(
+                let target_start_visual = styling::raw_to_cursor(&self.text, target.global_char_start);
+                let target_end_visual = styling::raw_to_cursor(
                     &self.text,
                     target.global_char_start + target.char_count,
                 );
-                let target_content_start = styling_cursor::cursor_to_content(&self.text, target_start_visual);
-                let target_content_end = styling_cursor::cursor_to_content(&self.text, target_end_visual);
+                let target_content_start = styling::cursor_to_content(&self.text, target_start_visual);
+                let target_content_end = styling::cursor_to_content(&self.text, target_end_visual);
                 let target_content_len = target_content_end - target_content_start;
                 let target_col = col.min(target_content_len);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_content_start + target_col, false);
+                self.cursor_pos = styling::content_to_cursor(&self.text, target_content_start + target_col, false);
             }
 
             self.preferred_col = Some(col);
         } else {
             // Simple line-based movement for non-multiline
-            let (line, _col) = styling_cursor::line_and_column_styled(&self.text, self.cursor_pos);
+            let (line, _col) = styling::line_and_column_styled(&self.text, self.cursor_pos);
             let col = self.preferred_col.unwrap_or({
-                let line_start = styling_cursor::line_start_visual_styled(&self.text, line);
-                let content_start = styling_cursor::cursor_to_content(&self.text, line_start);
-                let content_current = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+                let line_start = styling::line_start_visual_styled(&self.text, line);
+                let content_start = styling::cursor_to_content(&self.text, line_start);
+                let content_current = styling::cursor_to_content(&self.text, self.cursor_pos);
                 content_current.saturating_sub(content_start)
             });
 
             if line == 0 {
                 self.cursor_pos = 0;
             } else {
-                let target_start = styling_cursor::line_start_visual_styled(&self.text, line - 1);
-                let target_end = styling_cursor::line_end_visual_styled(&self.text, line - 1);
-                let target_content_start = styling_cursor::cursor_to_content(&self.text, target_start);
-                let target_content_end = styling_cursor::cursor_to_content(&self.text, target_end);
+                let target_start = styling::line_start_visual_styled(&self.text, line - 1);
+                let target_end = styling::line_end_visual_styled(&self.text, line - 1);
+                let target_content_start = styling::cursor_to_content(&self.text, target_start);
+                let target_content_end = styling::cursor_to_content(&self.text, target_end);
                 let target_content_len = target_content_end - target_content_start;
                 let target_col = col.min(target_content_len);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_content_start + target_col, false);
+                self.cursor_pos = styling::content_to_cursor(&self.text, target_content_start + target_col, false);
             }
 
             self.preferred_col = Some(col);
@@ -988,15 +988,15 @@ impl TextEditState {
         }
 
         let vis_len = self.cursor_len_styled();
-        let raw_cursor = styling_cursor::cursor_to_raw_for_insertion(&self.text, self.cursor_pos);
+        let raw_cursor = styling::cursor_to_raw_for_insertion(&self.text, self.cursor_pos);
 
         if let Some(vl) = visual_lines {
             let (line_idx, _raw_col) = cursor_to_visual_pos(vl, raw_cursor);
 
             // Compute column in content space (visible characters only)
-            let line_start_visual = styling_cursor::raw_to_cursor(&self.text, vl[line_idx].global_char_start);
-            let content_start = styling_cursor::cursor_to_content(&self.text, line_start_visual);
-            let content_current = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+            let line_start_visual = styling::raw_to_cursor(&self.text, vl[line_idx].global_char_start);
+            let content_start = styling::cursor_to_content(&self.text, line_start_visual);
+            let content_current = styling::cursor_to_content(&self.text, self.cursor_pos);
             let current_col = content_current.saturating_sub(content_start);
             let col = self.preferred_col.unwrap_or(current_col);
 
@@ -1005,40 +1005,40 @@ impl TextEditState {
                 self.cursor_pos = vis_len;
             } else {
                 let target = &vl[line_idx + 1];
-                let target_start_visual = styling_cursor::raw_to_cursor(&self.text, target.global_char_start);
-                let target_end_visual = styling_cursor::raw_to_cursor(
+                let target_start_visual = styling::raw_to_cursor(&self.text, target.global_char_start);
+                let target_end_visual = styling::raw_to_cursor(
                     &self.text,
                     target.global_char_start + target.char_count,
                 );
-                let target_content_start = styling_cursor::cursor_to_content(&self.text, target_start_visual);
-                let target_content_end = styling_cursor::cursor_to_content(&self.text, target_end_visual);
+                let target_content_start = styling::cursor_to_content(&self.text, target_start_visual);
+                let target_content_end = styling::cursor_to_content(&self.text, target_end_visual);
                 let target_content_len = target_content_end - target_content_start;
                 let target_col = col.min(target_content_len);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_content_start + target_col, false);
+                self.cursor_pos = styling::content_to_cursor(&self.text, target_content_start + target_col, false);
             }
 
             self.preferred_col = Some(col);
         } else {
             // Simple line-based movement
-            let (line, _col) = styling_cursor::line_and_column_styled(&self.text, self.cursor_pos);
-            let line_count = styling_cursor::styled_line_count(&self.text);
+            let (line, _col) = styling::line_and_column_styled(&self.text, self.cursor_pos);
+            let line_count = styling::styled_line_count(&self.text);
             let col = self.preferred_col.unwrap_or({
-                let line_start = styling_cursor::line_start_visual_styled(&self.text, line);
-                let content_start = styling_cursor::cursor_to_content(&self.text, line_start);
-                let content_current = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
+                let line_start = styling::line_start_visual_styled(&self.text, line);
+                let content_start = styling::cursor_to_content(&self.text, line_start);
+                let content_current = styling::cursor_to_content(&self.text, self.cursor_pos);
                 content_current.saturating_sub(content_start)
             });
 
             if line >= line_count - 1 {
                 self.cursor_pos = vis_len;
             } else {
-                let target_start = styling_cursor::line_start_visual_styled(&self.text, line + 1);
-                let target_end = styling_cursor::line_end_visual_styled(&self.text, line + 1);
-                let target_content_start = styling_cursor::cursor_to_content(&self.text, target_start);
-                let target_content_end = styling_cursor::cursor_to_content(&self.text, target_end);
+                let target_start = styling::line_start_visual_styled(&self.text, line + 1);
+                let target_end = styling::line_end_visual_styled(&self.text, line + 1);
+                let target_content_start = styling::cursor_to_content(&self.text, target_start);
+                let target_content_end = styling::cursor_to_content(&self.text, target_end);
                 let target_content_len = target_content_end - target_content_start;
                 let target_col = col.min(target_content_len);
-                self.cursor_pos = styling_cursor::content_to_cursor(&self.text, target_content_start + target_col, false);
+                self.cursor_pos = styling::content_to_cursor(&self.text, target_content_start + target_col, false);
             }
 
             self.preferred_col = Some(col);
@@ -1084,7 +1084,7 @@ impl TextEditState {
 
     /// Select word at visual position in styled mode.
     pub fn select_word_at_styled(&mut self, visual_pos: usize) {
-        let (start, end) = styling_cursor::find_word_at_visual(&self.text, visual_pos);
+        let (start, end) = styling::find_word_at_visual(&self.text, visual_pos);
         if start != end {
             self.selection_anchor = Some(start);
             self.cursor_pos = end;
@@ -1098,12 +1098,12 @@ impl TextEditState {
     /// No-op when `no_styles_movement` is false.
     fn snap_to_content_pos(&mut self) {
         if !self.no_styles_movement { return; }
-        let cp = styling_cursor::cursor_to_content(&self.text, self.cursor_pos);
-        self.cursor_pos = styling_cursor::content_to_cursor(&self.text, cp, true);
+        let cp = styling::cursor_to_content(&self.text, self.cursor_pos);
+        self.cursor_pos = styling::content_to_cursor(&self.text, cp, true);
         if let Some(anchor) = self.selection_anchor {
-            let ac = styling_cursor::cursor_to_content(&self.text, anchor);
+            let ac = styling::cursor_to_content(&self.text, anchor);
             self.selection_anchor = Some(
-                styling_cursor::content_to_cursor(&self.text, ac, true),
+                styling::content_to_cursor(&self.text, ac, true),
             );
             if self.selection_anchor == Some(self.cursor_pos) {
                 self.selection_anchor = None;
@@ -1117,7 +1117,7 @@ impl TextEditState {
         // Snap first so the cursor moves away from structural positions;
         // this lets cleanup_empty_styles remove tags the cursor isn't inside.
         self.snap_to_content_pos();
-        let (cleaned, new_pos) = styling_cursor::cleanup_empty_styles(&self.text, self.cursor_pos);
+        let (cleaned, new_pos) = styling::cleanup_empty_styles(&self.text, self.cursor_pos);
         self.text = cleaned;
         self.cursor_pos = new_pos;
         // Re-snap after cleanup since the text may have changed.
@@ -1129,19 +1129,19 @@ impl TextEditState {
     /// Convert the visual cursor_pos to a raw position for rendering.
     /// Enters empty style tags at the cursor boundary.
     pub fn cursor_pos_raw(&self) -> usize {
-        styling_cursor::cursor_to_raw_for_insertion(&self.text, self.cursor_pos)
+        styling::cursor_to_raw_for_insertion(&self.text, self.cursor_pos)
     }
 
     /// Convert the visual selection_anchor to a raw position for rendering.
     pub fn selection_anchor_raw(&self) -> Option<usize> {
-        self.selection_anchor.map(|a| styling_cursor::cursor_to_raw(&self.text, a))
+        self.selection_anchor.map(|a| styling::cursor_to_raw(&self.text, a))
     }
 
     /// Get the selection range in raw positions for rendering.
     pub fn selection_range_raw(&self) -> Option<(usize, usize)> {
         self.selection_anchor.map(|anchor| {
-            let raw_anchor = styling_cursor::cursor_to_raw(&self.text, anchor);
-            let raw_cursor = styling_cursor::cursor_to_raw(&self.text, self.cursor_pos);
+            let raw_anchor = styling::cursor_to_raw(&self.text, anchor);
+            let raw_cursor = styling::cursor_to_raw(&self.text, self.cursor_pos);
             let start = raw_anchor.min(raw_cursor);
             let end = raw_anchor.max(raw_cursor);
             (start, end)
@@ -1812,7 +1812,7 @@ pub fn display_text(text: &str, placeholder: &str, is_password: bool) -> String 
 /// - "raw position" = char index into the full raw string (including markup)
 /// - "visual position" = char index into the displayed (stripped) text
 #[cfg(feature = "text-styling")]
-pub mod styling_cursor {
+pub mod styling {
     /// Escape a character that would be interpreted as styling markup.
     /// Characters `{`, `}`, `|`, and `\` are prefixed with `\`.
     pub fn escape_char(ch: char) -> String {
@@ -3692,7 +3692,7 @@ mod tests {
     #[test]
     #[cfg(feature = "text-styling")]
     fn test_content_to_cursor_no_structural_basic() {
-        use crate::text_input::styling_cursor::content_to_cursor;
+        use crate::text_input::styling::content_to_cursor;
         // "a{red|}b" — visual: a@0, empty@1, }@2, b@3. content: a,b
         assert_eq!(content_to_cursor("a{red|}b", 0, true), 0);  // before 'a'
         assert_eq!(content_to_cursor("a{red|}b", 1, true), 3);  // before 'b' (skip empty + })
@@ -3702,7 +3702,7 @@ mod tests {
     #[test]
     #[cfg(feature = "text-styling")]
     fn test_content_to_cursor_no_structural_nested() {
-        use crate::text_input::styling_cursor::content_to_cursor;
+        use crate::text_input::styling::content_to_cursor;
         // "a{red|b}{blue|c}" — visual: a@0, b@1, }@2, c@3, }@4. content: a,b,c
         assert_eq!(content_to_cursor("a{red|b}{blue|c}", 0, true), 0);
         assert_eq!(content_to_cursor("a{red|b}{blue|c}", 1, true), 1);  // before 'b'
@@ -3713,7 +3713,7 @@ mod tests {
     #[test]
     #[cfg(feature = "text-styling")]
     fn test_delete_content_range() {
-        use crate::text_input::styling_cursor::delete_content_range;
+        use crate::text_input::styling::delete_content_range;
         // Delete 'b' from "a{red|b}c" → "a{red|}c"
         assert_eq!(delete_content_range("a{red|b}c", 1, 2), "a{red|}c");
         // Delete 'a' from "a{red|b}c" → "{red|b}c"
@@ -3737,7 +3737,7 @@ mod tests {
         // move right again → after 'b' (end)
         s.move_right_styled(false);
         assert_eq!(s.cursor_pos, 2);
-        assert_eq!(styling_cursor::cursor_to_content(&s.text, s.cursor_pos), 2);
+        assert_eq!(styling::cursor_to_content(&s.text, s.cursor_pos), 2);
     }
 
     #[test]
@@ -3746,14 +3746,14 @@ mod tests {
         let mut s = make_no_styles_state("a{red|}b");
         // Put cursor at end — the empty {red|} tag will be cleaned up since
         // cursor at end is not inside it. Text becomes "ab", cursor at 2.
-        s.cursor_pos = styling_cursor::content_to_cursor(&s.text, 2, true);
+        s.cursor_pos = styling::content_to_cursor(&s.text, 2, true);
         // Trigger cleanup to normalise
         s.move_end_styled(false);
         assert_eq!(s.text, "ab");
         assert_eq!(s.cursor_pos, 2);
         // move left → before 'b' (content 1)
         s.move_left_styled(false);
-        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
+        let cp = styling::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 1);
         // move left → before 'a' (content 0)
         s.move_left_styled(false);
@@ -3765,12 +3765,12 @@ mod tests {
     fn test_no_styles_move_left_skips_closing_brace() {
         let mut s = make_no_styles_state("a{red|b}c");
         // visual: a@0, b@1, }@2, c@3. Set cursor before 'c' (content 2 → visual 3).
-        s.cursor_pos = styling_cursor::content_to_cursor(&s.text, 2, true);
+        s.cursor_pos = styling::content_to_cursor(&s.text, 2, true);
         // 'b' is at visual 1, '}' at 2, 'c' at 3.  cursor should be at visual 3.
         assert_eq!(s.cursor_pos, 3);
         // Move left → before 'b' (content 1, visual 1)
         s.move_left_styled(false);
-        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
+        let cp = styling::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 1);
     }
 
@@ -3779,13 +3779,13 @@ mod tests {
     fn test_no_styles_backspace() {
         let mut s = make_no_styles_state("a{red|b}c");
         // Put cursor at content 2 (before 'c')
-        s.cursor_pos = styling_cursor::content_to_cursor(&s.text, 2, true);
+        s.cursor_pos = styling::content_to_cursor(&s.text, 2, true);
         s.backspace_styled();
         // Should delete 'b', leaving "a...c"
-        let stripped = styling_cursor::strip_styling(&s.text);
+        let stripped = styling::strip_styling(&s.text);
         assert_eq!(stripped, "ac");
         // Cursor should be at content 1 (between a and c)
-        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
+        let cp = styling::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 1);
     }
 
@@ -3794,11 +3794,11 @@ mod tests {
     fn test_no_styles_delete_forward() {
         let mut s = make_no_styles_state("{red|abc}");
         // Put cursor at content 1 (before 'b')
-        s.cursor_pos = styling_cursor::content_to_cursor(&s.text, 1, true);
+        s.cursor_pos = styling::content_to_cursor(&s.text, 1, true);
         s.delete_forward_styled();
-        let stripped = styling_cursor::strip_styling(&s.text);
+        let stripped = styling::strip_styling(&s.text);
         assert_eq!(stripped, "ac");
-        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
+        let cp = styling::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 1);
     }
 
@@ -3808,12 +3808,12 @@ mod tests {
         let mut s = make_no_styles_state("{red|}hello{blue|}");
         // Home — should be at the first content char
         s.move_home_styled(false);
-        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
+        let cp = styling::cursor_to_content(&s.text, s.cursor_pos);
         assert_eq!(cp, 0);
         // End
         s.move_end_styled(false);
-        let cp = styling_cursor::cursor_to_content(&s.text, s.cursor_pos);
-        let content_len = styling_cursor::strip_styling(&s.text).chars().count();
+        let cp = styling::cursor_to_content(&s.text, s.cursor_pos);
+        let content_len = styling::strip_styling(&s.text).chars().count();
         assert_eq!(cp, content_len);
     }
 
@@ -3825,7 +3825,7 @@ mod tests {
         assert!(s.selection_anchor.is_some());
         // Delete selection
         s.delete_selection_styled();
-        let stripped = styling_cursor::strip_styling(&s.text);
+        let stripped = styling::strip_styling(&s.text);
         assert!(stripped.is_empty());
     }
 }

@@ -44,7 +44,7 @@ pub use crate::net::WsMessage;
 
 // Text styling cursor utilities — feature-gated
 #[cfg(feature = "text-styling")]
-pub use crate::text_input::styling_cursor;
+pub use crate::text_input::styling;
 
 // Full macroquad prelude, with Color shadowed by ply's version
 pub use macroquad::prelude::*;
