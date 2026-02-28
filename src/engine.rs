@@ -6045,6 +6045,35 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         self.close_element();
                     }
 
+                    // Effect badge
+                    let has_effects = self.element_effects.get(current_element_index)
+                        .map_or(false, |e| !e.is_empty());
+                    if has_effects {
+                        let badge_color = Color::rgba(155.0, 89.0, 182.0, 90.0);
+                        self.debug_open(&ElementDeclaration {
+                            layout: LayoutConfig {
+                                padding: PaddingConfig { left: 8, right: 8, top: 2, bottom: 2 },
+                                ..Default::default()
+                            },
+                            background_color: badge_color,
+                            corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
+                            border: BorderConfig {
+                                color: badge_color,
+                                width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                            },
+                            ..Default::default()
+                        });
+                        {
+                            let tc = self.store_text_element_config(TextConfig {
+                                color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
+                                font_size: 16,
+                                ..Default::default()
+                            });
+                            self.debug_text("Effect", tc);
+                        }
+                        self.close_element();
+                    }
+
                     // Visual Rotation badge
                     let has_visual_rot = self.element_visual_rotations.get(current_element_index)
                         .map_or(false, |r| r.is_some());
