@@ -864,23 +864,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         self.context.get_pointer_over_ids().to_vec()
     }
 
-    /// Set the callback for text measurement with user data
-    pub fn set_measure_text_function_user_data<F, T>(
-        &mut self,
-        userdata: T,
-        callback: F,
-    ) where
-        F: Fn(&str, &TextConfig, &mut T) -> Dimensions + 'static,
-        T: 'static,
-    {
-        let data = std::cell::RefCell::new(userdata);
-        self.context.set_measure_text_function(Box::new(
-            move |text: &str, config: &TextConfig| -> Dimensions {
-                callback(text, config, &mut data.borrow_mut())
-            },
-        ));
-    }
-
     /// Set the callback for text measurement
     pub fn set_measure_text_function<F>(&mut self, callback: F)
     where
