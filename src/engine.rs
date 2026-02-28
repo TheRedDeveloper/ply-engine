@@ -3589,32 +3589,44 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         if let Some(si) = _scroll_container_data_idx {
                             let child_gap_total = children_length.saturating_sub(1) as f32
                                 * layout_config.child_gap as f32;
-                            let content_w: f32 = (0..children_length)
-                                .map(|ci| {
-                                    let idx = self.layout_element_children[children_start + ci]
-                                        as usize;
-                                    self.layout_elements[idx].dimensions.width
-                                })
-                                .sum::<f32>()
-                                + (layout_config.padding.left + layout_config.padding.right) as f32
-                                + if layout_config.layout_direction == LayoutDirection::LeftToRight {
-                                    child_gap_total
-                                } else {
-                                    0.0
-                                };
-                            let content_h: f32 = (0..children_length)
-                                .map(|ci| {
-                                    let idx = self.layout_element_children[children_start + ci]
-                                        as usize;
-                                    self.layout_elements[idx].dimensions.height
-                                })
-                                .sum::<f32>()
-                                + (layout_config.padding.top + layout_config.padding.bottom) as f32
-                                + if layout_config.layout_direction == LayoutDirection::TopToBottom {
-                                    child_gap_total
-                                } else {
-                                    0.0
-                                };
+                            let lr_padding = (layout_config.padding.left + layout_config.padding.right) as f32;
+                            let tb_padding = (layout_config.padding.top + layout_config.padding.bottom) as f32;
+
+                            let (content_w, content_h) = if layout_config.layout_direction == LayoutDirection::LeftToRight {
+                                // LeftToRight: width = sum of children + gap, height = max of children
+                                let w: f32 = (0..children_length)
+                                    .map(|ci| {
+                                        let idx = self.layout_element_children[children_start + ci] as usize;
+                                        self.layout_elements[idx].dimensions.width
+                                    })
+                                    .sum::<f32>()
+                                    + lr_padding + child_gap_total;
+                                let h: f32 = (0..children_length)
+                                    .map(|ci| {
+                                        let idx = self.layout_element_children[children_start + ci] as usize;
+                                        self.layout_elements[idx].dimensions.height
+                                    })
+                                    .fold(0.0_f32, |a, b| a.max(b))
+                                    + tb_padding;
+                                (w, h)
+                            } else {
+                                // TopToBottom: width = max of children, height = sum of children + gap
+                                let w: f32 = (0..children_length)
+                                    .map(|ci| {
+                                        let idx = self.layout_element_children[children_start + ci] as usize;
+                                        self.layout_elements[idx].dimensions.width
+                                    })
+                                    .fold(0.0_f32, |a, b| a.max(b))
+                                    + lr_padding;
+                                let h: f32 = (0..children_length)
+                                    .map(|ci| {
+                                        let idx = self.layout_element_children[children_start + ci] as usize;
+                                        self.layout_elements[idx].dimensions.height
+                                    })
+                                    .sum::<f32>()
+                                    + tb_padding + child_gap_total;
+                                (w, h)
+                            };
                             self.scroll_container_datas[si].content_size =
                                 Dimensions::new(content_w, content_h);
                         }

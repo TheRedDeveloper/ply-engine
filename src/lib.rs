@@ -539,6 +539,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             }
 
             let (scroll_x, scroll_y) = macroquad::prelude::mouse_wheel();
+            #[cfg(target_arch = "wasm32")]
+            const SCROLL_SPEED: f32 = 1.0;
+            #[cfg(not(target_arch = "wasm32"))]
             const SCROLL_SPEED: f32 = 20.0;
             // Shift+scroll wheel swaps vertical to horizontal scrolling
             let scroll_shift = {
