@@ -2533,11 +2533,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 self.find_element_config_index(elem_idx, ElementConfigType::Aspect)
             {
                 let aspect_ratio = self.aspect_ratio_configs[cfg_idx];
-                self.layout_elements[elem_idx].dimensions.height =
+                let new_height =
                     (1.0 / aspect_ratio) * self.layout_elements[elem_idx].dimensions.width;
+                self.layout_elements[elem_idx].dimensions.height = new_height;
                 let layout_idx = self.layout_elements[elem_idx].layout_config_index;
-                self.layout_configs[layout_idx].sizing.height.min_max.max =
-                    self.layout_elements[elem_idx].dimensions.height;
+                self.layout_configs[layout_idx].sizing.height.min_max.min = new_height;
+                self.layout_configs[layout_idx].sizing.height.min_max.max = new_height;
             }
         }
 
@@ -2554,8 +2555,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 self.find_element_config_index(elem_idx, ElementConfigType::Aspect)
             {
                 let aspect_ratio = self.aspect_ratio_configs[cfg_idx];
-                self.layout_elements[elem_idx].dimensions.width =
+                let new_width =
                     aspect_ratio * self.layout_elements[elem_idx].dimensions.height;
+                self.layout_elements[elem_idx].dimensions.width = new_width;
+                let layout_idx = self.layout_elements[elem_idx].layout_config_index;
+                self.layout_configs[layout_idx].sizing.width.min_max.min = new_width;
+                self.layout_configs[layout_idx].sizing.width.min_max.max = new_width;
             }
         }
 
