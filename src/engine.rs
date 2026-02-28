@@ -1363,7 +1363,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     ti_config.font_size,
                                     measure_fn.as_ref(),
                                 );
-                                let font_height = {
+                                let font_height = if ti_config.line_height > 0 {
+                                    ti_config.line_height as f32
+                                } else {
                                     let config = crate::text::TextConfig {
                                         font_asset: ti_config.font_asset,
                                         font_size: ti_config.font_size,
@@ -3213,7 +3215,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     };
 
                                     // Measure font height for cursor
-                                    let font_height = self.font_height(ti_config.font_asset, ti_config.font_size);
+                                    let natural_font_height = self.font_height(ti_config.font_asset, ti_config.font_size);
+                                    let line_step = if ti_config.line_height > 0 {
+                                        ti_config.line_height as f32
+                                    } else {
+                                        natural_font_height
+                                    };
+                                    // Offset to vertically center text/cursor within each line slot
+                                    let line_y_offset = (line_step - natural_font_height) / 2.0;
 
                                     // Clip text content to the element's bounding box
                                     self.add_render_command(InternalRenderCommand {
@@ -3298,13 +3307,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     );
                                                     let sel_width = x_end - x_start;
                                                     if sel_width > 0.0 {
-                                                        let sel_y = current_bbox.y + line_idx as f32 * font_height - scroll_offset_y;
+                                                        let sel_y = current_bbox.y + line_idx as f32 * line_step - scroll_offset_y;
                                                         self.add_render_command(InternalRenderCommand {
                                                             bounding_box: BoundingBox::new(
                                                                 current_bbox.x - scroll_offset_x + x_start,
                                                                 sel_y,
                                                                 sel_width,
-                                                                font_height,
+                                                                line_step,
                                                             ),
                                                             command_type: RenderCommandType::Rectangle,
                                                             render_data: InternalRenderData::Rectangle {
@@ -3328,13 +3337,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             if !vl.text.is_empty() {
                                                 let positions = &line_positions[line_idx];
                                                 let text_width = positions.last().copied().unwrap_or(0.0);
-                                                let line_y = current_bbox.y + line_idx as f32 * font_height - scroll_offset_y;
+                                                let line_y = current_bbox.y + line_idx as f32 * line_step + line_y_offset - scroll_offset_y;
                                                 self.add_render_command(InternalRenderCommand {
                                                     bounding_box: BoundingBox::new(
                                                         current_bbox.x - scroll_offset_x,
                                                         line_y,
                                                         text_width,
-                                                        font_height,
+                                                        natural_font_height,
                                                     ),
                                                     command_type: RenderCommandType::Text,
                                                     render_data: InternalRenderData::Text {
@@ -3359,13 +3368,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         if is_focused && state.cursor_visible() {
                                             let cursor_positions = &line_positions[cursor_line.min(line_positions.len() - 1)];
                                             let cursor_x_pos = cursor_positions.get(cursor_col).copied().unwrap_or(0.0);
-                                            let cursor_y = current_bbox.y + cursor_line as f32 * font_height - scroll_offset_y;
+                                            let cursor_y = current_bbox.y + cursor_line as f32 * line_step - scroll_offset_y;
                                             self.add_render_command(InternalRenderCommand {
                                                 bounding_box: BoundingBox::new(
                                                     current_bbox.x - scroll_offset_x + cursor_x_pos,
                                                     cursor_y,
                                                     2.0,
-                                                    font_height,
+                                                    line_step,
                                                 ),
                                                 command_type: RenderCommandType::Rectangle,
                                                 render_data: InternalRenderData::Rectangle {
@@ -3395,6 +3404,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                                         let scroll_offset = state.scroll_offset;
                                         let text_x = current_bbox.x - scroll_offset;
+                                        let font_height = natural_font_height;
 
                                         // Convert cursor/selection to raw positions for char_x_positions indexing
                                         #[cfg(feature = "text-styling")]
@@ -4503,18 +4513,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     /// Sets the text value for a text input element.
     pub fn set_text_value(&mut self, element_id: u32, value: &str) {
-        if let Some(state) = self.text_edit_states.get_mut(&element_id) {
-            state.text = value.to_string();
-            #[cfg(feature = "text-styling")]
-            let max_pos = crate::text_input::styling_cursor::cursor_len(&state.text);
-            #[cfg(not(feature = "text-styling"))]
-            let max_pos = state.text.chars().count();
-            if state.cursor_pos > max_pos {
-                state.cursor_pos = max_pos;
-            }
-            state.selection_anchor = None;
-            state.reset_blink();
+        let state = self.text_edit_states
+            .entry(element_id)
+            .or_insert_with(crate::text_input::TextEditState::default);
+        state.text = value.to_string();
+        #[cfg(feature = "text-styling")]
+        let max_pos = crate::text_input::styling_cursor::cursor_len(&state.text);
+        #[cfg(not(feature = "text-styling"))]
+        let max_pos = state.text.chars().count();
+        if state.cursor_pos > max_pos {
+            state.cursor_pos = max_pos;
         }
+        state.selection_anchor = None;
+        state.reset_blink();
     }
 
     /// Returns the cursor position for a text input element, or 0 if not found.
@@ -4919,7 +4930,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     measure_fn.as_ref(),
                                 );
                                 let cursor_x = line_positions.get(cursor_col).copied().unwrap_or(0.0);
-                                let line_height = self.font_height(cfg.font_asset, cfg.font_size);
+                                let cfg_font_asset = cfg.font_asset;
+                                let cfg_font_size = cfg.font_size;
+                                let cfg_line_height_val = cfg.line_height;
+                                let natural_height = self.font_height(cfg_font_asset, cfg_font_size);
+                                let line_height = if cfg_line_height_val > 0 { cfg_line_height_val as f32 } else { natural_height };
                                 if let Some(state_mut) = self.text_edit_states.get_mut(&focused) {
                                     state_mut.ensure_cursor_visible(cursor_x, visible_width);
                                     state_mut.ensure_cursor_visible_vertical(cursor_line, line_height, visible_height);
@@ -5091,6 +5106,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
             let font_asset = cfg.font_asset;
             let font_size = cfg.font_size;
+            let cfg_line_height = cfg.line_height;
             let is_multiline = cfg.is_multiline;
             let is_password = cfg.is_password;
 
@@ -5123,7 +5139,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         font_size,
                         measure_fn.as_ref(),
                     );
-                    let font_height = self.font_height(font_asset, font_size);
+                    let natural_height = self.font_height(font_asset, font_size);
+                    let font_height = if cfg_line_height > 0 { cfg_line_height as f32 } else { natural_height };
                     let total_height = visual_lines.len() as f32 * font_height;
                     let max_scroll = (total_height - visible_height).max(0.0);
                     if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {

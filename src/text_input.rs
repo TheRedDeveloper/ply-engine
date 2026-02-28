@@ -1171,6 +1171,8 @@ pub struct TextInputConfig {
     pub cursor_color: Color,
     /// Color of the selection highlight rectangle.
     pub selection_color: Color,
+    /// Override line height in pixels. When 0 (default), the natural font height is used.
+    pub line_height: u16,
     /// When true, cursor movement skips over `}` and empty content style positions.
     pub no_styles_movement: bool,
     /// The font asset to use. Resolved by the renderer.
@@ -1189,6 +1191,7 @@ impl Default for TextInputConfig {
             placeholder_color: Color::rgba(128.0, 128.0, 128.0, 255.0),
             cursor_color: Color::rgba(255.0, 255.0, 255.0, 255.0),
             selection_color: Color::rgba(69.0, 130.0, 181.0, 128.0),
+            line_height: 0,
             no_styles_movement: false,
             font_asset: None,
         }
@@ -1280,6 +1283,17 @@ impl TextInputBuilder {
     #[inline]
     pub fn selection_color(&mut self, color: impl Into<Color>) -> &mut Self {
         self.config.selection_color = color.into();
+        self
+    }
+
+    /// Sets the line height in pixels for multiline inputs.
+    ///
+    /// When set to a value greater than 0, this overrides the natural font
+    /// height for spacing between lines. Text is vertically centred within
+    /// each line slot. A value of 0 (default) uses the natural font height.
+    #[inline]
+    pub fn line_height(&mut self, height: u16) -> &mut Self {
+        self.config.line_height = height;
         self
     }
 
