@@ -87,6 +87,16 @@ pub struct Custom<CustomElementData> {
     pub data: CustomElementData,
 }
 
+impl CornerRadii {
+    pub fn clamp_to_size(&mut self, width: f32, height: f32) {
+        let max_r = width.min(height) / 2.0;
+        self.top_left = self.top_left.clamp(0.0, max_r);
+        self.top_right = self.top_right.clamp(0.0, max_r);
+        self.bottom_left = self.bottom_left.clamp(0.0, max_r);
+        self.bottom_right = self.bottom_right.clamp(0.0, max_r);
+    }
+}
+
 impl From<crate::layout::CornerRadius> for CornerRadii {
     fn from(value: crate::layout::CornerRadius) -> Self {
         Self {
@@ -222,11 +232,20 @@ pub struct RenderCommand<CustomElementData> {
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> RenderCommand<CustomElementData> {
     pub(crate) fn from_engine_render_command(value: &engine::InternalRenderCommand<CustomElementData>) -> Self {
+        let mut config = RenderCommandConfig::from_engine_render_command(value);
+        let bb = value.bounding_box;
+        match &mut config {
+            RenderCommandConfig::Rectangle(r)  => r.corner_radii.clamp_to_size(bb.width, bb.height),
+            RenderCommandConfig::Border(b)     => b.corner_radii.clamp_to_size(bb.width, bb.height),
+            RenderCommandConfig::Image(i)      => i.corner_radii.clamp_to_size(bb.width, bb.height),
+            RenderCommandConfig::Custom(c)     => c.corner_radii.clamp_to_size(bb.width, bb.height),
+            _ => {}
+        }
         Self {
             id: value.id,
             z_index: value.z_index,
-            bounding_box: value.bounding_box,
-            config: RenderCommandConfig::from_engine_render_command(value),
+            bounding_box: bb,
+            config,
             effects: value.effects.clone(),
             shape_rotation: value.shape_rotation,
         }
