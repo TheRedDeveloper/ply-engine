@@ -73,3 +73,15 @@ impl From<u32> for Color {
         Color::rgba(r, g, b, 255.0)
     }
 }
+
+impl From<macroquad::color::Color> for Color {
+    fn from(c: macroquad::color::Color) -> Self {
+        Color::rgba(c.r * 255.0, c.g * 255.0, c.b * 255.0, c.a * 255.0)
+    }
+}
+
+impl From<Color> for macroquad::color::Color {
+    fn from(c: Color) -> Self {
+        macroquad::color::Color::new(c.r / 255.0, c.g / 255.0, c.b / 255.0, c.a / 255.0)
+    }
+}
