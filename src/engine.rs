@@ -3099,8 +3099,22 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                                     let line_text = parent_text[start..start + length].to_string();
 
-                                    let mut offset =
-                                        current_bbox.width - line_dims.width;
+                                    let align_width = if buf_idx > 0 {
+                                        let parent_node = dfs_buffer[buf_idx - 1];
+                                        let parent_elem_idx =
+                                            parent_node.layout_element_index as usize;
+                                        let parent_layout_idx = self.layout_elements
+                                            [parent_elem_idx]
+                                            .layout_config_index;
+                                        let pp = self.layout_configs[parent_layout_idx].padding;
+                                        self.layout_elements[parent_elem_idx].dimensions.width
+                                            - pp.left as f32
+                                            - pp.right as f32
+                                    } else {
+                                        current_bbox.width
+                                    };
+
+                                    let mut offset = align_width - line_dims.width;
                                     if text_config.alignment == AlignX::Left {
                                         offset = 0.0;
                                     }
