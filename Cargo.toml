@@ -1,13 +1,15 @@
 [package]
 name = "ply-engine"
-version = "0.5.0"
+version = "1.0.1"
 edition = "2021"
 description = "The most powerful app engine made entirely in Rust"
 keywords = ["engine", "ui", "layout", "gamedev", "graphics"]
+categories = ["gui", "game-engines", "graphics", "rendering"]
 repository = "https://github.com/TheRedDeveloper/ply-engine"
+homepage = "https://plyx.iz.rs"
 readme = "README.md"
-license-file = "LICENSE.md"
-exclude = ["scripts/*", ".vscode/*", ".github/*", ".cargo/*"]
+license = "0BSD"
+exclude = ["scripts/*", ".vscode/*", ".github/*", ".cargo/*", "deps/*", "testcrate/*"]
 
 [features]
 default = ["a11y"]
@@ -21,7 +23,7 @@ net-json = ["net", "dep:serde", "dep:serde_json"]
 audio = ["macroquad/audio"]
 
 [dependencies]
-macroquad = { version = "0.4", git = "https://github.com/TheRedDeveloper/macroquad-fix" } # On ply's bleeding edge
+macroquad = { version = "0.4.14", package = "macroquad-ply" }
 tinyvg = { version = "0.2", default-features = false, optional = true }
 kurbo = { version = "0.13.0", optional = true }
 lyon = { version = "1.0", optional = true }
