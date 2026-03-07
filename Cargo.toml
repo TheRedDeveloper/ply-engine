@@ -58,3 +58,6 @@ accesskit_windows = { version = "0.32", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 accesskit_android = { version = "0.7", optional = true, features = ["embedded-dex"] }
+
+[package.metadata.docs.rs]
+all-features = true
