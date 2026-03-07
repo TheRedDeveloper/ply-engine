@@ -9,6 +9,16 @@ use rustc_hash::FxHashMap;
 
 const PIXELS_PER_POINT: f32 = 2.0;
 
+/// On Android, the APK asset root is the `assets/` directory,
+/// so paths like `"assets/fonts/x.ttf"` need the prefix stripped.
+fn resolve_asset_path(path: &str) -> &str {
+    #[cfg(target_os = "android")]
+    if let Some(stripped) = path.strip_prefix("assets/") {
+        return stripped;
+    }
+    path
+}
+
 #[cfg(feature = "text-styling")]
 static ANIMATION_TRACKER: std::sync::LazyLock<std::sync::Mutex<FxHashMap<String, (usize, f64)>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(FxHashMap::default()));
 
@@ -146,7 +156,8 @@ impl FontManager {
                     .expect("Failed to load font from bytes")
             }
             FontAsset::Path(path) => {
-                macroquad::text::load_ttf_font(path).await
+                let resolved = resolve_asset_path(path);
+                macroquad::text::load_ttf_font(resolved).await
                     .unwrap_or_else(|e| panic!("Failed to load font '{}': {:?}", path, e))
             }
         };
@@ -177,7 +188,8 @@ impl FontManager {
                     .expect("Failed to load font from bytes")
             }
             FontAsset::Path(path) => {
-                macroquad::text::load_ttf_font(path).await
+                let resolved = resolve_asset_path(path);
+                macroquad::text::load_ttf_font(resolved).await
                     .unwrap_or_else(|e| panic!("Failed to load font '{}': {:?}", path, e))
             }
         };
@@ -262,7 +274,7 @@ impl TextureManager {
     /// Get the cached texture by its key, or load from a file path and cache it.
     pub async fn get_or_load(&mut self, path: &'static str) -> &Texture2D {
         if !self.textures.contains_key(path) {
-            let texture = load_texture(path).await.unwrap();
+            let texture = load_texture(resolve_asset_path(path)).await.unwrap();
             self.textures.insert(path.to_owned(), CacheEntry { frames_not_used: 0, owner: texture.into() });
         }
         let entry = self.textures.get_mut(path).unwrap();
@@ -1621,7 +1633,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 } else {
                                     match ga {
                                         GraphicAsset::Path(path) => {
-                                            match load_file(path).await {
+                                            match load_file(resolve_asset_path(path)).await {
                                                 Ok(tvg_bytes) => {
                                                     if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
                                                         manager.cache(key.clone(), tvg_rt)
@@ -1659,7 +1671,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 } else {
                                     match ga {
                                         GraphicAsset::Path(path) => {
-                                            match load_file(path).await {
+                                            match load_file(resolve_asset_path(path)).await {
                                                 Ok(tvg_bytes) => {
                                                     if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
                                                         manager.cache(zerocr_key.clone(), tvg_rt)
