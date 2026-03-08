@@ -2205,60 +2205,60 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     // Corners
                     // Top-left corner
                     if cr.top_left > 0.0 {
-                        let width = bw.left.max(bw.top) as f32;
-                        let points = ((std::f32::consts::PI * (cr.top_left + width)) / 2.0 / PIXELS_PER_POINT).max(5.0);
+                        let thickness = bw.left.max(bw.top) as f32;
+                        let points = ((std::f32::consts::PI * (cr.top_left + thickness)) / 2.0 / PIXELS_PER_POINT).max(5.0);
                         draw_arc(
                             bb.x + cr.top_left,
                             bb.y + cr.top_left,
                             points as u8,
                             cr.top_left,
                             180.0,
-                            bw.left as f32,
+                            thickness,
                             90.0,
                             color
                         );
                     }
                     // Top-right corner
                     if cr.top_right > 0.0 {
-                        let width = bw.top.max(bw.right) as f32;
-                        let points = ((std::f32::consts::PI * (cr.top_right + width)) / 2.0 / PIXELS_PER_POINT).max(5.0);
+                        let thickness = bw.top.max(bw.right) as f32;
+                        let points = ((std::f32::consts::PI * (cr.top_right + thickness)) / 2.0 / PIXELS_PER_POINT).max(5.0);
                         draw_arc(
                             bb.x + bb.width - cr.top_right,
                             bb.y + cr.top_right,
                             points as u8,
                             cr.top_right,
                             270.0,
-                            bw.top as f32,
+                            thickness,
                             90.0,
                             color
                         );
                     }
                     // Bottom-left corner
                     if cr.bottom_left > 0.0 {
-                        let width = bw.left.max(bw.bottom) as f32;
-                        let points = ((std::f32::consts::PI * (cr.bottom_left + width)) / 2.0 / PIXELS_PER_POINT).max(5.0);
+                        let thickness = bw.left.max(bw.bottom) as f32;
+                        let points = ((std::f32::consts::PI * (cr.bottom_left + thickness)) / 2.0 / PIXELS_PER_POINT).max(5.0);
                         draw_arc(
                             bb.x + cr.bottom_left,
                             bb.y + bb.height - cr.bottom_left,
                             points as u8,
                             cr.bottom_left,
                             90.0,
-                            bw.bottom as f32,
+                            thickness,
                             90.0,
                             color
                         );
                     }
                     // Bottom-right corner
                     if cr.bottom_right > 0.0 {
-                        let width = bw.bottom.max(bw.right) as f32;
-                        let points = ((std::f32::consts::PI * (cr.bottom_right + width)) / 2.0 / PIXELS_PER_POINT).max(5.0);
+                        let thickness = bw.bottom.max(bw.right) as f32;
+                        let points = ((std::f32::consts::PI * (cr.bottom_right + thickness)) / 2.0 / PIXELS_PER_POINT).max(5.0);
                         draw_arc(
                             bb.x + bb.width - cr.bottom_right,
                             bb.y + bb.height - cr.bottom_right,
                             points as u8,
                             cr.bottom_right,
                             0.0,
-                            bw.right as f32,
+                            thickness,
                             90.0,
                             color
                         );
