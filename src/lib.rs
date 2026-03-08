@@ -56,6 +56,7 @@ pub struct Ui<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
 
 /// Builder for creating elements with closure-based syntax.
 /// Methods return `self` by value for chaining. Finalize with `.children()` or `.empty()`.
+#[must_use]
 pub struct ElementBuilder<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     ply: &'ply mut Ply<CustomElementData>,
     inner: engine::ElementDeclaration<CustomElementData>,
