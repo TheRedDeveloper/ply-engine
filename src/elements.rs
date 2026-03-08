@@ -227,6 +227,13 @@ impl BorderBuilder {
         self.config.width.between_children = width;
         self
     }
+
+    /// Sets the position of the border relative to the bounding box.
+    #[inline]
+    pub fn position(&mut self, position: impl Into<engine::BorderPosition>) -> &mut Self {
+        self.config.position = position.into();
+        self
+    }
 }
 
 /// Builder for configuring visual rotation (render-target based).

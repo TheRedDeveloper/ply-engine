@@ -251,10 +251,23 @@ impl BorderWidth {
     }
 }
 
+/// Defines the position of the border relative to the bounding box.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum BorderPosition {
+    // Fully outside the bounding box.
+    #[default]
+    Outside,
+    // Half inside, half outside the bounding box.
+    Middle,
+    // Fully inside the bounding box.
+    Inside,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BorderConfig {
     pub color: Color,
     pub width: BorderWidth,
+    pub position: BorderPosition,
 }
 
 /// The top-level element declaration.
@@ -511,6 +524,7 @@ pub enum InternalRenderData<CustomElementData: Clone + Default + std::fmt::Debug
         color: Color,
         corner_radius: CornerRadius,
         width: BorderWidth,
+        position: BorderPosition,
     },
     Clip {
         horizontal: bool,
@@ -3698,6 +3712,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         color: border_config.color,
                                         corner_radius: shared.corner_radius,
                                         width: border_config.width,
+                                        position: border_config.position,
                                     },
                                     user_data: shared.user_data,
                                     id: hash_number(
@@ -3982,6 +3997,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     bottom: ring_width,
                                     between_children: 0,
                                 },
+                                position: BorderPosition::Middle,
                             },
                             id: hash_number(self.focused_element_id, 0xF0C5).id,
                             z_index: 32764, // just below debug panel
@@ -5491,6 +5507,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 border: BorderConfig {
                     color: label_color,
                     width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                    ..Default::default()
                 },
                 ..Default::default()
             });
@@ -5587,6 +5604,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 border: BorderConfig {
                     color: Self::DEBUG_COLOR_4,
                     width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                    ..Default::default()
                 },
                 ..Default::default()
             });
@@ -5729,6 +5747,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         border: BorderConfig {
                             color: Self::DEBUG_COLOR_3,
                             width: BorderWidth { top: 1, ..Default::default() },
+                            ..Default::default()
                         },
                         ..Default::default()
                     });
@@ -5822,6 +5841,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             border: BorderConfig {
                                 color: Self::DEBUG_COLOR_3,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         });
@@ -5879,6 +5899,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             border: BorderConfig {
                                 color: Color::rgba(177.0, 147.0, 8.0, 255.0),
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         });
@@ -5903,6 +5924,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             border: BorderConfig {
                                 color: Self::DEBUG_COLOR_3,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         });
@@ -5955,6 +5977,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     border: BorderConfig {
                                         color: label_color,
                                         width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                        ..Default::default()
                                     },
                                     ..Default::default()
                                 });
@@ -5980,6 +6003,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     border: BorderConfig {
                                         color: radius_color,
                                         width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                        ..Default::default()
                                     },
                                     ..Default::default()
                                 });
@@ -6007,6 +6031,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             border: BorderConfig {
                                 color: label_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         });
@@ -6036,6 +6061,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             border: BorderConfig {
                                 color: badge_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         });
@@ -6065,6 +6091,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             border: BorderConfig {
                                 color: badge_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         });
@@ -6094,6 +6121,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             border: BorderConfig {
                                 color: badge_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         });
@@ -6123,6 +6151,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             border: BorderConfig {
                                 color: badge_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         });
@@ -6225,6 +6254,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         border: BorderConfig {
                             color: Self::DEBUG_COLOR_3,
                             width: BorderWidth { left: 1, ..Default::default() },
+                            ..Default::default()
                         },
                         ..Default::default()
                     });
@@ -6399,6 +6429,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             border: BorderConfig {
                 color: Self::DEBUG_COLOR_3,
                 width: BorderWidth { bottom: 1, ..Default::default() },
+                ..Default::default()
             },
             ..Default::default()
         });
@@ -6451,6 +6482,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     border: BorderConfig {
                         color: Color::rgba(217.0, 91.0, 67.0, 255.0),
                         width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                        ..Default::default()
                     },
                     ..Default::default()
                 });
@@ -6624,6 +6656,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             border: BorderConfig {
                 color: Self::DEBUG_COLOR_3,
                 width: BorderWidth { between_children: 1, ..Default::default() },
+                ..Default::default()
             },
             ..Default::default()
         });

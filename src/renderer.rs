@@ -1,6 +1,6 @@
 use macroquad::prelude::*;
 use macroquad::miniquad::{BlendState, BlendFactor, BlendValue, Equation};
-use crate::{math::BoundingBox, render_commands::{CornerRadii, RenderCommand, RenderCommandConfig}, shaders::{ShaderConfig, ShaderUniformValue}};
+use crate::{math::BoundingBox, render_commands::{CornerRadii, RenderCommand, RenderCommandConfig}, shaders::{ShaderConfig, ShaderUniformValue}, engine::BorderPosition};
 
 #[cfg(feature = "text-styling")]
 use crate::text_styling::{render_styled_text, StyledSegment};
@@ -8,16 +8,6 @@ use crate::text_styling::{render_styled_text, StyledSegment};
 use rustc_hash::FxHashMap;
 
 const PIXELS_PER_POINT: f32 = 2.0;
-
-/// On Android, the APK asset root is the `assets/` directory,
-/// so paths like `"assets/fonts/x.ttf"` need the prefix stripped.
-fn resolve_asset_path(path: &str) -> &str {
-    #[cfg(target_os = "android")]
-    if let Some(stripped) = path.strip_prefix("assets/") {
-        return stripped;
-    }
-    path
-}
 
 #[cfg(feature = "text-styling")]
 static ANIMATION_TRACKER: std::sync::LazyLock<std::sync::Mutex<FxHashMap<String, (usize, f64)>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(FxHashMap::default()));
@@ -156,8 +146,7 @@ impl FontManager {
                     .expect("Failed to load font from bytes")
             }
             FontAsset::Path(path) => {
-                let resolved = resolve_asset_path(path);
-                macroquad::text::load_ttf_font(resolved).await
+                macroquad::text::load_ttf_font(path).await
                     .unwrap_or_else(|e| panic!("Failed to load font '{}': {:?}", path, e))
             }
         };
@@ -188,8 +177,7 @@ impl FontManager {
                     .expect("Failed to load font from bytes")
             }
             FontAsset::Path(path) => {
-                let resolved = resolve_asset_path(path);
-                macroquad::text::load_ttf_font(resolved).await
+                macroquad::text::load_ttf_font(path).await
                     .unwrap_or_else(|e| panic!("Failed to load font '{}': {:?}", path, e))
             }
         };
@@ -274,7 +262,7 @@ impl TextureManager {
     /// Get the cached texture by its key, or load from a file path and cache it.
     pub async fn get_or_load(&mut self, path: &'static str) -> &Texture2D {
         if !self.textures.contains_key(path) {
-            let texture = load_texture(resolve_asset_path(path)).await.unwrap();
+            let texture = load_texture(path).await.unwrap();
             self.textures.insert(path.to_owned(), CacheEntry { frames_not_used: 0, owner: texture.into() });
         }
         let entry = self.textures.get_mut(path).unwrap();
@@ -1633,7 +1621,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 } else {
                                     match ga {
                                         GraphicAsset::Path(path) => {
-                                            match load_file(resolve_asset_path(path)).await {
+                                            match load_file(path).await {
                                                 Ok(tvg_bytes) => {
                                                     if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
                                                         manager.cache(key.clone(), tvg_rt)
@@ -1671,7 +1659,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 } else {
                                     match ga {
                                         GraphicAsset::Path(path) => {
-                                            match load_file(resolve_asset_path(path)).await {
+                                            match load_file(path).await {
                                                 Ok(tvg_bytes) => {
                                                     if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
                                                         manager.cache(zerocr_key.clone(), tvg_rt)
@@ -2114,154 +2102,91 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 let bw = &config.width;
                 let cr = &config.corner_radii;
                 let color = ply_to_macroquad_color(&config.color);
-                if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
-                    if bw.left == bw.right && bw.left == bw.top && bw.left == bw.bottom {
-                        let border_width = bw.left as f32;
-                        draw_rectangle_lines(
-                            bb.x - border_width / 2.0,
-                            bb.y - border_width / 2.0,
-                            bb.width + border_width,
-                            bb.height + border_width,
-                            border_width,
-                            color
-                        );
-                    } else {
-                        // Top edge
-                        draw_line(
-                            bb.x,
-                            bb.y - bw.top as f32 / 2.0,
-                            bb.x + bb.width,
-                            bb.y - bw.top as f32 / 2.0,
-                            bw.top as f32,
-                            color
-                        );
-                        // Left edge
-                        draw_line(
-                            bb.x - bw.left as f32 / 2.0,
-                            bb.y,
-                            bb.x - bw.left as f32 / 2.0,
-                            bb.y + bb.height,
-                            bw.left as f32,
-                            color
-                        );
-                        // Bottom edge
-                        draw_line(
-                            bb.x,
-                            bb.y + bb.height + bw.bottom as f32 / 2.0,
-                            bb.x + bb.width,
-                            bb.y + bb.height + bw.bottom as f32 / 2.0,
-                            bw.bottom as f32,
-                            color
-                        );
-                        // Right edge
-                        draw_line(
-                            bb.x + bb.width + bw.right as f32 / 2.0,
-                            bb.y,
-                            bb.x + bb.width + bw.right as f32 / 2.0,
-                            bb.y + bb.height,
-                            bw.right as f32,
-                            color
-                        );
-                    }
-                } else {
-                    // Edges
-                    // Top edge
-                    draw_line(
-                        bb.x + cr.top_left,
-                        bb.y - bw.top as f32 / 2.0,
-                        bb.x + bb.width - cr.top_right,
-                        bb.y - bw.top as f32 / 2.0,
-                        bw.top as f32,
-                        color
-                    );
-                    // Left edge
-                    draw_line(
-                        bb.x - bw.left as f32 / 2.0,
-                        bb.y + cr.top_left,
-                        bb.x - bw.left as f32 / 2.0,
-                        bb.y + bb.height - cr.bottom_left,
-                        bw.left as f32,
-                        color
-                    );
-                    // Bottom edge
-                    draw_line(
-                        bb.x + cr.bottom_left,
-                        bb.y + bb.height + bw.bottom as f32 / 2.0,
-                        bb.x + bb.width - cr.bottom_right,
-                        bb.y + bb.height + bw.bottom as f32 / 2.0,
-                        bw.bottom as f32,
-                        color
-                    );
-                    // Right edge
-                    draw_line(
-                        bb.x + bb.width + bw.right as f32 / 2.0,
-                        bb.y + cr.top_right,
-                        bb.x + bb.width + bw.right as f32 / 2.0,
-                        bb.y + bb.height - cr.bottom_right,
-                        bw.right as f32,
-                        color
-                    );
+                let s = match config.position {
+                    BorderPosition::Outside => -0.5,
+                    BorderPosition::Middle => 0.,
+                    BorderPosition::Inside => 0.5,
+                };
 
-                    // Corners
-                    // Top-left corner
-                    if cr.top_left > 0.0 {
-                        let width = bw.left.max(bw.top) as f32;
-                        let points = ((std::f32::consts::PI * (cr.top_left + width)) / 2.0 / PIXELS_PER_POINT).max(5.0);
-                        draw_arc(
-                            bb.x + cr.top_left,
-                            bb.y + cr.top_left,
-                            points as u8,
-                            cr.top_left,
-                            180.0,
-                            bw.left as f32,
-                            90.0,
-                            color
-                        );
+                if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 
+                    && bw.left == bw.right && bw.left == bw.top && bw.left == bw.bottom
+                {
+                    let border_width = bw.left as f32;
+                    let offset = border_width * (0.25 - s / 2.);
+
+                    draw_rectangle_lines(
+                        bb.x - offset,
+                        bb.y - offset,
+                        bb.width + offset * 2.,
+                        bb.height + offset * 2.,
+                        border_width,
+                        color
+                    );
+                } else {
+                    let top = bw.top as f32;
+                    let left = bw.left as f32;
+                    let bottom = bw.bottom as f32;
+                    let right = bw.right as f32;
+                    let tl_r = cr.top_left;
+                    let tr_r = cr.top_right;
+                    let bl_r = cr.bottom_left;
+                    let br_r = cr.bottom_right;
+
+                    let x1 = bb.x + left * s;
+                    let x2 = bb.x + bb.width - right * s;
+                    let y1 = bb.y + top * s;
+                    let y2 = bb.y + bb.height - bottom * s;
+                    let top_x1 = x1 - left / 2. + tl_r;
+                    let top_x2 = x2 + right / 2. - tr_r;
+                    let bottom_x1 = x1 - left / 2. + bl_r;
+                    let bottom_x2 = x2 + right / 2. - br_r;
+                    let left_y1 = y1 - top / 2. + tl_r;
+                    let left_y2 = y2 + bottom / 2. - bl_r;
+                    let right_y1 = y1 - top / 2. + tr_r;
+                    let right_y2 = y2 + bottom / 2. - br_r;
+
+                    // Top edge
+                    draw_line(top_x1, y1, top_x2, y1, top, color);
+
+                    // Bottom edge
+                    draw_line(bottom_x1, y2, bottom_x2, y2, bottom, color);
+
+                    // Left edge
+                    draw_line(x1, left_y1, x1, left_y2, left, color);
+
+                    // Right edge
+                    draw_line(x2, right_y1, x2, right_y2, right, color);
+
+                    let get_points = |corner: f32, w1: f32, w2: f32| {
+                        ((std::f32::consts::PI * (corner + w1.max(w2))) / 2.0 / PIXELS_PER_POINT).max(5.0) as u8
+                    };
+
+                    // Top left corner
+                    if tl_r > 0. {
+                        let points = get_points(tl_r, top, left);
+                        fill_arc(top_x1, left_y1, points, tl_r, 180., 90., color); // Outer rounded corner
+                        draw_arc(top_x1 + left, left_y1 + top, points, tl_r, 180., tl_r, 90., color); // Inner rounded corner
                     }
-                    // Top-right corner
-                    if cr.top_right > 0.0 {
-                        let width = bw.top.max(bw.right) as f32;
-                        let points = ((std::f32::consts::PI * (cr.top_right + width)) / 2.0 / PIXELS_PER_POINT).max(5.0);
-                        draw_arc(
-                            bb.x + bb.width - cr.top_right,
-                            bb.y + cr.top_right,
-                            points as u8,
-                            cr.top_right,
-                            270.0,
-                            bw.top as f32,
-                            90.0,
-                            color
-                        );
+
+                    // Top right corner
+                    if tr_r > 0. {
+                        let points = get_points(tr_r, top, right);
+                        fill_arc(top_x2, right_y1, points, tr_r, 270., 90., color);
+                        draw_arc(top_x2 - right, right_y1 + top, points, tr_r, 270., tr_r, 90., color);
                     }
-                    // Bottom-left corner
-                    if cr.bottom_left > 0.0 {
-                        let width = bw.left.max(bw.bottom) as f32;
-                        let points = ((std::f32::consts::PI * (cr.bottom_left + width)) / 2.0 / PIXELS_PER_POINT).max(5.0);
-                        draw_arc(
-                            bb.x + cr.bottom_left,
-                            bb.y + bb.height - cr.bottom_left,
-                            points as u8,
-                            cr.bottom_left,
-                            90.0,
-                            bw.bottom as f32,
-                            90.0,
-                            color
-                        );
+
+                    // Bottom left corner
+                    if bl_r > 0. {
+                        let points = get_points(bl_r, bottom, left);
+                        fill_arc(bottom_x1, left_y2, points, bl_r, 90., 90., color);
+                        draw_arc(bottom_x1 + left, left_y2 - bottom, points, bl_r, 90., bl_r, 90., color);
                     }
-                    // Bottom-right corner
-                    if cr.bottom_right > 0.0 {
-                        let width = bw.bottom.max(bw.right) as f32;
-                        let points = ((std::f32::consts::PI * (cr.bottom_right + width)) / 2.0 / PIXELS_PER_POINT).max(5.0);
-                        draw_arc(
-                            bb.x + bb.width - cr.bottom_right,
-                            bb.y + bb.height - cr.bottom_right,
-                            points as u8,
-                            cr.bottom_right,
-                            0.0,
-                            bw.right as f32,
-                            90.0,
-                            color
-                        );
+
+                    // Bottom right corner
+                    if br_r > 0. {
+                        let points = get_points(br_r, bottom, right);
+                        fill_arc(bottom_x2, right_y2, points, br_r, 0., 90., color);
+                        draw_arc(bottom_x2 - right, right_y2 - bottom, points, br_r, 0., br_r, 90., color);
                     }
                 }
             }
@@ -2471,3 +2396,21 @@ fn compute_letter_spacing_x_scale(bb_width: f32, visible_char_count: usize, lett
         1.0
     }
 }
+
+pub fn fill_arc(x: f32, y: f32, sides: u8, radius: f32, rotation: f32, arc_angle: f32, color: Color) { 
+    let sides = sides.max(1) as usize; 
+    let rot = rotation.to_radians();
+    let arc = arc_angle.to_radians();
+
+    for i in 0..sides { 
+        let a0 = rot + arc * (i as f32 / sides as f32);
+        let a1 = rot + arc * ((i + 1) as f32 / sides as f32);
+
+        draw_triangle(
+            Vec2::new(x, y),
+            Vec2::new(x + a0.cos() * radius, y + a0.sin() * radius),
+            Vec2::new(x + a1.cos() * radius, y + a1.sin() * radius),
+            color, 
+        );
+    }
+} 
