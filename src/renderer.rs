@@ -114,10 +114,16 @@ pub struct FontManager {
     fonts: rustc_hash::FxHashMap<&'static str, FontData>,
     default_font: Option<DefaultFont>,
     pub max_frames_not_used: usize,
+    font_metrics: rustc_hash::FxHashMap<(u16, usize), FontMetrics>,
 }
 struct DefaultFont {
     key: &'static str,
     font: Font,
+}
+#[derive(Clone, Copy)]
+struct FontMetrics {
+    pub height: f32,
+    pub baseline_offset: f32,
 }
 struct FontData {
     pub frames_not_used: usize,
@@ -129,6 +135,7 @@ impl FontManager {
             fonts: rustc_hash::FxHashMap::default(),
             default_font: None,
             max_frames_not_used: 60,
+            font_metrics: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -148,6 +155,35 @@ impl FontManager {
     /// Returns `None` if no default font has been set.
     pub fn get_default(&self) -> Option<&Font> {
         self.default_font.as_ref().map(|d| &d.font)
+    }
+
+    fn metrics(&mut self, font_size: u16, font_asset: Option<&'static FontAsset>) -> FontMetrics {
+        let font_ptr = font_asset.map_or(0usize, |a| a as *const _ as usize);
+        let key = (font_size, font_ptr);
+        if let Some(&m) = self.font_metrics.get(&key) {
+            return m;
+        }
+        let (font, found) = if let Some(a) = font_asset {
+            let k = a.key();
+            if let Some(data) = self.fonts.get(k) {
+                (Some(&data.font), true)
+            } else if self.default_font.as_ref().map(|d| d.key) == Some(k) {
+                (self.default_font.as_ref().map(|d| &d.font), true)
+            } else {
+                (self.default_font.as_ref().map(|d| &d.font), false)
+            }
+        } else {
+            (self.default_font.as_ref().map(|d| &d.font), true)
+        };
+        let ref_dims = macroquad::text::measure_text("Xig", font, font_size, 1.0);
+        let m = FontMetrics {
+            height: ref_dims.height,
+            baseline_offset: ref_dims.offset_y,
+        };
+        if found {
+            self.font_metrics.insert(key, m);
+        }
+        m
     }
 
     /// Load the default font. Stored outside the cache and never evicted.
@@ -207,6 +243,15 @@ impl FontManager {
         for (_, data) in self.fonts.iter_mut() {
             data.frames_not_used += 1;
         }
+    }
+
+    pub fn is_loaded(asset: &'static FontAsset) -> bool {
+        let fm = FONT_MANAGER.lock().unwrap();
+        let key = asset.key();
+        if fm.default_font.as_ref().map(|d| d.key) == Some(key) {
+            return true;
+        }
+        fm.fonts.contains_key(key)
     }
 
     /// Returns the number of currently loaded fonts.
@@ -1853,6 +1898,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 }
                 // Hold the FM lock for the duration of text rendering — no clone needed
                 let mut fm = FONT_MANAGER.lock().unwrap();
+                let baseline_y = bb.y + fm.metrics(config.font_size, config.font_asset).baseline_offset;
                 let font = if let Some(asset) = config.font_asset {
                     fm.get(asset)
                 } else {
@@ -1879,7 +1925,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     draw_text_ex(
                         &config.text,
                         bb.x,
-                        bb.y + bb.height,
+                        baseline_y,
                         TextParams {
                             font_size: config.font_size as u16,
                             font,
@@ -1977,7 +2023,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     let time = get_time();
                     
                     let cursor_x = std::cell::Cell::new(bb.x);
-                    let cursor_y = bb.y + bb.height;
+                    let cursor_y = baseline_y;
                     let mut pending_renders = Vec::new();
                     
                     let x_scale = compute_letter_spacing_x_scale(
@@ -2071,6 +2117,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 }
                 // Hold the FM lock for the duration of text rendering — no clone needed
                 let mut fm = FONT_MANAGER.lock().unwrap();
+                let baseline_y = bb.y + fm.metrics(config.font_size, config.font_asset).baseline_offset;
                 let font = if let Some(asset) = config.font_asset {
                     fm.get(asset)
                 } else {
@@ -2095,7 +2142,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 draw_text_ex(
                     &config.text,
                     bb.x,
-                    bb.y + bb.height,
+                    baseline_y,
                     TextParams {
                         font_size: config.font_size as u16,
                         font,
@@ -2377,8 +2424,9 @@ pub fn create_measure_text_function(
             config.font_size,
             1.0,
         );
+        let metrics = fm.metrics(config.font_size as u16, config.font_asset);
         let added_space = (cleaned_text.chars().count().max(1) - 1) as f32 * config.letter_spacing as f32;
-        crate::Dimensions::new(measured.width + added_space, measured.height)
+        crate::Dimensions::new(measured.width + added_space, metrics.height)
     }
 }
 

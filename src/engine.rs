@@ -1831,7 +1831,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         } else {
             font_size as f32
         };
-        self.font_height_cache.insert(key, h);
+        let font_loaded = font_asset
+            .map_or(true, |a| crate::renderer::FontManager::is_loaded(a));
+        if font_loaded {
+            self.font_height_cache.insert(key, h);
+        }
         h
     }
 
