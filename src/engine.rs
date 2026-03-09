@@ -3578,6 +3578,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 .width
                                 - (layout_config.padding.left + layout_config.padding.right) as f32
                                 - content_width;
+                            if _scroll_container_data_idx.is_some() {
+                                extra_space = extra_space.max(0.0);
+                            }
                             match layout_config.child_alignment.x {
                                 AlignX::Left => extra_space = 0.0,
                                 AlignX::CenterX => extra_space /= 2.0,
@@ -3599,6 +3602,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 .height
                                 - (layout_config.padding.top + layout_config.padding.bottom) as f32
                                 - content_height;
+                            if _scroll_container_data_idx.is_some() {
+                                extra_space = extra_space.max(0.0);
+                            }
                             match layout_config.child_alignment.y {
                                 AlignY::Top => extra_space = 0.0,
                                 AlignY::CenterY => extra_space /= 2.0,
