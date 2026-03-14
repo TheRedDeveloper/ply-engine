@@ -2169,97 +2169,160 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     BorderPosition::Inside => 0.0,
                 };
 
-                if cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 
-                    && bw.left == bw.right && bw.left == bw.top && bw.left == bw.bottom
-                {
-                    let border_width = (bw.left as f32) * 2.;
-                    let offset = border_width * s / 2.;
+                let get_sides = |corner: f32| {
+                    (std::f32::consts::PI * corner / (2.0 * PIXELS_PER_POINT)).max(5.0) as usize
+                };
+                let v = |x: f32, y: f32| Vertex::new(x, y, 0., 0., 0., color);
 
-                    draw_rectangle_lines(
-                        bb.x - offset,
-                        bb.y - offset,
-                        bb.width + offset * 2.,
-                        bb.height + offset * 2.,
-                        border_width,
-                        color
-                    );
-                } else {
-                    let get_sides = |corner: f32| {
-                        (std::f32::consts::PI * corner / (2.0 * PIXELS_PER_POINT)).max(5.0) as usize
-                    };
-                    let v = |x: f32, y: f32| {
-                        Vertex::new(x, y, 0., 0., 0., color)
-                    };
+                let top = bw.top as f32;
+                let left = bw.left as f32;
+                let bottom = bw.bottom as f32;
+                let right = bw.right as f32;
+                let tl_r = cr.top_left;
+                let tr_r = cr.top_right;
+                let bl_r = cr.bottom_left;
+                let br_r = cr.bottom_right;
 
-                    let top = bw.top as f32;
-                    let left = bw.left as f32;
-                    let bottom = bw.bottom as f32;
-                    let right = bw.right as f32;
-                    let tl_r = cr.top_left;
-                    let tr_r = cr.top_right;
-                    let bl_r = cr.bottom_left;
-                    let br_r = cr.bottom_right;
-                    let tl_sides = get_sides(tl_r);
-                    let tr_sides = get_sides(tr_r);
-                    let bl_sides = get_sides(bl_r);
-                    let br_sides = get_sides(br_r);
-                    let side_count = tl_sides + tr_sides + bl_sides + br_sides;
+                let ox1 = bb.x - left * s;
+                let ox2 = bb.x + bb.width + right * s;
+                let oy1 = bb.y - top * s;
+                let oy2 = bb.y + bb.height + bottom * s;
+                let ix1 = bb.x + left * (1.0 - s);
+                let ix2 = bb.x + bb.width - right * (1.0 - s);
+                let iy1 = bb.y + top * (1.0 - s);
+                let iy2 = bb.y + bb.height - bottom * (1.0 - s);
 
-                    let x1 = bb.x - left * s;
-                    let x2 = bb.x + bb.width + right * s;
-                    let y1 = bb.y - top * s;
-                    let y2 = bb.y + bb.height + bottom * s;
+                let o_tl_rx = tl_r + left * s;
+                let o_tl_ry = tl_r + top * s;
+                let o_tr_rx = tr_r + right * s;
+                let o_tr_ry = tr_r + top * s;
+                let o_bl_rx = bl_r + left * s;
+                let o_bl_ry = bl_r + bottom * s;
+                let o_br_rx = br_r + right * s;
+                let o_br_ry = br_r + bottom * s;
+                let i_tl_rx = (tl_r - left * (1.0 - s)).max(0.0);
+                let i_tl_ry = (tl_r - top * (1.0 - s)).max(0.0);
+                let i_tr_rx = (tr_r - right * (1.0 - s)).max(0.0);
+                let i_tr_ry = (tr_r - top * (1.0 - s)).max(0.0);
+                let i_bl_rx = (bl_r - left * (1.0 - s)).max(0.0);
+                let i_bl_ry = (bl_r - bottom * (1.0 - s)).max(0.0);
+                let i_br_rx = (br_r - right * (1.0 - s)).max(0.0);
+                let i_br_ry = (br_r - bottom * (1.0 - s)).max(0.0);
 
-                    let mut vertices = Vec::<Vertex>::with_capacity(16 + side_count * 4);
-                    let mut indices = Vec::<u16>::with_capacity(24 + side_count * 6);
+                let tl_sides = get_sides(o_tl_rx.max(o_tl_ry).max(i_tl_rx).max(i_tl_ry));
+                let tr_sides = get_sides(o_tr_rx.max(o_tr_ry).max(i_tr_rx).max(i_tr_ry));
+                let bl_sides = get_sides(o_bl_rx.max(o_bl_ry).max(i_bl_rx).max(i_bl_ry));
+                let br_sides = get_sides(o_br_rx.max(o_br_ry).max(i_br_rx).max(i_br_ry));
+                let side_count = tl_sides + tr_sides + bl_sides + br_sides;
 
-                    vertices.extend([
-                        // Top edge
-                        v(x1 + tl_r, y1), v(x2 - tr_r, y1), v(x1 + tl_r, y1 + top), v(x2 - tr_r, y1 + top),
-                        // Bottom edge
-                        v(x1 + bl_r, y2), v(x2 - br_r, y2), v(x1 + bl_r, y2 - bottom), v(x2 - br_r, y2 - bottom),
-                        // Left edge
-                        v(x1, y1 + tl_r), v(x1, y2 - bl_r), v(x1 + left, y1 + tl_r), v(x1 + left, y2 - bl_r), 
-                        // Right edge
-                        v(x2, y1 + tr_r), v(x2, y2 - br_r), v(x2 - right, y1 + tr_r), v(x2 - right, y2 - br_r), 
+                let mut vertices = Vec::<Vertex>::with_capacity(16 + side_count * 4);
+                let mut indices = Vec::<u16>::with_capacity(24 + side_count * 6);
+
+                // 4 quads
+                vertices.extend([
+                    // Top edge
+                    v(ox1 + o_tl_rx, oy1),
+                    v(ox2 - o_tr_rx, oy1),
+                    v(ix1 + i_tl_rx, iy1),
+                    v(ix2 - i_tr_rx, iy1),
+                    // Bottom edge
+                    v(ox1 + o_bl_rx, oy2),
+                    v(ox2 - o_br_rx, oy2),
+                    v(ix1 + i_bl_rx, iy2),
+                    v(ix2 - i_br_rx, iy2),
+                    // Left edge
+                    v(ox1, oy1 + o_tl_ry),
+                    v(ox1, oy2 - o_bl_ry),
+                    v(ix1, iy1 + i_tl_ry),
+                    v(ix1, iy2 - i_bl_ry),
+                    // Right edge
+                    v(ox2, oy1 + o_tr_ry),
+                    v(ox2, oy2 - o_br_ry),
+                    v(ix2, iy1 + i_tr_ry),
+                    v(ix2, iy2 - i_br_ry),
+                ]);
+                for l in [0, 4, 8, 12] {
+                    indices.extend([
+                        l, l + 1, l + 2,
+                        l + 1, l + 3, l + 2
                     ]);
-
-
-                    for l in [0, 4, 8, 12] {
-                        indices.extend([l, l + 1, l + 2, l + 1, l + 2, l + 3]);
-                    }
-
-                    let corners = [
-                        (tl_sides, PI, tl_r, x1 + tl_r, y1 + tl_r, left, top),
-                        (tr_sides, PI * 1.5, tr_r, x2 - tr_r, y1 + tr_r, -right, top),
-                        (bl_sides, PI * 0.5, bl_r, x1 + bl_r, y2 - bl_r, left, -bottom),
-                        (br_sides, 0., br_r, x2 - br_r, y2 - br_r, -right, -bottom),
-                    ];
-
-                    for (sides, start, r, x1, y1, dx, dy) in corners {
-                        let step = (PI / 2.) / (sides as f32);
-
-                        for i in 0..sides {
-                            let i = i as f32;
-                            let a1 = start + i * step;
-                            let a2 = a1 + step;
-                            let x2 = x1 + dx;
-                            let y2 = y1 + dy;
-                            let l = vertices.len() as u16;
-
-                            indices.extend([l, l + 1, l + 2, l + 1, l + 2, l + 3]);
-
-                            vertices.extend([
-                                v(x1 + a1.cos() * r, y1 + a1.sin() * r),
-                                v(x1 + a2.cos() * r, y1 + a2.sin() * r),
-                                v(x2 + a1.cos() * r, y2 + a1.sin() * r),
-                                v(x2 + a2.cos() * r, y2 + a2.sin() * r),
-                            ]);
-                        }
-                    }
-
-                    draw_mesh(&Mesh { vertices, indices, texture: None });
                 }
+
+                let corners = [
+                    (
+                        tl_sides,
+                        PI,
+                        ox1 + o_tl_rx,
+                        oy1 + o_tl_ry,
+                        ix1 + i_tl_rx,
+                        iy1 + i_tl_ry,
+                        o_tl_rx,
+                        o_tl_ry,
+                        i_tl_rx,
+                        i_tl_ry,
+                    ),
+                    (
+                        tr_sides,
+                        PI * 1.5,
+                        ox2 - o_tr_rx,
+                        oy1 + o_tr_ry,
+                        ix2 - i_tr_rx,
+                        iy1 + i_tr_ry,
+                        o_tr_rx,
+                        o_tr_ry,
+                        i_tr_rx,
+                        i_tr_ry,
+                    ),
+                    (
+                        bl_sides,
+                        PI * 0.5,
+                        ox1 + o_bl_rx,
+                        oy2 - o_bl_ry,
+                        ix1 + i_bl_rx,
+                        iy2 - i_bl_ry,
+                        o_bl_rx,
+                        o_bl_ry,
+                        i_bl_rx,
+                        i_bl_ry,
+                    ),
+                    (
+                        br_sides,
+                        0.,
+                        ox2 - o_br_rx,
+                        oy2 - o_br_ry,
+                        ix2 - i_br_rx,
+                        iy2 - i_br_ry,
+                        o_br_rx,
+                        o_br_ry,
+                        i_br_rx,
+                        i_br_ry,
+                    ),
+                ];
+
+                for (sides, start, ocx, ocy, icx, icy, o_rx, o_ry, i_rx, i_ry) in corners {
+                    let step = (PI / 2.) / (sides as f32);
+
+                    for i in 0..sides {
+                        let i = i as f32;
+                        let a1 = start + i * step;
+                        let a2 = a1 + step;
+                        let l = vertices.len() as u16;
+
+                        // quad
+                        vertices.extend([
+                            v(ocx + a1.cos() * o_rx, ocy + a1.sin() * o_ry),
+                            v(ocx + a2.cos() * o_rx, ocy + a2.sin() * o_ry),
+                            v(icx + a1.cos() * i_rx, icy + a1.sin() * i_ry),
+                            v(icx + a2.cos() * i_rx, icy + a2.sin() * i_ry),
+                        ]);
+                        indices.extend([
+                            l, l + 1, l + 2,
+                            l + 1, l + 3, l + 2
+                        ]);
+                    }
+                }
+
+                draw_mesh(&Mesh { vertices, indices, texture: None });
             }
             RenderCommandConfig::ScissorStart() => {
                 let bb = command.bounding_box;
