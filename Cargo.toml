@@ -1,6 +1,6 @@
 [package]
 name = "ply-engine"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 description = "The most powerful app engine made entirely in Rust"
 keywords = ["engine", "ui", "layout", "gamedev", "graphics"]

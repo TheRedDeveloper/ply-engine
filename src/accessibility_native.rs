@@ -12,14 +12,15 @@ use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex};
 
 use accesskit::{
-    Action, ActionHandler, ActionRequest, ActivationHandler, Live, Node, NodeId, Role, Toggled,
-    Tree, TreeId, TreeUpdate,
+    Action, ActionHandler, ActionRequest, ActivationHandler, Live, Node, NodeId, Rect, Role,
+    Toggled, Tree, TreeId, TreeUpdate,
 };
 #[cfg(target_os = "linux")]
 use accesskit::DeactivationHandler;
 
 #[allow(unused_imports)]
 use crate::accessibility::{AccessibilityConfig, AccessibilityRole, LiveRegionMode};
+use crate::math::{BoundingBox, Dimensions};
 
 /// Sentinel NodeId for the root window node.
 /// We use u64::MAX to avoid collision with element IDs (which are u32 hash values).
@@ -60,9 +61,19 @@ fn map_role(role: &AccessibilityRole) -> Role {
     }
 }
 
-fn build_node(config: &AccessibilityConfig) -> Node {
+fn bounding_box_to_rect(bounds: BoundingBox) -> Rect {
+    Rect {
+        x0: bounds.x as f64,
+        y0: bounds.y as f64,
+        x1: (bounds.x + bounds.width) as f64,
+        y1: (bounds.y + bounds.height) as f64,
+    }
+}
+
+fn build_node(config: &AccessibilityConfig, bounds: BoundingBox) -> Node {
     let role = map_role(&config.role);
     let mut node = Node::new(role);
+    node.set_bounds(bounding_box_to_rect(bounds));
 
     // Label
     if !config.label.is_empty() {
@@ -143,8 +154,10 @@ fn build_node(config: &AccessibilityConfig) -> Node {
 
 fn build_tree_update(
     configs: &FxHashMap<u32, AccessibilityConfig>,
+    bounds_by_id: &FxHashMap<u32, BoundingBox>,
     element_order: &[u32],
     focused_id: u32,
+    viewport: Dimensions,
     include_tree: bool,
 ) -> TreeUpdate {
     let mut nodes: Vec<(NodeId, Node)> = Vec::with_capacity(element_order.len() + 2);
@@ -152,31 +165,35 @@ fn build_tree_update(
     // Collect child NodeIds for the document container
     let child_ids: Vec<NodeId> = element_order
         .iter()
-        .filter(|id| configs.contains_key(id))
+        .filter(|id| configs.contains_key(id) && bounds_by_id.contains_key(id))
         .map(|&id| NodeId(id as u64))
         .collect();
+
+    let viewport_bounds = BoundingBox::new(0.0, 0.0, viewport.width.max(0.0), viewport.height.max(0.0));
 
     // Root window → Document → accessible elements
     let mut root_node = Node::new(Role::Window);
     root_node.set_label("Ply Application");
+    root_node.set_bounds(bounding_box_to_rect(viewport_bounds));
     root_node.set_children(vec![DOCUMENT_NODE_ID]);
     nodes.push((ROOT_NODE_ID, root_node));
 
     // Document container enables structural navigation in screen readers
     let mut doc_node = Node::new(Role::Document);
+    doc_node.set_bounds(bounding_box_to_rect(viewport_bounds));
     doc_node.set_children(child_ids);
     nodes.push((DOCUMENT_NODE_ID, doc_node));
 
     // Build child nodes
     for &elem_id in element_order {
-        if let Some(config) = configs.get(&elem_id) {
-            let node = build_node(config);
+        if let (Some(config), Some(bounds)) = (configs.get(&elem_id), bounds_by_id.get(&elem_id)) {
+            let node = build_node(config, *bounds);
             nodes.push((NodeId(elem_id as u64), node));
         }
     }
 
     // Determine focus: if focused_id is 0 (no focus), point to root
-    let focus = if focused_id != 0 && configs.contains_key(&focused_id) {
+    let focus = if focused_id != 0 && configs.contains_key(&focused_id) && bounds_by_id.contains_key(&focused_id) {
         NodeId(focused_id as u64)
     } else {
         ROOT_NODE_ID
@@ -442,11 +459,20 @@ impl NativeAccessibilityState {
     fn initialize(
         &mut self,
         configs: &FxHashMap<u32, AccessibilityConfig>,
+        bounds_by_id: &FxHashMap<u32, BoundingBox>,
         element_order: &[u32],
         focused_id: u32,
+        viewport: Dimensions,
     ) {
         let queue = self.action_queue.clone();
-        let initial_tree = build_tree_update(configs, element_order, focused_id, true);
+        let initial_tree = build_tree_update(
+            configs,
+            bounds_by_id,
+            element_order,
+            focused_id,
+            viewport,
+            true,
+        );
 
         #[cfg(target_os = "linux")]
         {
@@ -545,10 +571,11 @@ impl NativeAccessibilityState {
             // Android: Use InjectingAdapter which sets an accessibility delegate
             // on the View, letting TalkBack discover our accessibility tree.
             //
-            // We retrieve the View via JNI by calling:
-            //   activity.getWindow().getDecorView()
-            // using miniquad's existing ACTIVITY global ref and attach_jni_env().
-            use accesskit_android::jni;
+            // We inject into the actual focused render surface when possible.
+            // Miniquad's Android activity wraps that surface in a parent layout
+            // with top padding equal to the status bar inset, so attaching the
+            // accessibility delegate to the parent layout can shift bounds.
+            use accesskit_android::jni::{self, objects::JValue};
 
             let adapter = unsafe {
                 let raw_env = macroquad::miniquad::native::android::attach_jni_env();
@@ -559,23 +586,44 @@ impl NativeAccessibilityState {
                     macroquad::miniquad::native::android::ACTIVITY as _,
                 );
 
-                // activity.getWindow() → android.view.Window
-                let window = env
-                    .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])
-                    .expect("getWindow() failed")
+                let focused_view = env
+                    .call_method(&activity, "getCurrentFocus", "()Landroid/view/View;", &[])
+                    .expect("getCurrentFocus() failed")
                     .l()
-                    .expect("getWindow() did not return an object");
+                    .unwrap_or(jni::objects::JObject::null());
 
-                // window.getDecorView() → android.view.View
-                let decor_view = env
-                    .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])
-                    .expect("getDecorView() failed")
-                    .l()
-                    .expect("getDecorView() did not return an object");
+                let host_view = if !focused_view.is_null() {
+                    focused_view
+                } else {
+                    let content_view = env
+                        .call_method(
+                            &activity,
+                            "findViewById",
+                            "(I)Landroid/view/View;",
+                            &[JValue::Int(16908290)],
+                        )
+                        .expect("findViewById(android.R.id.content) failed")
+                        .l()
+                        .expect("findViewById(android.R.id.content) did not return an object");
+
+                    if !content_view.is_null() {
+                        content_view
+                    } else {
+                        let window = env
+                            .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])
+                            .expect("getWindow() failed")
+                            .l()
+                            .expect("getWindow() did not return an object");
+                        env.call_method(&window, "getDecorView", "()Landroid/view/View;", &[])
+                            .expect("getDecorView() failed")
+                            .l()
+                            .expect("getDecorView() did not return an object")
+                    }
+                };
 
                 accesskit_android::InjectingAdapter::new(
                     &mut env,
-                    &decor_view,
+                    &host_view,
                     PlyActivationHandler {
                         initial_tree: Mutex::new(Some(initial_tree)),
                     },
@@ -614,12 +662,20 @@ pub enum PendingA11yAction {
 pub fn sync_accessibility_tree(
     state: &mut NativeAccessibilityState,
     accessibility_configs: &FxHashMap<u32, AccessibilityConfig>,
+    accessibility_bounds: &FxHashMap<u32, BoundingBox>,
     accessibility_element_order: &[u32],
     focused_element_id: u32,
+    viewport: Dimensions,
 ) -> Vec<PendingA11yAction> {
     // Lazy-initialize the platform adapter on first call
     if !state.initialized {
-        state.initialize(accessibility_configs, accessibility_element_order, focused_element_id);
+        state.initialize(
+            accessibility_configs,
+            accessibility_bounds,
+            accessibility_element_order,
+            focused_element_id,
+            viewport,
+        );
     }
 
     // Process any queued action requests from the screen reader
@@ -654,8 +710,10 @@ pub fn sync_accessibility_tree(
     // Build and push the tree update to the platform adapter
     let update = build_tree_update(
         accessibility_configs,
+        accessibility_bounds,
         accessibility_element_order,
         focused_element_id,
+        viewport,
         false,
     );
 
@@ -750,7 +808,7 @@ mod tests {
     #[test]
     fn build_node_button() {
         let config = make_config(AccessibilityRole::Button, "Click me");
-        let node = build_node(&config);
+        let node = build_node(&config, BoundingBox::new(10.0, 20.0, 30.0, 40.0));
         assert_eq!(node.role(), Role::Button);
         assert_eq!(node.label(), Some("Click me"));
     }
@@ -758,7 +816,7 @@ mod tests {
     #[test]
     fn build_node_heading_with_level() {
         let config = make_config(AccessibilityRole::Heading { level: 2 }, "Section");
-        let node = build_node(&config);
+        let node = build_node(&config, BoundingBox::new(0.0, 0.0, 100.0, 24.0));
         assert_eq!(node.role(), Role::Heading);
         assert_eq!(node.level(), Some(2));
         assert_eq!(node.label(), Some("Section"));
@@ -768,7 +826,7 @@ mod tests {
     fn build_node_checkbox_toggled() {
         let mut config = make_config(AccessibilityRole::Checkbox, "Agree");
         config.checked = Some(true);
-        let node = build_node(&config);
+        let node = build_node(&config, BoundingBox::new(0.0, 0.0, 20.0, 20.0));
         assert_eq!(node.role(), Role::CheckBox);
         assert_eq!(node.toggled(), Some(Toggled::True));
     }
@@ -779,7 +837,7 @@ mod tests {
         config.value = "50".to_string();
         config.value_min = Some(0.0);
         config.value_max = Some(100.0);
-        let node = build_node(&config);
+        let node = build_node(&config, BoundingBox::new(0.0, 0.0, 120.0, 24.0));
         assert_eq!(node.role(), Role::Slider);
         assert_eq!(node.numeric_value(), Some(50.0));
         assert_eq!(node.min_numeric_value(), Some(0.0));
@@ -790,7 +848,7 @@ mod tests {
     fn build_node_live_region() {
         let mut config = make_config(AccessibilityRole::Label, "Status");
         config.live_region = LiveRegionMode::Polite;
-        let node = build_node(&config);
+        let node = build_node(&config, BoundingBox::new(0.0, 0.0, 80.0, 24.0));
         assert_eq!(node.live(), Some(Live::Polite));
     }
 
@@ -798,18 +856,21 @@ mod tests {
     fn build_node_description() {
         let mut config = make_config(AccessibilityRole::Button, "Submit");
         config.description = "Submit the form".to_string();
-        let node = build_node(&config);
+        let node = build_node(&config, BoundingBox::new(0.0, 0.0, 80.0, 24.0));
         assert_eq!(node.description(), Some("Submit the form"));
     }
 
     #[test]
     fn build_tree_update_structure() {
         let mut configs = FxHashMap::default();
+        let mut bounds = FxHashMap::default();
         configs.insert(101, make_config(AccessibilityRole::Button, "OK"));
         configs.insert(102, make_config(AccessibilityRole::Button, "Cancel"));
+        bounds.insert(101, BoundingBox::new(10.0, 10.0, 80.0, 32.0));
+        bounds.insert(102, BoundingBox::new(100.0, 10.0, 80.0, 32.0));
 
         let order = vec![101, 102];
-        let update = build_tree_update(&configs, &order, 101, true);
+        let update = build_tree_update(&configs, &bounds, &order, 101, Dimensions::new(320.0, 240.0), true);
 
         // Should have root + document + 2 children = 4 nodes
         assert_eq!(update.nodes.len(), 4);
@@ -834,8 +895,9 @@ mod tests {
     #[test]
     fn build_tree_update_no_focus() {
         let configs = FxHashMap::default();
+        let bounds = FxHashMap::default();
         let order = vec![];
-        let update = build_tree_update(&configs, &order, 0, true);
+        let update = build_tree_update(&configs, &bounds, &order, 0, Dimensions::new(320.0, 240.0), true);
 
         // Only root + document nodes
         assert_eq!(update.nodes.len(), 2);

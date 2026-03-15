@@ -4,6 +4,44 @@
 
 var a11y_root = null;
 var nodes = {};
+var a11y_viewport_width = 1;
+var a11y_viewport_height = 1;
+
+function applyA11yNodeStyle(el) {
+    el.style.cssText =
+        "position:fixed;pointer-events:none;overflow:hidden;" +
+        "margin:0;padding:0;border:0;background:transparent;" +
+        "color:transparent;opacity:0.001;box-sizing:border-box;" +
+        "white-space:nowrap;";
+}
+
+function setA11yNodeBounds(el, x, y, width, height) {
+    var rect = canvas.getBoundingClientRect();
+    var scale_x = a11y_viewport_width > 0 ? rect.width / a11y_viewport_width : 1;
+    var scale_y = a11y_viewport_height > 0 ? rect.height / a11y_viewport_height : 1;
+    var left = rect.left + x * scale_x;
+    var top = rect.top + y * scale_y;
+    var css_width = Math.max(1, width * scale_x);
+    var css_height = Math.max(1, height * scale_y);
+
+    el.style.left = left + "px";
+    el.style.top = top + "px";
+    el.style.width = css_width + "px";
+    el.style.height = css_height + "px";
+}
+
+function roleUsesTextContent(role) {
+    return (
+        role === "none" ||
+        role === "heading" ||
+        role === "note" ||
+        role === "button" ||
+        role === "link" ||
+        role === "menuitem" ||
+        role === "tab" ||
+        role === "listitem"
+    );
+}
 
 miniquad_add_plugin({
     register_plugin: function (imp) {
@@ -20,7 +58,8 @@ miniquad_add_plugin({
                 a11y_root = document.createElement("div");
                 a11y_root.id = "ply-a11y-root";
                 a11y_root.style.cssText =
-                    "position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;";
+                    "position:fixed;left:0;top:0;width:0;height:0;overflow:visible;" +
+                    "pointer-events:none;z-index:2147483647;";
                 document.body.appendChild(a11y_root);
 
                 // Tell screen readers the canvas "owns" the hidden tree
@@ -46,6 +85,7 @@ miniquad_add_plugin({
             if (!el) {
                 el = document.createElement("div");
                 el.id = "ply-a11y-" + id;
+                applyA11yNodeStyle(el);
                 a11y_root.appendChild(el);
                 nodes[id] = el;
             }
@@ -54,12 +94,13 @@ miniquad_add_plugin({
             else el.removeAttribute("role");
 
             if (label) {
-                el.setAttribute("aria-label", label);
-                // Also set textContent so live regions fire announcements
-                // and browse-mode screen readers can discover the text.
-                // Only mutate when changed to avoid spurious live-region
-                // re-announcements.
-                if (el.textContent !== label) el.textContent = label;
+                if (roleUsesTextContent(role)) {
+                    el.removeAttribute("aria-label");
+                    if (el.textContent !== label) el.textContent = label;
+                } else {
+                    el.setAttribute("aria-label", label);
+                    if (el.textContent !== "") el.textContent = "";
+                }
             } else {
                 el.removeAttribute("aria-label");
                 if (el.textContent !== "") el.textContent = "";
@@ -164,6 +205,18 @@ miniquad_add_plugin({
                 var el = nodes[ids[i]];
                 if (el) a11y_root.appendChild(el);
             }
+        };
+
+        // Position a DOM node so screen-reader focus overlays match the canvas.
+        imp.env.ply_a11y_set_bounds = function (id, x, y, width, height) {
+            var el = nodes[id];
+            if (!el) return;
+            setA11yNodeBounds(el, x, y, width, height);
+        };
+
+        imp.env.ply_a11y_set_viewport = function (width, height) {
+            a11y_viewport_width = width > 0 ? width : 1;
+            a11y_viewport_height = height > 0 ? height : 1;
         };
 
         // Virtual keyboard support for mobile web.

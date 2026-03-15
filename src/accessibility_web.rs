@@ -40,6 +40,8 @@ extern "C" {
     fn ply_a11y_announce(id: u32, text_ptr: *const u8, text_len: u32);
     fn ply_a11y_set_description(id: u32, desc_ptr: *const u8, desc_len: u32);
     fn ply_a11y_reorder(ids_ptr: *const u32, count: u32);
+    fn ply_a11y_set_bounds(id: u32, x: f32, y: f32, width: f32, height: f32);
+    fn ply_a11y_set_viewport(width: f32, height: f32);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -97,8 +99,10 @@ impl Default for WebAccessibilityState {
 pub fn sync_accessibility_tree(
     state: &mut WebAccessibilityState,
     accessibility_configs: &rustc_hash::FxHashMap<u32, crate::accessibility::AccessibilityConfig>,
+    accessibility_bounds: &rustc_hash::FxHashMap<u32, crate::math::BoundingBox>,
     accessibility_element_order: &[u32],
     focused_element_id: u32,
+    viewport: crate::math::Dimensions,
 ) {
     // Initialize the hidden DOM root on first call
     if !state.initialized {
@@ -106,14 +110,19 @@ pub fn sync_accessibility_tree(
         state.initialized = true;
     }
 
+    unsafe { ply_a11y_set_viewport(viewport.width, viewport.height); }
+
     // Track which IDs exist this frame
     let mut current_ids = FxHashSet::with_capacity_and_hasher(accessibility_configs.len(), Default::default());
 
     // Iterate in layout order (not HashMap order)
     for &elem_id in accessibility_element_order {
-        let config = match accessibility_configs.get(&elem_id) {
-            Some(c) => c,
-            None => continue,
+        let (config, bounds) = match (
+            accessibility_configs.get(&elem_id),
+            accessibility_bounds.get(&elem_id),
+        ) {
+            (Some(config), Some(bounds)) => (config, bounds),
+            _ => continue,
         };
         current_ids.insert(elem_id);
 
@@ -133,6 +142,7 @@ pub fn sync_accessibility_tree(
                 config.label.len() as u32,
                 tab_index,
             );
+            ply_a11y_set_bounds(elem_id, bounds.x, bounds.y, bounds.width, bounds.height);
         }
 
         // Heading level

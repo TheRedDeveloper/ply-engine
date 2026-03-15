@@ -27,6 +27,8 @@ pub mod prelude;
 use id::Id;
 use math::{Dimensions, Vector2};
 use render_commands::RenderCommand;
+#[cfg(feature = "a11y")]
+use rustc_hash::FxHashMap;
 use text::TextConfig;
 
 pub use color::Color;
@@ -499,6 +501,20 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData> {
+    #[cfg(feature = "a11y")]
+    fn accessibility_bounds(&self) -> FxHashMap<u32, math::BoundingBox> {
+        let mut accessibility_bounds = FxHashMap::default();
+        for &elem_id in &self.context.accessibility_element_order {
+            if let Some(bounds) = self.context.get_element_data(Id {
+                id: elem_id,
+                ..Default::default()
+            }) {
+                accessibility_bounds.insert(elem_id, bounds);
+            }
+        }
+        accessibility_bounds
+    }
+
     /// Starts a new frame, returning a [`Ui`] handle for building the element tree.
     pub fn begin(
         &mut self,
@@ -1011,22 +1027,30 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         // Sync the hidden DOM accessibility tree (web/WASM only)
         #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
         {
+            let accessibility_bounds = self.accessibility_bounds();
+
             accessibility_web::sync_accessibility_tree(
                 &mut self.web_a11y_state,
                 &self.context.accessibility_configs,
+                &accessibility_bounds,
                 &self.context.accessibility_element_order,
                 self.context.focused_element_id,
+                self.context.layout_dimensions,
             );
         }
 
         // Sync accessibility tree via AccessKit (native platforms)
         #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
         {
+            let accessibility_bounds = self.accessibility_bounds();
+
             let a11y_actions = accessibility_native::sync_accessibility_tree(
                 &mut self.native_a11y_state,
                 &self.context.accessibility_configs,
+                &accessibility_bounds,
                 &self.context.accessibility_element_order,
                 self.context.focused_element_id,
+                self.context.layout_dimensions,
             );
             for action in a11y_actions {
                 match action {
