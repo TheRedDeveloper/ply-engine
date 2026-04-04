@@ -44,20 +44,21 @@ tokio = { version = "1", optional = true, default-features = false, features = [
 tokio-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["rustls-tls-webpki-roots", "handshake", "connect"] }
 rustls = { version = "0.23", optional = true, default-features = false }
 futures = { version = "0.3", optional = true, default-features = false }
-# Storage (native only)
-rfd = { version = "0.17.2", optional = true, default-features = false, features = ["xdg-portal"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sapp-jsutils = { version = "0.1", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 accesskit_unix = { version = "0.20", optional = true }
+rfd = { version = "0.17.2", optional = true, default-features = false, features = ["xdg-portal"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = { version = "0.25", optional = true }
+rfd = { version = "0.17.2", optional = true, default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit_windows = { version = "0.32", optional = true }
+rfd = { version = "0.17.2", optional = true, default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]
 accesskit_android = { version = "0.7", optional = true, features = ["embedded-dex"] }

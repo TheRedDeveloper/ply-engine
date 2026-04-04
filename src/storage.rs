@@ -136,7 +136,7 @@ impl Storage {
     }
 
     pub async fn export(&self, path: &str) -> Result<(), String> {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         {
             let full_path = self.resolve_path(path)?;
             let bytes = std::fs::read(&full_path).map_err(|e| e.to_string())?;
@@ -157,6 +157,188 @@ impl Storage {
             Ok(())
         }
 
+        #[cfg(target_os = "android")]
+        {
+            let full_path = self.resolve_path(path)?;
+            std::fs::metadata(&full_path).map_err(|e| e.to_string())?;
+
+            let normalized_path = normalize_relative_path(path, "storage export path")?;
+            let file_name = normalized_path
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "Invalid export file name".to_owned())?;
+
+            let full_path_string = full_path.to_string_lossy().into_owned();
+            let source_path_c =
+                std::ffi::CString::new(full_path_string).map_err(|_| {
+                    "Export path contains unsupported NUL byte".to_owned()
+                })?;
+            let file_name_c = std::ffi::CString::new(file_name).map_err(|_| {
+                "Export file name contains unsupported NUL byte".to_owned()
+            })?;
+            let mime_type_c = std::ffi::CString::new(guess_mime_type(&normalized_path))
+                .map_err(|_| "Export MIME type contains unsupported NUL byte".to_owned())?;
+
+            unsafe {
+                let env = macroquad::miniquad::native::android::attach_jni_env();
+                let activity = macroquad::miniquad::native::android::ACTIVITY;
+                if activity.is_null() {
+                    return Err("Android activity is not available".to_owned());
+                }
+
+                let get_object_class = (**env).GetObjectClass.unwrap();
+                let get_method_id = (**env).GetMethodID.unwrap();
+                let call_void_method = (**env).CallVoidMethod.unwrap();
+                let new_string_utf = (**env).NewStringUTF.unwrap();
+                let delete_local_ref = (**env).DeleteLocalRef.unwrap();
+                let exception_check = (**env).ExceptionCheck.unwrap();
+                let exception_describe = (**env).ExceptionDescribe.unwrap();
+                let exception_clear = (**env).ExceptionClear.unwrap();
+
+                let class = get_object_class(env, activity);
+                if class.is_null() {
+                    return Err("Failed to access Android activity class".to_owned());
+                }
+
+                let method_name = std::ffi::CString::new("exportFile")
+                    .map_err(|_| "Invalid Android method name".to_owned())?;
+                let method_sig = std::ffi::CString::new(
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+                )
+                .map_err(|_| "Invalid Android method signature".to_owned())?;
+                let method_id = get_method_id(
+                    env,
+                    class,
+                    method_name.as_ptr(),
+                    method_sig.as_ptr(),
+                );
+                if method_id.is_null() {
+                    delete_local_ref(env, class as _);
+                    return Err(
+                        "MainActivity.exportFile(String,String,String) was not found"
+                            .to_owned(),
+                    );
+                }
+
+                let j_source_path = new_string_utf(env, source_path_c.as_ptr());
+                let j_file_name = new_string_utf(env, file_name_c.as_ptr());
+                let j_mime_type = new_string_utf(env, mime_type_c.as_ptr());
+                if j_source_path.is_null() || j_file_name.is_null() || j_mime_type.is_null() {
+                    if !j_source_path.is_null() {
+                        delete_local_ref(env, j_source_path as _);
+                    }
+                    if !j_file_name.is_null() {
+                        delete_local_ref(env, j_file_name as _);
+                    }
+                    if !j_mime_type.is_null() {
+                        delete_local_ref(env, j_mime_type as _);
+                    }
+                    delete_local_ref(env, class as _);
+                    return Err("Failed to allocate Android export strings".to_owned());
+                }
+
+                call_void_method(
+                    env,
+                    activity,
+                    method_id,
+                    j_source_path,
+                    j_file_name,
+                    j_mime_type,
+                );
+
+                if exception_check(env) != 0 {
+                    exception_describe(env);
+                    exception_clear(env);
+                    delete_local_ref(env, j_source_path as _);
+                    delete_local_ref(env, j_file_name as _);
+                    delete_local_ref(env, j_mime_type as _);
+                    delete_local_ref(env, class as _);
+                    return Err(
+                        "Android export failed to open the document picker"
+                            .to_owned(),
+                    );
+                }
+
+                delete_local_ref(env, j_source_path as _);
+                delete_local_ref(env, j_file_name as _);
+                delete_local_ref(env, j_mime_type as _);
+                delete_local_ref(env, class as _);
+            }
+
+            Ok(())
+        }
+
+        #[cfg(target_os = "ios")]
+        {
+            use macroquad::miniquad::native::apple::apple_util::str_to_nsstring;
+            use macroquad::miniquad::native::apple::frameworks::{
+                class, msg_send, nil, NSRect, ObjcId,
+            };
+
+            let full_path = self.resolve_path(path)?;
+            std::fs::metadata(&full_path).map_err(|e| e.to_string())?;
+
+            let view_ctrl = macroquad::miniquad::window::apple_view_ctrl();
+            if view_ctrl.is_null() {
+                return Err("iOS view controller is not available".to_owned());
+            }
+
+            let full_path_string = full_path.to_string_lossy().into_owned();
+
+            unsafe {
+                let ns_path = str_to_nsstring(&full_path_string);
+                let file_url: ObjcId = msg_send![class!(NSURL), fileURLWithPath: ns_path];
+                if file_url.is_null() {
+                    return Err("Failed to create iOS file URL for export".to_owned());
+                }
+
+                let items: ObjcId = msg_send![class!(NSMutableArray), arrayWithObject: file_url];
+                let activity: ObjcId = msg_send![class!(UIActivityViewController), alloc];
+                let activity: ObjcId = msg_send![
+                    activity,
+                    initWithActivityItems: items
+                    applicationActivities: nil
+                ];
+                if activity.is_null() {
+                    return Err("Failed to create iOS share sheet".to_owned());
+                }
+
+                // iPad requires an anchor for popovers.
+                let popover: ObjcId = msg_send![activity, popoverPresentationController];
+                if !popover.is_null() {
+                    let view: ObjcId = msg_send![view_ctrl, view];
+                    let bounds: NSRect = msg_send![view, bounds];
+                    let _: () = msg_send![popover, setSourceView: view];
+                    let _: () = msg_send![popover, setSourceRect: bounds];
+                }
+
+                let _: () = msg_send![
+                    view_ctrl,
+                    presentViewController: activity
+                    animated: true
+                    completion: nil
+                ];
+            }
+
+            Ok(())
+        }
+
+        #[cfg(all(
+            not(target_arch = "wasm32"),
+            not(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "windows",
+                target_os = "android",
+                target_os = "ios"
+            ))
+        ))]
+        {
+            let _ = path;
+            Err("Storage::export is not supported on this platform yet".to_owned())
+        }
+
         #[cfg(target_arch = "wasm32")]
         {
             let normalized_path = normalize_relative_path(path, "storage export path")?;
@@ -172,6 +354,33 @@ impl Storage {
     fn resolve_path(&self, relative_path: &str) -> Result<PathBuf, String> {
         let normalized = normalize_relative_path(relative_path, "storage file path")?;
         Ok(join_normalized_path(&self.root_path, &normalized))
+    }
+}
+
+#[cfg(target_os = "android")]
+fn guess_mime_type(path: &str) -> &'static str {
+    let extension = path
+        .rsplit_once('.')
+        .map(|(_, ext)| ext)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match extension.as_str() {
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "js" => "application/javascript",
+        "wasm" => "application/wasm",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
     }
 }
 
@@ -252,12 +461,126 @@ fn platform_app_data_dir() -> Result<PathBuf, String> {
         return Err("Could not resolve data directory on Linux".to_owned());
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "android")]
+    {
+        unsafe {
+            let env = macroquad::miniquad::native::android::attach_jni_env();
+            let activity = macroquad::miniquad::native::android::ACTIVITY;
+
+            if activity.is_null() {
+                return Err("Android activity is not available".to_owned());
+            }
+
+            let get_object_class = (**env).GetObjectClass.unwrap();
+            let get_method_id = (**env).GetMethodID.unwrap();
+            let call_object_method = (**env).CallObjectMethod.unwrap();
+            let get_string_utf_chars = (**env).GetStringUTFChars.unwrap();
+            let release_string_utf_chars = (**env).ReleaseStringUTFChars.unwrap();
+            let delete_local_ref = (**env).DeleteLocalRef.unwrap();
+            let exception_check = (**env).ExceptionCheck.unwrap();
+            let exception_describe = (**env).ExceptionDescribe.unwrap();
+            let exception_clear = (**env).ExceptionClear.unwrap();
+
+            let class = get_object_class(env, activity);
+            if class.is_null() {
+                return Err("Failed to access Android activity class".to_owned());
+            }
+
+            let get_files_dir_name = std::ffi::CString::new("getFilesDir")
+                .map_err(|_| "Invalid Android method name".to_owned())?;
+            let get_files_dir_sig = std::ffi::CString::new("()Ljava/io/File;")
+                .map_err(|_| "Invalid Android method signature".to_owned())?;
+            let get_files_dir = get_method_id(
+                env,
+                class,
+                get_files_dir_name.as_ptr(),
+                get_files_dir_sig.as_ptr(),
+            );
+
+            if get_files_dir.is_null() {
+                delete_local_ref(env, class as _);
+                return Err("Failed to resolve Activity.getFilesDir()".to_owned());
+            }
+
+            let file_obj = call_object_method(env, activity, get_files_dir);
+            if exception_check(env) != 0 || file_obj.is_null() {
+                if exception_check(env) != 0 {
+                    exception_describe(env);
+                    exception_clear(env);
+                }
+                delete_local_ref(env, class as _);
+                return Err("Failed to call Activity.getFilesDir()".to_owned());
+            }
+
+            let file_class = get_object_class(env, file_obj);
+            if file_class.is_null() {
+                delete_local_ref(env, file_obj as _);
+                delete_local_ref(env, class as _);
+                return Err("Failed to access java.io.File class".to_owned());
+            }
+
+            let get_abs_name = std::ffi::CString::new("getAbsolutePath")
+                .map_err(|_| "Invalid Android method name".to_owned())?;
+            let get_abs_sig = std::ffi::CString::new("()Ljava/lang/String;")
+                .map_err(|_| "Invalid Android method signature".to_owned())?;
+            let get_abs = get_method_id(
+                env,
+                file_class,
+                get_abs_name.as_ptr(),
+                get_abs_sig.as_ptr(),
+            );
+
+            if get_abs.is_null() {
+                delete_local_ref(env, file_class as _);
+                delete_local_ref(env, file_obj as _);
+                delete_local_ref(env, class as _);
+                return Err("Failed to resolve File.getAbsolutePath()".to_owned());
+            }
+
+            let path_obj = call_object_method(env, file_obj, get_abs);
+            if exception_check(env) != 0 || path_obj.is_null() {
+                if exception_check(env) != 0 {
+                    exception_describe(env);
+                    exception_clear(env);
+                }
+                delete_local_ref(env, file_class as _);
+                delete_local_ref(env, file_obj as _);
+                delete_local_ref(env, class as _);
+                return Err("Failed to call File.getAbsolutePath()".to_owned());
+            }
+
+            let path_chars = get_string_utf_chars(env, path_obj as _, std::ptr::null_mut());
+            if path_chars.is_null() {
+                delete_local_ref(env, path_obj as _);
+                delete_local_ref(env, file_class as _);
+                delete_local_ref(env, file_obj as _);
+                delete_local_ref(env, class as _);
+                return Err("Failed to read app files directory string".to_owned());
+            }
+
+            let path = std::ffi::CStr::from_ptr(path_chars)
+                .to_string_lossy()
+                .into_owned();
+
+            release_string_utf_chars(env, path_obj as _, path_chars);
+            delete_local_ref(env, path_obj as _);
+            delete_local_ref(env, file_class as _);
+            delete_local_ref(env, file_obj as _);
+            delete_local_ref(env, class as _);
+
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    #[cfg(target_os = "ios")]
     {
         if let Some(home) = std::env::var_os("HOME") {
-            return Ok(PathBuf::from(home).join(".local").join("share"));
+            return Ok(PathBuf::from(home).join("Documents"));
         }
-        Err("Could not resolve platform app data directory".to_owned())
+        if let Some(tmpdir) = std::env::var_os("TMPDIR") {
+            return Ok(PathBuf::from(tmpdir));
+        }
+        return Err("Could not resolve app data directory on iOS".to_owned());
     }
 }
 
