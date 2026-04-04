@@ -123,6 +123,15 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
+    /// Sizes the element to the largest box that fits its parent while preserving `aspect_ratio`.
+    #[inline]
+    pub fn contain(mut self, aspect_ratio: f32) -> Self {
+        self.inner.layout.sizing.width = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
+        self.inner.layout.sizing.height = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
+        self.inner.aspect_ratio = aspect_ratio;
+        self
+    }
+
     /// Configures overflow (clip and scroll) properties.
     #[inline]
     pub fn overflow(mut self, f: impl for<'a> FnOnce(&'a mut elements::OverflowBuilder) -> &'a mut elements::OverflowBuilder) -> Self {
