@@ -5415,6 +5415,21 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         Vector2::default()
     }
 
+    pub fn set_scroll_position(&mut self, id: Id, position: Vector2) {
+        for scd in &mut self.scroll_container_datas {
+            if scd.element_id == id.id {
+                let max_scroll_x = (scd.content_size.width - scd.bounding_box.width).max(0.0);
+                let max_scroll_y = (scd.content_size.height - scd.bounding_box.height).max(0.0);
+
+                let clamped_x = position.x.clamp(0.0, max_scroll_x);
+                let clamped_y = position.y.clamp(0.0, max_scroll_y);
+                scd.scroll_position.x = -clamped_x;
+                scd.scroll_position.y = -clamped_y;
+                return;
+            }
+        }
+    }
+
     const DEBUG_VIEW_WIDTH: f32 = 400.0;
     const DEBUG_VIEW_ROW_HEIGHT: f32 = 30.0;
     const DEBUG_VIEW_OUTER_PADDING: u16 = 10;
