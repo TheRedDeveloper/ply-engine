@@ -238,7 +238,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     /// ui.element()
     ///     .rotate_visual(|r| r
     ///         .degrees(15.0)
-    ///         .pivot(0.5, 0.5)
+    ///         .pivot((0.5, 0.5))
     ///         .flip_x()
     ///     )
     ///     .children(|ui| { /* ... */ });
@@ -1544,7 +1544,7 @@ mod tests {
             .floating(|f| f
                 .attach_root()
                 .anchor((crate::align::AlignX::CenterX, crate::align::AlignY::CenterY), (crate::align::AlignX::Left, crate::align::AlignY::Top))
-                .offset(100.0, 150.0)
+                .offset((100.0, 150.0))
                 .passthrough()
                 .z_index(110)
             )
@@ -1884,7 +1884,7 @@ mod tests {
             .width(fixed!(100.0)).height(fixed!(100.0))
             .background_color(0xFF0000)
             .shader(&test_shader, |s| { s.uniform("v", 1.0f32); })
-            .rotate_visual(|r| r.degrees(30.0).pivot(0.0, 0.0))
+            .rotate_visual(|r| r.degrees(30.0).pivot((0.0, 0.0)))
             .empty();
 
         let items = ui.eval();
@@ -2035,7 +2035,7 @@ mod tests {
             .background_color(0xFF0000)
             .rotate_visual(|r| r
                 .radians(std::f32::consts::FRAC_PI_2)
-                .pivot(0.25, 0.75)
+                .pivot((0.25, 0.75))
                 .flip_x()
                 .flip_y()
             )

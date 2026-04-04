@@ -17,6 +17,12 @@ impl From<(f32, f32)> for Vector2 {
     }
 }
 
+impl From<macroquad::prelude::Vec2> for Vector2 {
+    fn from(value: macroquad::prelude::Vec2) -> Self {
+        Self::new(value.x, value.y)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
 pub struct Dimensions {

@@ -47,8 +47,8 @@ pub struct FloatingBuilder {
 impl FloatingBuilder {
     /// Sets the floating element's offset.
     #[inline]
-    pub fn offset(&mut self, x: f32, y: f32) -> &mut Self {
-        self.config.offset = Vector2::new(x, y);
+    pub fn offset(&mut self, offset: impl Into<Vector2>) -> &mut Self {
+        self.config.offset = offset.into();
         self
     }
 
@@ -272,9 +272,10 @@ impl VisualRotationBuilder {
     /// Default is (0.5, 0.5) = center of the element.
     /// (0.0, 0.0) = top-left corner.
     #[inline]
-    pub fn pivot(&mut self, x: f32, y: f32) -> &mut Self {
-        self.config.pivot_x = x;
-        self.config.pivot_y = y;
+    pub fn pivot(&mut self, pivot: impl Into<Vector2>) -> &mut Self {
+        let pivot = pivot.into();
+        self.config.pivot_x = pivot.x;
+        self.config.pivot_y = pivot.y;
         self
     }
 
