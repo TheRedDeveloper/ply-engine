@@ -518,6 +518,11 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
         self.ply.context.pressed()
     }
 
+    /// Returns if the current element was released this frame.
+    pub fn just_released(&self) -> bool {
+        self.ply.context.just_released()
+    }
+
     /// Returns if the current element you are creating has focus.
     pub fn focused(&self) -> bool {
         self.ply.context.focused()
@@ -1031,6 +1036,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     /// Returns true if the given element is currently pressed.
     pub fn is_pressed(&self, id: impl Into<Id>) -> bool {
         self.context.is_element_pressed(id.into().id)
+    }
+
+    /// Returns true if the given element was released this frame.
+    pub fn is_just_released(&self, id: impl Into<Id>) -> bool {
+        self.context.is_element_just_released(id.into().id)
     }
 
     /// Returns the bounding box of the element with the given ID, if it exists.
@@ -2418,6 +2428,122 @@ mod tests {
                 .height(fixed!(100.0))
                 .children(|ui| {
                     assert!(ui.pressed(), "element should report as pressed");
+                });
+            ui.eval();
+        }
+    }
+
+    #[test]
+    fn test_just_released_query_one_frame() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        // Frame 1: layout
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Press + release between frames.
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
+
+        // Frame 2: just_released is true.
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(ui.just_released(), "element should report as just released");
+                    assert!(
+                        ui.is_just_released("btn"),
+                        "ID query should report just released"
+                    );
+                    assert!(!ui.pressed(), "element should no longer be pressed");
+                });
+            ui.eval();
+        }
+
+        // Frame 3: just_released is cleared.
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(!ui.just_released(), "just released should clear next frame");
+                    assert!(
+                        !ui.is_just_released("btn"),
+                        "ID query should clear next frame"
+                    );
+                });
+            ui.eval();
+        }
+    }
+
+    #[test]
+    fn test_keyboard_activation_marks_just_released() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        // Frame 1: layout
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Simulate keyboard activation press + release on focused element.
+        ply.set_focus("btn");
+        ply.context.handle_keyboard_activation(true, false);
+        assert!(ply.is_pressed("btn"), "keyboard press should set pressed state");
+
+        ply.context.handle_keyboard_activation(false, true);
+        assert!(
+            !ply.is_pressed("btn"),
+            "keyboard release should clear pressed state"
+        );
+
+        // Frame 2: just_released is true.
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(
+                        ui.just_released(),
+                        "keyboard release should mark just_released"
+                    );
+                    assert!(
+                        ui.is_just_released("btn"),
+                        "ID query should include keyboard release"
+                    );
+                });
+            ui.eval();
+        }
+
+        // Frame 3: just_released is cleared.
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(!ui.just_released());
+                    assert!(!ui.is_just_released("btn"));
                 });
             ui.eval();
         }

@@ -699,6 +699,8 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     open_clip_element_stack: Vec<i32>,
     pointer_over_ids: Vec<Id>,
     pressed_element_ids: Vec<Id>,
+    released_this_frame_ids: Vec<Id>,
+    released_this_frame_generation: u32,
     scroll_container_datas: Vec<ScrollContainerDataInternal>,
 
     // Accessibility / focus
@@ -1034,6 +1036,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             open_clip_element_stack: Vec::new(),
             pointer_over_ids: Vec::new(),
             pressed_element_ids: Vec::new(),
+            released_this_frame_ids: Vec::new(),
+            released_this_frame_generation: 0,
             scroll_container_datas: Vec::new(),
             focused_element_id: 0,
             focus_from_keyboard: false,
@@ -2202,6 +2206,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     pub fn begin_layout(&mut self) {
         self.initialize_ephemeral_memory();
         self.generation += 1;
+        if self.released_this_frame_generation != self.generation {
+            self.released_this_frame_ids.clear();
+        }
         self.dynamic_element_index = 0;
 
         // Evict stale text measurement cache entries
@@ -5360,6 +5367,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             PointerDataInteractionState::ReleasedThisFrame => {
                 // Fire on_release for all elements that were in the pressed chain
                 let pressed = std::mem::take(&mut self.pressed_element_ids);
+                self.track_just_released_ids(&pressed);
                 for eid in pressed.iter() {
                     if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
                         if let Some(ref mut callback) = item.on_release_fn {
@@ -5669,6 +5677,36 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.pointer_over_ids.iter().any(|eid| eid.id == elem_id)
     }
 
+    fn release_query_generation(&self) -> u32 {
+        if self.open_layout_element_stack.len() <= 1 {
+            self.generation.wrapping_add(1)
+        } else {
+            self.generation
+        }
+    }
+
+    fn track_just_released_ids(&mut self, ids: &[Id]) {
+        if ids.is_empty() {
+            return;
+        }
+
+        let target_generation = self.release_query_generation();
+        if self.released_this_frame_generation != target_generation {
+            self.released_this_frame_ids.clear();
+            self.released_this_frame_generation = target_generation;
+        }
+
+        for id in ids {
+            if !self
+                .released_this_frame_ids
+                .iter()
+                .any(|existing| existing.id == id.id)
+            {
+                self.released_this_frame_ids.push(id.clone());
+            }
+        }
+    }
+
     pub fn on_hover(&mut self, callback: Box<dyn FnMut(Id, PointerData)>) {
         let open_idx = self.get_open_layout_element();
         let elem_id = self.layout_elements[open_idx].id;
@@ -5681,6 +5719,18 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let open_idx = self.get_open_layout_element();
         let elem_id = self.layout_elements[open_idx].id;
         self.pressed_element_ids.iter().any(|eid| eid.id == elem_id)
+    }
+
+    pub fn just_released(&self) -> bool {
+        if self.released_this_frame_generation != self.generation {
+            return false;
+        }
+
+        let open_idx = self.get_open_layout_element();
+        let elem_id = self.layout_elements[open_idx].id;
+        self.released_this_frame_ids
+            .iter()
+            .any(|eid| eid.id == elem_id)
     }
 
     pub fn set_press_callbacks(
@@ -5889,6 +5939,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     /// Returns true if the given element ID is currently pressed.
     pub fn is_element_pressed(&self, element_id: u32) -> bool {
         self.pressed_element_ids.iter().any(|eid| eid.id == element_id)
+    }
+
+    /// Returns true if the given element ID was released this frame.
+    pub fn is_element_just_released(&self, element_id: u32) -> bool {
+        self.released_this_frame_generation == self.generation
+            && self
+                .released_this_frame_ids
+                .iter()
+                .any(|eid| eid.id == element_id)
     }
 
     /// Process a character input event for the focused text input.
@@ -6824,6 +6883,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
         if released {
             let pressed = std::mem::take(&mut self.pressed_element_ids);
+            self.track_just_released_ids(&pressed);
             for eid in pressed.iter() {
                 if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
                     if let Some(ref mut callback) = item.on_release_fn {
