@@ -22,6 +22,7 @@ a11y = ["dep:accesskit", "dep:accesskit_unix", "dep:accesskit_macos", "dep:acces
 net = ["dep:ureq", "dep:tokio", "dep:tokio-tungstenite", "dep:rustls", "dep:futures", "dep:sapp-jsutils"]
 net-json = ["net", "dep:serde", "dep:serde_json"]
 audio = ["macroquad/audio"]
+storage = ["dep:rfd", "dep:sapp-jsutils"]
 
 [dependencies]
 macroquad = { version = "0.4.14", package = "macroquad-ply" }
@@ -43,6 +44,8 @@ tokio = { version = "1", optional = true, default-features = false, features = [
 tokio-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["rustls-tls-webpki-roots", "handshake", "connect"] }
 rustls = { version = "0.23", optional = true, default-features = false }
 futures = { version = "0.3", optional = true, default-features = false }
+# Storage (native only)
+rfd = { version = "0.17.2", optional = true, default-features = false, features = ["xdg-portal"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sapp-jsutils = { version = "0.1", optional = true }

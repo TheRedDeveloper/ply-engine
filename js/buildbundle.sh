@@ -17,6 +17,7 @@ wrap_js .build/audio.js
 echo "" >> .build/bundle.js
 cat .build/sapp_jsutils.js >> .build/bundle.js
 wrap_js net.js
+wrap_js storage.js
 wrap_js ply_fixes.js
 wrap_js ply_accessibility.js
 

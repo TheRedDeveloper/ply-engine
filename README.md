@@ -70,6 +70,7 @@ Everything is an element. Builder pattern, closure-based children, one import. [
 | `shader-build`     | Shader compilation pipeline (SPIR-V Cross)        |
 | `net`              | HTTP and WebSocket                                |
 | `net-json`         | JSON deserialization for network responses        |
+| `storage`          | Cross-platform persistent file storage            |
 | `audio`            | Sound playback (WAV, OGG)                         |
 
 ## Examples

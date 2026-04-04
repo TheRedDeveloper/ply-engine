@@ -22,6 +22,8 @@ pub mod text_styling;
 pub mod built_in_shaders;
 #[cfg(feature = "net")]
 pub mod net;
+#[cfg(feature = "storage")]
+pub mod storage;
 pub mod prelude;
 
 use id::Id;

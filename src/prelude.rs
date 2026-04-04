@@ -45,6 +45,10 @@ pub use crate::net;
 #[cfg(feature = "net")]
 pub use crate::net::WsMessage;
 
+// Storage — feature-gated
+#[cfg(feature = "storage")]
+pub use crate::storage::Storage;
+
 // Text styling cursor utilities — feature-gated
 #[cfg(feature = "text-styling")]
 pub use crate::text_input::styling;
