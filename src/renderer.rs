@@ -852,7 +852,7 @@ fn flip_corner_radii(cr: &CornerRadii, flip_x: bool, flip_y: bool) -> CornerRadi
 }
 
 struct RenderState {
-    clip: Option<(i32, i32, i32, i32)>,
+    clip_stack: Vec<(i32, i32, i32, i32)>,
     /// Render target stack for group effects (shaders and/or visual rotation).
     rt_stack: Vec<(RenderTarget, Option<crate::shaders::ShaderConfig>, Option<crate::engine::VisualRotationConfig>, BoundingBox)>,
     #[cfg(feature = "text-styling")]
@@ -864,7 +864,7 @@ struct RenderState {
 impl RenderState {
     fn new() -> Self {
         Self {
-            clip: None,
+            clip_stack: Vec::new(),
             rt_stack: Vec::new(),
             #[cfg(feature = "text-styling")]
             style_stack: Vec::new(),
@@ -872,6 +872,23 @@ impl RenderState {
             total_char_index: 0,
         }
     }
+}
+
+fn intersect_scissor(
+    a: (i32, i32, i32, i32),
+    b: (i32, i32, i32, i32),
+) -> (i32, i32, i32, i32) {
+    let ax2 = a.0.saturating_add(a.2);
+    let ay2 = a.1.saturating_add(a.3);
+    let bx2 = b.0.saturating_add(b.2);
+    let by2 = b.1.saturating_add(b.3);
+
+    let x1 = a.0.max(b.0);
+    let y1 = a.1.max(b.1);
+    let x2 = ax2.min(bx2);
+    let y2 = ay2.min(by2);
+
+    (x1, y1, (x2 - x1).max(0), (y2 - y1).max(0))
 }
 
 /// Render custom content to a [`Texture2D`]
@@ -1568,6 +1585,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
 ) {
     let mut state = RenderState::new();
     for command in commands {
+        let current_clip = state.clip_stack.last().copied();
         match &command.config {
             RenderCommandConfig::Image(image) => {
                 let bb = command.bounding_box;
@@ -1600,11 +1618,11 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 tex.raw_miniquad_id(),
                                 bb.width, bb.height,
                                 cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right,
-                                state.clip
+                                current_clip
                             );
                             let texture = manager.get_or_create(key, || {
-                                let mut resized_image: Image = resize(tex, bb.height, bb.width, &state.clip).get_texture_data();
-                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                                let mut resized_image: Image = resize(tex, bb.height, bb.width, &current_clip).get_texture_data();
+                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &current_clip).get_texture_data();
                                 for i in 0..resized_image.bytes.len()/4 {
                                     let this_alpha = resized_image.bytes[i * 4 + 3] as f32 / 255.0;
                                     let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
@@ -1628,10 +1646,10 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                     ImageSource::TinyVg(tvg_image) => {
                         // Procedural TinyVG — rasterize every frame (no caching, content may change)
                         let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
-                        if let Some(tvg_rt) = render_tinyvg_image(tvg_image, bb.width, bb.height, &state.clip) {
+                        if let Some(tvg_rt) = render_tinyvg_image(tvg_image, bb.width, bb.height, &current_clip) {
                             let final_texture = if has_corner_radii {
                                 let mut tvg_img: Image = tvg_rt.texture.get_texture_data();
-                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &current_clip).get_texture_data();
                                 for i in 0..tvg_img.bytes.len()/4 {
                                     let this_alpha = tvg_img.bytes[i * 4 + 3] as f32 / 255.0;
                                     let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
@@ -1670,7 +1688,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 ga.get_name(),
                                 bb.width, bb.height,
                                 cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right,
-                                state.clip
+                                current_clip
                             );
                             let has_corner_radii = cr.top_left > 0.0 || cr.top_right > 0.0 || cr.bottom_left > 0.0 || cr.bottom_right > 0.0;
                             let texture = if !has_corner_radii {
@@ -1682,7 +1700,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                         GraphicAsset::Path(path) => {
                                             match load_file(resolve_asset_path(path)).await {
                                                 Ok(tvg_bytes) => {
-                                                    if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                    if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &current_clip) {
                                                         manager.cache(key.clone(), tvg_rt)
                                                     } else {
                                                         warn!("Failed to load TinyVG image: {}", path);
@@ -1696,7 +1714,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                             }
                                         }
                                         GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
-                                            if let Some(tvg_rt) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &state.clip) {
+                                            if let Some(tvg_rt) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &current_clip) {
                                                 manager.cache(key.clone(), tvg_rt)
                                             } else {
                                                 warn!("Failed to load TinyVG image: {}", file_name);
@@ -1711,7 +1729,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                     ga.get_name(),
                                     bb.width, bb.height,
                                     0.0, 0.0, 0.0, 0.0,
-                                    state.clip
+                                    current_clip
                                 );
                                 let base_texture = if let Some(cached) = manager.get(&zerocr_key) {
                                     cached
@@ -1720,7 +1738,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                         GraphicAsset::Path(path) => {
                                             match load_file(resolve_asset_path(path)).await {
                                                 Ok(tvg_bytes) => {
-                                                    if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &state.clip) {
+                                                    if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &current_clip) {
                                                         manager.cache(zerocr_key.clone(), tvg_rt)
                                                     } else {
                                                         warn!("Failed to load TinyVG image: {}", path);
@@ -1734,7 +1752,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                             }
                                         }
                                         GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
-                                            if let Some(tvg_rt) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &state.clip) {
+                                            if let Some(tvg_rt) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &current_clip) {
                                                 manager.cache(zerocr_key.clone(), tvg_rt)
                                             } else {
                                                 warn!("Failed to load TinyVG image: {}", file_name);
@@ -1745,7 +1763,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 }.clone();
                                 manager.get_or_create(key, || {
                                     let mut tvg_image: Image = base_texture.get_texture_data();
-                                    let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                                    let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &current_clip).get_texture_data();
                                     for i in 0..tvg_image.bytes.len()/4 {
                                         let this_alpha = tvg_image.bytes[i * 4 + 3] as f32 / 255.0;
                                         let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
@@ -1801,11 +1819,11 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 ga.get_name(),
                                 bb.width, bb.height,
                                 cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right,
-                                state.clip
+                                current_clip
                             );
                             let texture = manager.get_or_create(key, || {
-                                let mut resized_image: Image = resize(&source_texture, bb.height, bb.width, &state.clip).get_texture_data();
-                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &state.clip).get_texture_data();
+                                let mut resized_image: Image = resize(&source_texture, bb.height, bb.width, &current_clip).get_texture_data();
+                                let rounded_rect: Image = rounded_rectangle_texture(cr, &bb, &current_clip).get_texture_data();
                                 for i in 0..resized_image.bytes.len()/4 {
                                     let this_alpha = resized_image.bytes[i * 4 + 3] as f32 / 255.0;
                                     let mask_alpha = rounded_rect.bytes[i * 4 + 3] as f32 / 255.0;
@@ -2331,20 +2349,28 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 // in physical (framebuffer) pixels.  Scale by DPI so the
                 // scissor rectangle matches on high-DPI displays (e.g. WASM).
                 let dpi = miniquad::window::dpi_scale();
-                state.clip = Some((
+                let next_clip = (
                     (bb.x * dpi) as i32,
                     (bb.y * dpi) as i32,
                     (bb.width * dpi) as i32,
                     (bb.height * dpi) as i32,
-                ));
+                );
+
+                let effective_clip = if let Some(parent_clip) = state.clip_stack.last().copied() {
+                    intersect_scissor(parent_clip, next_clip)
+                } else {
+                    next_clip
+                };
+
+                state.clip_stack.push(effective_clip);
                 unsafe {
-                    get_internal_gl().quad_gl.scissor(state.clip);
+                    get_internal_gl().quad_gl.scissor(state.clip_stack.last().copied());
                 }
             }
             RenderCommandConfig::ScissorEnd() => {
-                state.clip = None;
+                state.clip_stack.pop();
                 unsafe {
-                    get_internal_gl().quad_gl.scissor(None);
+                    get_internal_gl().quad_gl.scissor(state.clip_stack.last().copied());
                 }
             }
             RenderCommandConfig::Custom(_) => {

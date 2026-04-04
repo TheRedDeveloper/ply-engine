@@ -3838,23 +3838,21 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             | ElementConfigType::Floating
                             | ElementConfigType::Border => {}
                             ElementConfigType::Clip => {
-                                if should_render {
-                                    let clip = &self.clip_element_configs[config.config_index];
-                                    self.add_render_command(InternalRenderCommand {
-                                        bounding_box: current_bbox,
-                                        command_type: RenderCommandType::ScissorStart,
-                                        render_data: InternalRenderData::Clip {
-                                            horizontal: clip.horizontal,
-                                            vertical: clip.vertical,
-                                        },
-                                        user_data: 0,
-                                        id: elem_id,
-                                        z_index: root.z_index,
-                                        visual_rotation: None,
-                                        shape_rotation: None,
-                                        effects: Vec::new(),
-                                    });
-                                }
+                                let clip = &self.clip_element_configs[config.config_index];
+                                self.add_render_command(InternalRenderCommand {
+                                    bounding_box: current_bbox,
+                                    command_type: RenderCommandType::ScissorStart,
+                                    render_data: InternalRenderData::Clip {
+                                        horizontal: clip.horizontal,
+                                        vertical: clip.vertical,
+                                    },
+                                    user_data: 0,
+                                    id: elem_id,
+                                    z_index: root.z_index,
+                                    visual_rotation: None,
+                                    shape_rotation: None,
+                                    effects: Vec::new(),
+                                });
                             }
                             ElementConfigType::Image => {
                                 if should_render {
@@ -4625,7 +4623,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                     }
 
-                    // Generate border render commands
                     if self.element_has_config(current_elem_idx, ElementConfigType::Border) {
                         let border_elem_id = self.layout_elements[current_elem_idx].id;
                         if let Some(border_bbox) = self.layout_element_map.get(&border_elem_id).map(|item| item.bounding_box) {
@@ -4648,26 +4645,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                                 let children_count =
                                     self.layout_elements[current_elem_idx].children_length;
-                                self.add_render_command(InternalRenderCommand {
-                                    bounding_box: bbox,
-                                    command_type: RenderCommandType::Border,
-                                    render_data: InternalRenderData::Border {
-                                        color: border_config.color,
-                                        corner_radius: shared.corner_radius,
-                                        width: border_config.width,
-                                        position: border_config.position,
-                                    },
-                                    user_data: shared.user_data,
-                                    id: hash_number(
-                                        self.layout_elements[current_elem_idx].id,
-                                        children_count as u32,
-                                    )
-                                    .id,
-                                    z_index: root.z_index,
-                                    visual_rotation: None,
-                                    shape_rotation: None,
-                                    effects: Vec::new(),
-                                });
 
                                 // between-children borders
                                 if border_config.width.between_children > 0
@@ -4816,6 +4793,52 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             .id,
                             ..Default::default()
                         });
+                    }
+
+                    if self.element_has_config(current_elem_idx, ElementConfigType::Border) {
+                        let border_elem_id = self.layout_elements[current_elem_idx].id;
+                        if let Some(border_bbox) = self.layout_element_map.get(&border_elem_id).map(|item| item.bounding_box) {
+                            let bbox = border_bbox;
+                            if !self.element_is_offscreen(&bbox) {
+                                let shared = self
+                                    .find_element_config_index(
+                                        current_elem_idx,
+                                        ElementConfigType::Shared,
+                                    )
+                                    .map(|idx| self.shared_element_configs[idx])
+                                    .unwrap_or_default();
+                                let border_cfg_idx = self
+                                    .find_element_config_index(
+                                        current_elem_idx,
+                                        ElementConfigType::Border,
+                                    )
+                                    .unwrap();
+                                let border_config = self.border_element_configs[border_cfg_idx];
+
+                                let children_count =
+                                    self.layout_elements[current_elem_idx].children_length;
+                                self.add_render_command(InternalRenderCommand {
+                                    bounding_box: bbox,
+                                    command_type: RenderCommandType::Border,
+                                    render_data: InternalRenderData::Border {
+                                        color: border_config.color,
+                                        corner_radius: shared.corner_radius,
+                                        width: border_config.width,
+                                        position: border_config.position,
+                                    },
+                                    user_data: shared.user_data,
+                                    id: hash_number(
+                                        self.layout_elements[current_elem_idx].id,
+                                        children_count as u32,
+                                    )
+                                    .id,
+                                    z_index: root.z_index,
+                                    visual_rotation: None,
+                                    shape_rotation: None,
+                                    effects: Vec::new(),
+                                });
+                            }
+                        }
                     }
 
                     // Emit GroupEnd commands AFTER border and scissor (innermost first, outermost last)
