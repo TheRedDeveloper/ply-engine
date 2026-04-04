@@ -218,6 +218,20 @@ impl LayoutBuilder {
         self
     }
 
+    /// Enables child wrapping to the cross axis when children exceed available space on the main axis.
+    #[inline]
+    pub fn wrap(&mut self) -> &mut Self {
+        self.config.wrap = true;
+        self
+    }
+
+    /// Sets spacing between wrapped lines (or columns, depending on direction).
+    #[inline]
+    pub fn wrap_gap(&mut self, gap: u16) -> &mut Self {
+        self.config.wrap_gap = gap;
+        self
+    }
+
     /// Sets padding values for the layout.
     #[inline]
     pub fn padding(&mut self, padding: impl Into<Padding>) -> &mut Self {

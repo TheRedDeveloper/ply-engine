@@ -152,6 +152,8 @@ pub struct LayoutConfig {
     pub sizing: SizingConfig,
     pub padding: PaddingConfig,
     pub child_gap: u16,
+    pub wrap: bool,
+    pub wrap_gap: u16,
     pub child_alignment: ChildAlignmentConfig,
     pub layout_direction: LayoutDirection,
 }
@@ -852,6 +854,14 @@ struct ScrollbarAxisGeometry {
     thumb_bbox: BoundingBox,
     max_scroll: f32,
     thumb_travel: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct WrappedLayoutLine {
+    start_child_offset: usize,
+    end_child_offset: usize,
+    main_size: f32,
+    cross_size: f32,
 }
 
 fn scrollbar_visibility_alpha(config: ScrollbarConfig, idle_frames: u32) -> f32 {
@@ -2303,6 +2313,167 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.text_input_element_ids.clear();
     }
 
+    fn child_size_on_axis(&self, child_index: usize, x_axis: bool) -> f32 {
+        if x_axis {
+            self.layout_elements[child_index].dimensions.width
+        } else {
+            self.layout_elements[child_index].dimensions.height
+        }
+    }
+
+    fn child_sizing_on_axis(&self, child_index: usize, x_axis: bool) -> SizingAxis {
+        let child_layout_idx = self.layout_elements[child_index].layout_config_index;
+        if x_axis {
+            self.layout_configs[child_layout_idx].sizing.width
+        } else {
+            self.layout_configs[child_layout_idx].sizing.height
+        }
+    }
+
+    fn child_wrap_break_main_size(&self, child_index: usize, main_axis_x: bool) -> f32 {
+        let child_sizing = self.child_sizing_on_axis(child_index, main_axis_x);
+        match child_sizing.type_ {
+            SizingType::Grow => child_sizing.min_max.min,
+            SizingType::Percent | SizingType::Fixed | SizingType::Fit => {
+                self.child_size_on_axis(child_index, main_axis_x)
+            }
+        }
+    }
+
+    fn build_wrapped_line(
+        &self,
+        parent_index: usize,
+        start_child_offset: usize,
+        end_child_offset: usize,
+        main_axis_x: bool,
+    ) -> WrappedLayoutLine {
+        let layout_idx = self.layout_elements[parent_index].layout_config_index;
+        let layout = self.layout_configs[layout_idx];
+        let children_start = self.layout_elements[parent_index].children_start;
+
+        let mut main_size = 0.0;
+        let mut cross_size = 0.0;
+
+        for child_offset in start_child_offset..end_child_offset {
+            let child_index = self.layout_element_children[children_start + child_offset] as usize;
+            if child_offset > start_child_offset {
+                main_size += layout.child_gap as f32;
+            }
+
+            let child_main = self.child_size_on_axis(child_index, main_axis_x);
+            let child_cross = self.child_size_on_axis(child_index, !main_axis_x);
+            main_size += child_main;
+            cross_size = f32::max(cross_size, child_cross);
+        }
+
+        WrappedLayoutLine {
+            start_child_offset,
+            end_child_offset,
+            main_size,
+            cross_size,
+        }
+    }
+
+    fn compute_wrapped_lines(
+        &self,
+        parent_index: usize,
+        main_axis_x: bool,
+    ) -> Vec<WrappedLayoutLine> {
+        let layout_idx = self.layout_elements[parent_index].layout_config_index;
+        let layout = self.layout_configs[layout_idx];
+
+        let children_length = self.layout_elements[parent_index].children_length as usize;
+        if children_length == 0 {
+            return Vec::new();
+        }
+
+        let parent_main_size = if main_axis_x {
+            self.layout_elements[parent_index].dimensions.width
+        } else {
+            self.layout_elements[parent_index].dimensions.height
+        };
+        let main_padding = if main_axis_x {
+            (layout.padding.left + layout.padding.right) as f32
+        } else {
+            (layout.padding.top + layout.padding.bottom) as f32
+        };
+        let available_main = (parent_main_size - main_padding).max(0.0);
+
+        if !layout.wrap {
+            return vec![self.build_wrapped_line(
+                parent_index,
+                0,
+                children_length,
+                main_axis_x,
+            )];
+        }
+
+        let children_start = self.layout_elements[parent_index].children_start;
+        let mut lines = Vec::new();
+        let mut line_start = 0usize;
+        let mut line_break_main = 0.0;
+
+        for child_offset in 0..children_length {
+            let child_index = self.layout_element_children[children_start + child_offset] as usize;
+            let break_size = self.child_wrap_break_main_size(child_index, main_axis_x);
+
+            let additional = if child_offset == line_start {
+                break_size
+            } else {
+                layout.child_gap as f32 + break_size
+            };
+
+            if child_offset > line_start && line_break_main + additional > available_main + EPSILON {
+                lines.push(self.build_wrapped_line(
+                    parent_index,
+                    line_start,
+                    child_offset,
+                    main_axis_x,
+                ));
+                line_start = child_offset;
+                line_break_main = break_size;
+            } else {
+                line_break_main += additional;
+            }
+        }
+
+        lines.push(self.build_wrapped_line(
+            parent_index,
+            line_start,
+            children_length,
+            main_axis_x,
+        ));
+
+        lines
+    }
+
+    fn wrapped_content_dimensions(
+        &self,
+        parent_index: usize,
+        main_axis_x: bool,
+        lines: &[WrappedLayoutLine],
+    ) -> Dimensions {
+        let layout_idx = self.layout_elements[parent_index].layout_config_index;
+        let layout = self.layout_configs[layout_idx];
+
+        let lr_padding = (layout.padding.left + layout.padding.right) as f32;
+        let tb_padding = (layout.padding.top + layout.padding.bottom) as f32;
+
+        if lines.is_empty() {
+            return Dimensions::new(lr_padding, tb_padding);
+        }
+
+        let wrap_gap_total = lines.len().saturating_sub(1) as f32 * layout.wrap_gap as f32;
+        let max_main = lines.iter().fold(0.0_f32, |acc, line| acc.max(line.main_size));
+        let total_cross = lines.iter().map(|line| line.cross_size).sum::<f32>() + wrap_gap_total;
+
+        if main_axis_x {
+            Dimensions::new(max_main + lr_padding, total_cross + tb_padding)
+        } else {
+            Dimensions::new(total_cross + lr_padding, max_main + tb_padding)
+        }
+    }
+
     fn size_containers_along_axis(&mut self, x_axis: bool) {
         let mut bfs_buffer: Vec<i32> = Vec::new();
         let mut resizable_container_buffer: Vec<i32> = Vec::new();
@@ -2508,7 +2679,334 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     }
                 }
 
-                if sizing_along_axis {
+                if sizing_along_axis && parent_config.wrap {
+                    let parent_clips = if let Some(clip_idx) = self
+                        .find_element_config_index(parent_index, ElementConfigType::Clip)
+                    {
+                        let clip = &self.clip_element_configs[clip_idx];
+                        (x_axis && clip.horizontal) || (!x_axis && clip.vertical)
+                    } else {
+                        false
+                    };
+
+                    let wrapped_lines = self.compute_wrapped_lines(parent_index, x_axis);
+
+                    for line in wrapped_lines {
+                        if line.end_child_offset <= line.start_child_offset {
+                            continue;
+                        }
+
+                        let mut line_children: Vec<usize> = Vec::new();
+                        for child_offset in line.start_child_offset..line.end_child_offset {
+                            let child_element_index =
+                                self.layout_element_children[children_start + child_offset] as usize;
+                            line_children.push(child_element_index);
+                        }
+
+                        let mut line_inner_content_size: f32 = 0.0;
+                        let mut line_resizable_buffer: Vec<i32> = Vec::new();
+                        let mut single_line_grow_candidate: Option<Option<usize>> = None;
+
+                        for line_child_offset in 0..line_children.len() {
+                            let child_idx = line_children[line_child_offset];
+                            let child_layout_idx = self.layout_elements[child_idx].layout_config_index;
+                            let child_sizing = if x_axis {
+                                self.layout_configs[child_layout_idx].sizing.width
+                            } else {
+                                self.layout_configs[child_layout_idx].sizing.height
+                            };
+                            let child_size = if x_axis {
+                                self.layout_elements[child_idx].dimensions.width
+                            } else {
+                                self.layout_elements[child_idx].dimensions.height
+                            };
+
+                            if line_child_offset > 0 {
+                                line_inner_content_size += parent_child_gap;
+                            }
+                            line_inner_content_size += child_size;
+
+                            let is_text_element =
+                                self.element_has_config(child_idx, ElementConfigType::Text);
+                            let is_wrapping_text = if is_text_element {
+                                if let Some(text_cfg_idx) = self
+                                    .find_element_config_index(child_idx, ElementConfigType::Text)
+                                {
+                                    self.text_element_configs[text_cfg_idx].wrap_mode
+                                        == WrapMode::Words
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+
+                            if child_sizing.type_ != SizingType::Percent
+                                && child_sizing.type_ != SizingType::Fixed
+                                && (!is_text_element || is_wrapping_text)
+                            {
+                                line_resizable_buffer.push(child_idx as i32);
+
+                                if child_sizing.type_ == SizingType::Grow
+                                    && child_sizing.grow_weight > 0.0
+                                {
+                                    single_line_grow_candidate = match single_line_grow_candidate {
+                                        None => Some(Some(child_idx)),
+                                        Some(Some(_)) | Some(None) => Some(None),
+                                    };
+                                }
+                            }
+                        }
+
+                        let size_to_distribute =
+                            parent_size - parent_padding - line_inner_content_size;
+
+                        if size_to_distribute < 0.0 {
+                            if parent_clips {
+                                continue;
+                            }
+
+                            let mut distribute = size_to_distribute;
+                            while distribute < -EPSILON && !line_resizable_buffer.is_empty() {
+                                let mut largest: f32 = 0.0;
+                                let mut second_largest: f32 = 0.0;
+                                let mut width_to_add = distribute;
+
+                                for &child_idx in &line_resizable_buffer {
+                                    let cs = if x_axis {
+                                        self.layout_elements[child_idx as usize].dimensions.width
+                                    } else {
+                                        self.layout_elements[child_idx as usize].dimensions.height
+                                    };
+                                    if float_equal(cs, largest) {
+                                        continue;
+                                    }
+                                    if cs > largest {
+                                        second_largest = largest;
+                                        largest = cs;
+                                    }
+                                    if cs < largest {
+                                        second_largest = f32::max(second_largest, cs);
+                                        width_to_add = second_largest - largest;
+                                    }
+                                }
+
+                                width_to_add = f32::max(
+                                    width_to_add,
+                                    distribute / line_resizable_buffer.len() as f32,
+                                );
+
+                                let mut j = 0;
+                                while j < line_resizable_buffer.len() {
+                                    let child_idx = line_resizable_buffer[j] as usize;
+                                    let current_size = if x_axis {
+                                        self.layout_elements[child_idx].dimensions.width
+                                    } else {
+                                        self.layout_elements[child_idx].dimensions.height
+                                    };
+                                    let min_size = if x_axis {
+                                        self.layout_elements[child_idx].min_dimensions.width
+                                    } else {
+                                        self.layout_elements[child_idx].min_dimensions.height
+                                    };
+
+                                    if float_equal(current_size, largest) {
+                                        let new_size = current_size + width_to_add;
+                                        if new_size <= min_size {
+                                            if x_axis {
+                                                self.layout_elements[child_idx].dimensions.width =
+                                                    min_size;
+                                            } else {
+                                                self.layout_elements[child_idx].dimensions.height =
+                                                    min_size;
+                                            }
+                                            distribute -= min_size - current_size;
+                                            line_resizable_buffer.swap_remove(j);
+                                            continue;
+                                        }
+
+                                        if x_axis {
+                                            self.layout_elements[child_idx].dimensions.width =
+                                                new_size;
+                                        } else {
+                                            self.layout_elements[child_idx].dimensions.height =
+                                                new_size;
+                                        }
+                                        distribute -= new_size - current_size;
+                                    }
+
+                                    j += 1;
+                                }
+                            }
+                        } else if size_to_distribute > 0.0 {
+                            if let Some(Some(single_line_grow_child_idx)) =
+                                single_line_grow_candidate
+                            {
+                                let child_layout_idx =
+                                    self.layout_elements[single_line_grow_child_idx]
+                                        .layout_config_index;
+                                let child_max_size = if x_axis {
+                                    self.layout_configs[child_layout_idx].sizing.width.min_max.max
+                                } else {
+                                    self.layout_configs[child_layout_idx]
+                                        .sizing
+                                        .height
+                                        .min_max
+                                        .max
+                                };
+
+                                let child_size_ref = if x_axis {
+                                    &mut self.layout_elements[single_line_grow_child_idx]
+                                        .dimensions
+                                        .width
+                                } else {
+                                    &mut self.layout_elements[single_line_grow_child_idx]
+                                        .dimensions
+                                        .height
+                                };
+
+                                *child_size_ref =
+                                    f32::min(*child_size_ref + size_to_distribute, child_max_size);
+                            } else {
+                                let mut j = 0;
+                                while j < line_resizable_buffer.len() {
+                                    let child_idx = line_resizable_buffer[j] as usize;
+                                    let child_layout_idx =
+                                        self.layout_elements[child_idx].layout_config_index;
+                                    let child_sizing = if x_axis {
+                                        self.layout_configs[child_layout_idx].sizing.width
+                                    } else {
+                                        self.layout_configs[child_layout_idx].sizing.height
+                                    };
+                                    if child_sizing.type_ != SizingType::Grow
+                                        || child_sizing.grow_weight <= 0.0
+                                    {
+                                        line_resizable_buffer.swap_remove(j);
+                                    } else {
+                                        j += 1;
+                                    }
+                                }
+
+                                let mut distribute = size_to_distribute;
+                                while distribute > EPSILON && !line_resizable_buffer.is_empty() {
+                                    let mut total_weight = 0.0;
+                                    let mut smallest_ratio = MAXFLOAT;
+                                    let mut second_smallest_ratio = MAXFLOAT;
+
+                                    for &child_idx in &line_resizable_buffer {
+                                        let child_layout_idx =
+                                            self.layout_elements[child_idx as usize]
+                                                .layout_config_index;
+                                        let child_sizing = if x_axis {
+                                            self.layout_configs[child_layout_idx].sizing.width
+                                        } else {
+                                            self.layout_configs[child_layout_idx].sizing.height
+                                        };
+
+                                        total_weight += child_sizing.grow_weight;
+
+                                        let child_size = if x_axis {
+                                            self.layout_elements[child_idx as usize].dimensions.width
+                                        } else {
+                                            self.layout_elements[child_idx as usize].dimensions.height
+                                        };
+                                        let child_ratio = child_size / child_sizing.grow_weight;
+
+                                        if float_equal(child_ratio, smallest_ratio) {
+                                            continue;
+                                        }
+                                        if child_ratio < smallest_ratio {
+                                            second_smallest_ratio = smallest_ratio;
+                                            smallest_ratio = child_ratio;
+                                        } else if child_ratio > smallest_ratio {
+                                            second_smallest_ratio =
+                                                f32::min(second_smallest_ratio, child_ratio);
+                                        }
+                                    }
+
+                                    if total_weight <= 0.0 {
+                                        break;
+                                    }
+
+                                    let per_weight_growth = distribute / total_weight;
+                                    let ratio_step_cap = if second_smallest_ratio == MAXFLOAT {
+                                        MAXFLOAT
+                                    } else {
+                                        second_smallest_ratio - smallest_ratio
+                                    };
+
+                                    let mut resized_any = false;
+
+                                    let mut j = 0;
+                                    while j < line_resizable_buffer.len() {
+                                        let child_idx = line_resizable_buffer[j] as usize;
+                                        let child_layout_idx =
+                                            self.layout_elements[child_idx].layout_config_index;
+                                        let child_sizing = if x_axis {
+                                            self.layout_configs[child_layout_idx].sizing.width
+                                        } else {
+                                            self.layout_configs[child_layout_idx].sizing.height
+                                        };
+
+                                        let child_size_ref = if x_axis {
+                                            &mut self.layout_elements[child_idx].dimensions.width
+                                        } else {
+                                            &mut self.layout_elements[child_idx].dimensions.height
+                                        };
+
+                                        let child_ratio =
+                                            *child_size_ref / child_sizing.grow_weight;
+                                        if !float_equal(child_ratio, smallest_ratio) {
+                                            j += 1;
+                                            continue;
+                                        }
+
+                                        let max_size = if x_axis {
+                                            self.layout_configs[child_layout_idx]
+                                                .sizing
+                                                .width
+                                                .min_max
+                                                .max
+                                        } else {
+                                            self.layout_configs[child_layout_idx]
+                                                .sizing
+                                                .height
+                                                .min_max
+                                                .max
+                                        };
+
+                                        let mut growth_share =
+                                            per_weight_growth * child_sizing.grow_weight;
+                                        if ratio_step_cap != MAXFLOAT {
+                                            growth_share = f32::min(
+                                                growth_share,
+                                                ratio_step_cap * child_sizing.grow_weight,
+                                            );
+                                        }
+
+                                        let previous = *child_size_ref;
+                                        let proposed = previous + growth_share;
+                                        if proposed >= max_size {
+                                            *child_size_ref = max_size;
+                                            resized_any = true;
+                                            line_resizable_buffer.swap_remove(j);
+                                            continue;
+                                        }
+
+                                        *child_size_ref = proposed;
+                                        distribute -= *child_size_ref - previous;
+                                        resized_any = true;
+                                        j += 1;
+                                    }
+
+                                    if !resized_any {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if sizing_along_axis {
                     let size_to_distribute = parent_size - parent_padding - inner_content_size;
 
                     if size_to_distribute < 0.0 {
@@ -3011,21 +3509,66 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             let children_length = self.layout_elements[current_elem_idx].children_length;
 
             if layout_config.layout_direction == LayoutDirection::LeftToRight {
-                for j in 0..children_length as usize {
-                    let child_idx =
-                        self.layout_element_children[children_start + j] as usize;
-                    let child_height_with_padding = f32::max(
-                        self.layout_elements[child_idx].dimensions.height
-                            + layout_config.padding.top as f32
-                            + layout_config.padding.bottom as f32,
-                        self.layout_elements[current_elem_idx].dimensions.height,
-                    );
+                if layout_config.wrap {
+                    let lines = self.compute_wrapped_lines(current_elem_idx, true);
+                    let mut content_height =
+                        layout_config.padding.top as f32 + layout_config.padding.bottom as f32;
+                    if !lines.is_empty() {
+                        content_height +=
+                            lines.iter().map(|line| line.cross_size).sum::<f32>();
+                        content_height +=
+                            lines.len().saturating_sub(1) as f32 * layout_config.wrap_gap as f32;
+                    }
                     self.layout_elements[current_elem_idx].dimensions.height = f32::min(
-                        f32::max(
-                            child_height_with_padding,
-                            layout_config.sizing.height.min_max.min,
-                        ),
+                        f32::max(content_height, layout_config.sizing.height.min_max.min),
                         layout_config.sizing.height.min_max.max,
+                    );
+                } else {
+                    for j in 0..children_length as usize {
+                        let child_idx =
+                            self.layout_element_children[children_start + j] as usize;
+                        let child_height_with_padding = f32::max(
+                            self.layout_elements[child_idx].dimensions.height
+                                + layout_config.padding.top as f32
+                                + layout_config.padding.bottom as f32,
+                            self.layout_elements[current_elem_idx].dimensions.height,
+                        );
+                        self.layout_elements[current_elem_idx].dimensions.height = f32::min(
+                            f32::max(
+                                child_height_with_padding,
+                                layout_config.sizing.height.min_max.min,
+                            ),
+                            layout_config.sizing.height.min_max.max,
+                        );
+                    }
+                }
+            } else if layout_config.wrap {
+                let lines = self.compute_wrapped_lines(current_elem_idx, false);
+
+                let max_column_height = lines
+                    .iter()
+                    .fold(0.0_f32, |acc, line| acc.max(line.main_size));
+                let content_height = layout_config.padding.top as f32
+                    + layout_config.padding.bottom as f32
+                    + max_column_height;
+
+                self.layout_elements[current_elem_idx].dimensions.height = f32::min(
+                    f32::max(content_height, layout_config.sizing.height.min_max.min),
+                    layout_config.sizing.height.min_max.max,
+                );
+
+                if layout_config.sizing.width.type_ != SizingType::Percent {
+                    let mut content_width =
+                        layout_config.padding.left as f32 + layout_config.padding.right as f32;
+                    if !lines.is_empty() {
+                        content_width += lines.iter().map(|line| line.cross_size).sum::<f32>();
+                        content_width +=
+                            lines.len().saturating_sub(1) as f32 * layout_config.wrap_gap as f32;
+                    }
+
+                    self.layout_elements[current_elem_idx].dimensions.width = f32::min(
+                        f32::max(content_width, layout_config.sizing.width.min_max.min),
+                        layout_config.sizing.width.min_max.max,
                     );
                 }
             } else {
@@ -3881,19 +4424,72 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.layout_elements[current_elem_idx].children_length as usize;
 
                         if layout_config.layout_direction == LayoutDirection::LeftToRight {
-                            let mut content_width: f32 = 0.0;
-                            for ci in 0..children_length {
-                                let child_idx =
-                                    self.layout_element_children[children_start + ci] as usize;
-                                content_width +=
-                                    self.layout_elements[child_idx].dimensions.width;
+                            if layout_config.wrap {
+                                let lines = self.compute_wrapped_lines(current_elem_idx, true);
+                                let content_height = if lines.is_empty() {
+                                    0.0
+                                } else {
+                                    lines.iter().map(|line| line.cross_size).sum::<f32>()
+                                        + lines.len().saturating_sub(1) as f32
+                                            * layout_config.wrap_gap as f32
+                                };
+
+                                let mut extra_space = self.layout_elements[current_elem_idx]
+                                    .dimensions
+                                    .height
+                                    - (layout_config.padding.top + layout_config.padding.bottom)
+                                        as f32
+                                    - content_height;
+                                if _scroll_container_data_idx.is_some() {
+                                    extra_space = extra_space.max(0.0);
+                                }
+                                match layout_config.child_alignment.y {
+                                    AlignY::Top => extra_space = 0.0,
+                                    AlignY::CenterY => extra_space /= 2.0,
+                                    AlignY::Bottom => {}
+                                }
+                                dfs_buffer[buf_idx].next_child_offset.y += extra_space;
+                            } else {
+                                let mut content_width: f32 = 0.0;
+                                for ci in 0..children_length {
+                                    let child_idx =
+                                        self.layout_element_children[children_start + ci] as usize;
+                                    content_width +=
+                                        self.layout_elements[child_idx].dimensions.width;
+                                }
+                                content_width += children_length.saturating_sub(1) as f32
+                                    * layout_config.child_gap as f32;
+                                let mut extra_space = self.layout_elements[current_elem_idx]
+                                    .dimensions
+                                    .width
+                                    - (layout_config.padding.left + layout_config.padding.right)
+                                        as f32
+                                    - content_width;
+                                if _scroll_container_data_idx.is_some() {
+                                    extra_space = extra_space.max(0.0);
+                                }
+                                match layout_config.child_alignment.x {
+                                    AlignX::Left => extra_space = 0.0,
+                                    AlignX::CenterX => extra_space /= 2.0,
+                                    AlignX::Right => {}
+                                }
+                                dfs_buffer[buf_idx].next_child_offset.x += extra_space;
                             }
-                            content_width += children_length.saturating_sub(1) as f32
-                                * layout_config.child_gap as f32;
+                        } else if layout_config.wrap {
+                            let lines = self.compute_wrapped_lines(current_elem_idx, false);
+                            let content_width = if lines.is_empty() {
+                                0.0
+                            } else {
+                                lines.iter().map(|line| line.cross_size).sum::<f32>()
+                                    + lines.len().saturating_sub(1) as f32
+                                        * layout_config.wrap_gap as f32
+                            };
+
                             let mut extra_space = self.layout_elements[current_elem_idx]
                                 .dimensions
                                 .width
-                                - (layout_config.padding.left + layout_config.padding.right) as f32
+                                - (layout_config.padding.left + layout_config.padding.right)
+                                    as f32
                                 - content_width;
                             if _scroll_container_data_idx.is_some() {
                                 extra_space = extra_space.max(0.0);
@@ -3901,7 +4497,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             match layout_config.child_alignment.x {
                                 AlignX::Left => extra_space = 0.0,
                                 AlignX::CenterX => extra_space /= 2.0,
-                                _ => {} // Right - keep full extra_space
+                                AlignX::Right => {}
                             }
                             dfs_buffer[buf_idx].next_child_offset.x += extra_space;
                         } else {
@@ -3925,52 +4521,81 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             match layout_config.child_alignment.y {
                                 AlignY::Top => extra_space = 0.0,
                                 AlignY::CenterY => extra_space /= 2.0,
-                                _ => {}
+                                AlignY::Bottom => {}
                             }
                             dfs_buffer[buf_idx].next_child_offset.y += extra_space;
                         }
 
                         // Update scroll container content size
                         if let Some(si) = _scroll_container_data_idx {
-                            let child_gap_total = children_length.saturating_sub(1) as f32
-                                * layout_config.child_gap as f32;
-                            let lr_padding = (layout_config.padding.left + layout_config.padding.right) as f32;
-                            let tb_padding = (layout_config.padding.top + layout_config.padding.bottom) as f32;
-
-                            let (content_w, content_h) = if layout_config.layout_direction == LayoutDirection::LeftToRight {
-                                // LeftToRight: width = sum of children + gap, height = max of children
-                                let w: f32 = (0..children_length)
-                                    .map(|ci| {
-                                        let idx = self.layout_element_children[children_start + ci] as usize;
-                                        self.layout_elements[idx].dimensions.width
-                                    })
-                                    .sum::<f32>()
-                                    + lr_padding + child_gap_total;
-                                let h: f32 = (0..children_length)
-                                    .map(|ci| {
-                                        let idx = self.layout_element_children[children_start + ci] as usize;
-                                        self.layout_elements[idx].dimensions.height
-                                    })
-                                    .fold(0.0_f32, |a, b| a.max(b))
-                                    + tb_padding;
-                                (w, h)
+                            let (content_w, content_h) = if layout_config.wrap {
+                                let lines = self.compute_wrapped_lines(
+                                    current_elem_idx,
+                                    layout_config.layout_direction
+                                        == LayoutDirection::LeftToRight,
+                                );
+                                let content_dims = self.wrapped_content_dimensions(
+                                    current_elem_idx,
+                                    layout_config.layout_direction
+                                        == LayoutDirection::LeftToRight,
+                                    &lines,
+                                );
+                                (content_dims.width, content_dims.height)
                             } else {
-                                // TopToBottom: width = max of children, height = sum of children + gap
-                                let w: f32 = (0..children_length)
-                                    .map(|ci| {
-                                        let idx = self.layout_element_children[children_start + ci] as usize;
-                                        self.layout_elements[idx].dimensions.width
-                                    })
-                                    .fold(0.0_f32, |a, b| a.max(b))
-                                    + lr_padding;
-                                let h: f32 = (0..children_length)
-                                    .map(|ci| {
-                                        let idx = self.layout_element_children[children_start + ci] as usize;
-                                        self.layout_elements[idx].dimensions.height
-                                    })
-                                    .sum::<f32>()
-                                    + tb_padding + child_gap_total;
-                                (w, h)
+                                let child_gap_total = children_length.saturating_sub(1) as f32
+                                    * layout_config.child_gap as f32;
+                                let lr_padding =
+                                    (layout_config.padding.left + layout_config.padding.right)
+                                        as f32;
+                                let tb_padding =
+                                    (layout_config.padding.top + layout_config.padding.bottom)
+                                        as f32;
+
+                                if layout_config.layout_direction == LayoutDirection::LeftToRight {
+                                    // LeftToRight: width = sum of children + gap, height = max of children
+                                    let w: f32 = (0..children_length)
+                                        .map(|ci| {
+                                            let idx = self.layout_element_children
+                                                [children_start + ci]
+                                                as usize;
+                                            self.layout_elements[idx].dimensions.width
+                                        })
+                                        .sum::<f32>()
+                                        + lr_padding
+                                        + child_gap_total;
+                                    let h: f32 = (0..children_length)
+                                        .map(|ci| {
+                                            let idx = self.layout_element_children
+                                                [children_start + ci]
+                                                as usize;
+                                            self.layout_elements[idx].dimensions.height
+                                        })
+                                        .fold(0.0_f32, |a, b| a.max(b))
+                                        + tb_padding;
+                                    (w, h)
+                                } else {
+                                    // TopToBottom: width = max of children, height = sum of children + gap
+                                    let w: f32 = (0..children_length)
+                                        .map(|ci| {
+                                            let idx = self.layout_element_children
+                                                [children_start + ci]
+                                                as usize;
+                                            self.layout_elements[idx].dimensions.width
+                                        })
+                                        .fold(0.0_f32, |a, b| a.max(b))
+                                        + lr_padding;
+                                    let h: f32 = (0..children_length)
+                                        .map(|ci| {
+                                            let idx = self.layout_element_children
+                                                [children_start + ci]
+                                                as usize;
+                                            self.layout_elements[idx].dimensions.height
+                                        })
+                                        .sum::<f32>()
+                                        + tb_padding
+                                        + child_gap_total;
+                                    (w, h)
+                                }
                             };
                             self.scroll_container_datas[si].content_size =
                                 Dimensions::new(content_w, content_h);
@@ -4235,6 +4860,88 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     dfs_buffer.resize(new_len, LayoutElementTreeNode::default());
                     visited.resize(new_len, false);
 
+                    let is_scroll_container = self.scroll_container_datas.iter().any(|scd| {
+                        scd.layout_element_index == current_elem_idx as i32
+                    });
+
+                    let wrapped_lines = if layout_config.wrap {
+                        Some(self.compute_wrapped_lines(
+                            current_elem_idx,
+                            layout_config.layout_direction == LayoutDirection::LeftToRight,
+                        ))
+                    } else {
+                        None
+                    };
+
+                    let mut wrapped_line_main_cursors: Vec<f32> = Vec::new();
+                    let mut wrapped_line_cross_starts: Vec<f32> = Vec::new();
+                    let mut wrapped_child_line_indexes: Vec<usize> =
+                        vec![0; children_length];
+
+                    if let Some(lines) = wrapped_lines.as_ref() {
+                        if layout_config.layout_direction == LayoutDirection::LeftToRight {
+                            let mut line_y = dfs_buffer[buf_idx].next_child_offset.y;
+                            for (line_idx, line) in lines.iter().enumerate() {
+                                let mut line_extra_space =
+                                    self.layout_elements[current_elem_idx].dimensions.width
+                                        - (layout_config.padding.left
+                                            + layout_config.padding.right)
+                                            as f32
+                                        - line.main_size;
+                                if is_scroll_container {
+                                    line_extra_space = line_extra_space.max(0.0);
+                                }
+                                match layout_config.child_alignment.x {
+                                    AlignX::Left => line_extra_space = 0.0,
+                                    AlignX::CenterX => line_extra_space /= 2.0,
+                                    AlignX::Right => {}
+                                }
+
+                                wrapped_line_main_cursors
+                                    .push(layout_config.padding.left as f32 + line_extra_space);
+                                wrapped_line_cross_starts.push(line_y);
+
+                                for child_offset in
+                                    line.start_child_offset..line.end_child_offset
+                                {
+                                    wrapped_child_line_indexes[child_offset] = line_idx;
+                                }
+
+                                line_y += line.cross_size + layout_config.wrap_gap as f32;
+                            }
+                        } else {
+                            let mut line_x = dfs_buffer[buf_idx].next_child_offset.x;
+                            for (line_idx, line) in lines.iter().enumerate() {
+                                let mut line_extra_space =
+                                    self.layout_elements[current_elem_idx].dimensions.height
+                                        - (layout_config.padding.top
+                                            + layout_config.padding.bottom)
+                                            as f32
+                                        - line.main_size;
+                                if is_scroll_container {
+                                    line_extra_space = line_extra_space.max(0.0);
+                                }
+                                match layout_config.child_alignment.y {
+                                    AlignY::Top => line_extra_space = 0.0,
+                                    AlignY::CenterY => line_extra_space /= 2.0,
+                                    AlignY::Bottom => {}
+                                }
+
+                                wrapped_line_main_cursors
+                                    .push(layout_config.padding.top as f32 + line_extra_space);
+                                wrapped_line_cross_starts.push(line_x);
+
+                                for child_offset in
+                                    line.start_child_offset..line.end_child_offset
+                                {
+                                    wrapped_child_line_indexes[child_offset] = line_idx;
+                                }
+
+                                line_x += line.cross_size + layout_config.wrap_gap as f32;
+                            }
+                        }
+                    }
+
                     for ci in 0..children_length {
                         let child_idx =
                             self.layout_element_children[children_start + ci] as usize;
@@ -4243,7 +4950,53 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                         // Alignment along non-layout axis
                         let mut child_offset = dfs_buffer[buf_idx].next_child_offset;
-                        if layout_config.layout_direction == LayoutDirection::LeftToRight {
+                        if layout_config.wrap {
+                            let Some(lines) = wrapped_lines.as_ref() else {
+                                continue;
+                            };
+                            let line_idx = wrapped_child_line_indexes[ci];
+                            let line = lines[line_idx];
+
+                            if layout_config.layout_direction == LayoutDirection::LeftToRight {
+                                child_offset.x = wrapped_line_main_cursors[line_idx];
+                                child_offset.y = wrapped_line_cross_starts[line_idx];
+
+                                let whitespace = line.cross_size
+                                    - self.layout_elements[child_idx].dimensions.height;
+                                match layout_config.child_alignment.y {
+                                    AlignY::Top => {}
+                                    AlignY::CenterY => {
+                                        child_offset.y += whitespace / 2.0;
+                                    }
+                                    AlignY::Bottom => {
+                                        child_offset.y += whitespace;
+                                    }
+                                }
+
+                                wrapped_line_main_cursors[line_idx] +=
+                                    self.layout_elements[child_idx].dimensions.width
+                                        + layout_config.child_gap as f32;
+                            } else {
+                                child_offset.x = wrapped_line_cross_starts[line_idx];
+                                child_offset.y = wrapped_line_main_cursors[line_idx];
+
+                                let whitespace = line.cross_size
+                                    - self.layout_elements[child_idx].dimensions.width;
+                                match layout_config.child_alignment.x {
+                                    AlignX::Left => {}
+                                    AlignX::CenterX => {
+                                        child_offset.x += whitespace / 2.0;
+                                    }
+                                    AlignX::Right => {
+                                        child_offset.x += whitespace;
+                                    }
+                                }
+
+                                wrapped_line_main_cursors[line_idx] +=
+                                    self.layout_elements[child_idx].dimensions.height
+                                        + layout_config.child_gap as f32;
+                            }
+                        } else if layout_config.layout_direction == LayoutDirection::LeftToRight {
                             child_offset.y = layout_config.padding.top as f32;
                             let whitespace = self.layout_elements[current_elem_idx].dimensions.height
                                 - (layout_config.padding.top + layout_config.padding.bottom) as f32
@@ -4291,14 +5044,16 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         visited[new_node_index] = false;
 
                         // Update parent offset
-                        if layout_config.layout_direction == LayoutDirection::LeftToRight {
-                            dfs_buffer[buf_idx].next_child_offset.x +=
-                                self.layout_elements[child_idx].dimensions.width
-                                    + layout_config.child_gap as f32;
-                        } else {
-                            dfs_buffer[buf_idx].next_child_offset.y +=
-                                self.layout_elements[child_idx].dimensions.height
-                                    + layout_config.child_gap as f32;
+                        if !layout_config.wrap {
+                            if layout_config.layout_direction == LayoutDirection::LeftToRight {
+                                dfs_buffer[buf_idx].next_child_offset.x +=
+                                    self.layout_elements[child_idx].dimensions.width
+                                        + layout_config.child_gap as f32;
+                            } else {
+                                dfs_buffer[buf_idx].next_child_offset.y +=
+                                    self.layout_elements[child_idx].dimensions.height
+                                        + layout_config.child_gap as f32;
+                            }
                         }
                     }
                 }
