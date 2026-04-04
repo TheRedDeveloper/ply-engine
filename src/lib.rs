@@ -518,6 +518,11 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
         self.ply.context.pressed()
     }
 
+    /// Returns if the current element was pressed this frame.
+    pub fn just_pressed(&self) -> bool {
+        self.ply.context.just_pressed()
+    }
+
     /// Returns if the current element was released this frame.
     pub fn just_released(&self) -> bool {
         self.ply.context.just_released()
@@ -1036,6 +1041,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     /// Returns true if the given element is currently pressed.
     pub fn is_pressed(&self, id: impl Into<Id>) -> bool {
         self.context.is_element_pressed(id.into().id)
+    }
+
+    /// Returns true if the given element was pressed this frame.
+    pub fn is_just_pressed(&self, id: impl Into<Id>) -> bool {
+        self.context.is_element_just_pressed(id.into().id)
     }
 
     /// Returns true if the given element was released this frame.
@@ -2431,6 +2441,125 @@ mod tests {
                 });
             ui.eval();
         }
+    }
+
+    #[test]
+    fn test_just_pressed_query_one_frame() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        // Frame 1: layout
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Press between frames.
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+
+        // Frame 2: just_pressed is true.
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(ui.just_pressed(), "element should report as just pressed");
+                    assert!(
+                        ui.is_just_pressed("btn"),
+                        "ID query should report just pressed"
+                    );
+                    assert!(ui.pressed(), "element should still be pressed");
+                });
+            ui.eval();
+        }
+
+        // Hold into next frame.
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+
+        // Frame 3: still pressed, but no longer just_pressed.
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(!ui.just_pressed(), "just pressed should clear next frame");
+                    assert!(
+                        !ui.is_just_pressed("btn"),
+                        "ID just pressed should clear next frame"
+                    );
+                    assert!(ui.pressed(), "element should remain pressed while held");
+                });
+            ui.eval();
+        }
+    }
+
+    #[test]
+    fn test_keyboard_activation_marks_just_pressed() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        // Frame 1: layout
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Simulate keyboard activation press on focused element.
+        ply.set_focus("btn");
+        ply.context.handle_keyboard_activation(true, false);
+        assert!(ply.is_pressed("btn"), "keyboard press should set pressed state");
+
+        // Frame 2: just_pressed is true.
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(
+                        ui.just_pressed(),
+                        "keyboard activation should mark just_pressed"
+                    );
+                    assert!(
+                        ui.is_just_pressed("btn"),
+                        "ID query should include keyboard press"
+                    );
+                    assert!(ui.pressed(), "element should be pressed while key is held");
+                });
+            ui.eval();
+        }
+
+        // Frame 3: just_pressed is cleared, pressed remains until release event.
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .children(|ui| {
+                    assert!(!ui.just_pressed());
+                    assert!(!ui.is_just_pressed("btn"));
+                    assert!(ui.pressed());
+                });
+            ui.eval();
+        }
+
+        // Release keyboard activation.
+        ply.context.handle_keyboard_activation(false, true);
+        assert!(!ply.is_pressed("btn"), "keyboard release should clear pressed state");
     }
 
     #[test]
