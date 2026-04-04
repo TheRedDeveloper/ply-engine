@@ -108,11 +108,23 @@ pub struct SizingMinMax {
     pub max: f32,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct SizingAxis {
     pub type_: SizingType,
     pub min_max: SizingMinMax,
     pub percent: f32,
+    pub grow_weight: f32,
+}
+
+impl Default for SizingAxis {
+    fn default() -> Self {
+        Self {
+            type_: SizingType::Fit,
+            min_max: SizingMinMax::default(),
+            percent: 0.0,
+            grow_weight: 1.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2019,6 +2031,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             max: root_width,
                         },
                         percent: 0.0,
+                        grow_weight: 1.0,
                     },
                     height: SizingAxis {
                         type_: SizingType::Fixed,
@@ -2027,6 +2040,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             max: root_height,
                         },
                         percent: 0.0,
+                        grow_weight: 1.0,
                     },
                 },
                 ..Default::default()
@@ -2218,8 +2232,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                 let mut inner_content_size: f32 = 0.0;
                 let mut total_padding_and_child_gaps = parent_padding;
-                let mut grow_container_count: i32 = 0;
                 let parent_child_gap = parent_config.child_gap as f32;
+                // None = no grow seen, Some(Some(idx)) = exactly one grow, Some(None) = 2+ grows.
+                let mut single_along_axis_grow_candidate: Option<Option<usize>> = None;
 
                 resizable_container_buffer.clear();
 
@@ -2269,6 +2284,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         && (!is_text_element || is_wrapping_text)
                     {
                         resizable_container_buffer.push(child_element_index as i32);
+                        if sizing_along_axis
+                            && child_sizing.type_ == SizingType::Grow
+                            && child_sizing.grow_weight > 0.0
+                        {
+                            single_along_axis_grow_candidate = match single_along_axis_grow_candidate {
+                                None => Some(Some(child_element_index)),
+                                Some(Some(_)) | Some(None) => Some(None),
+                            };
+                        }
                     }
 
                     if sizing_along_axis {
@@ -2277,9 +2301,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         } else {
                             child_size
                         };
-                        if child_sizing.type_ == SizingType::Grow {
-                            grow_container_count += 1;
-                        }
                         if child_offset > 0 {
                             inner_content_size += parent_child_gap;
                             total_padding_and_child_gaps += parent_child_gap;
@@ -2397,88 +2418,159 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 j += 1;
                             }
                         }
-                    } else if size_to_distribute > 0.0 && grow_container_count > 0 {
-                        // Remove non-grow from resizable buffer
-                        let mut j = 0;
-                        while j < resizable_container_buffer.len() {
-                            let child_idx = resizable_container_buffer[j] as usize;
-                            let child_layout_idx =
-                                self.layout_elements[child_idx].layout_config_index;
-                            let child_sizing_type = if x_axis {
-                                self.layout_configs[child_layout_idx].sizing.width.type_
+                    } else if size_to_distribute > 0.0 {
+                        if let Some(Some(single_along_axis_grow_child_idx)) =
+                            single_along_axis_grow_candidate
+                        {
+                            let child_layout_idx = self
+                                .layout_elements[single_along_axis_grow_child_idx]
+                                .layout_config_index;
+                            let child_max_size = if x_axis {
+                                self.layout_configs[child_layout_idx].sizing.width.min_max.max
                             } else {
-                                self.layout_configs[child_layout_idx].sizing.height.type_
+                                self.layout_configs[child_layout_idx].sizing.height.min_max.max
                             };
-                            if child_sizing_type != SizingType::Grow {
-                                resizable_container_buffer.swap_remove(j);
+                            let child_size_ref = if x_axis {
+                                &mut self.layout_elements[single_along_axis_grow_child_idx]
+                                    .dimensions
+                                    .width
                             } else {
-                                j += 1;
-                            }
-                        }
-
-                        let mut distribute = size_to_distribute;
-                        while distribute > EPSILON && !resizable_container_buffer.is_empty() {
-                            let mut smallest: f32 = MAXFLOAT;
-                            let mut second_smallest: f32 = MAXFLOAT;
-                            let mut width_to_add = distribute;
-
-                            for &child_idx in &resizable_container_buffer {
-                                let cs = if x_axis {
-                                    self.layout_elements[child_idx as usize].dimensions.width
-                                } else {
-                                    self.layout_elements[child_idx as usize].dimensions.height
-                                };
-                                if float_equal(cs, smallest) {
-                                    continue;
-                                }
-                                if cs < smallest {
-                                    second_smallest = smallest;
-                                    smallest = cs;
-                                }
-                                if cs > smallest {
-                                    second_smallest = f32::min(second_smallest, cs);
-                                    width_to_add = second_smallest - smallest;
-                                }
-                            }
-                            width_to_add = f32::min(
-                                width_to_add,
-                                distribute / resizable_container_buffer.len() as f32,
-                            );
-
+                                &mut self.layout_elements[single_along_axis_grow_child_idx]
+                                    .dimensions
+                                    .height
+                            };
+                            *child_size_ref = f32::min(*child_size_ref + size_to_distribute, child_max_size);
+                        } else {
+                            // Remove non-grow from resizable buffer
                             let mut j = 0;
                             while j < resizable_container_buffer.len() {
                                 let child_idx = resizable_container_buffer[j] as usize;
                                 let child_layout_idx =
                                     self.layout_elements[child_idx].layout_config_index;
-                                let max_size = if x_axis {
-                                    self.layout_configs[child_layout_idx]
-                                        .sizing
-                                        .width
-                                        .min_max
-                                        .max
+                                let child_sizing = if x_axis {
+                                    self.layout_configs[child_layout_idx].sizing.width
                                 } else {
-                                    self.layout_configs[child_layout_idx]
-                                        .sizing
-                                        .height
-                                        .min_max
-                                        .max
+                                    self.layout_configs[child_layout_idx].sizing.height
                                 };
-                                let child_size_ref = if x_axis {
-                                    &mut self.layout_elements[child_idx].dimensions.width
+                                if child_sizing.type_ != SizingType::Grow
+                                    || child_sizing.grow_weight <= 0.0
+                                {
+                                    resizable_container_buffer.swap_remove(j);
                                 } else {
-                                    &mut self.layout_elements[child_idx].dimensions.height
+                                    j += 1;
+                                }
+                            }
+
+                            let mut distribute = size_to_distribute;
+                            while distribute > EPSILON && !resizable_container_buffer.is_empty() {
+                                let mut total_weight = 0.0;
+                                let mut smallest_ratio = MAXFLOAT;
+                                let mut second_smallest_ratio = MAXFLOAT;
+
+                                for &child_idx in &resizable_container_buffer {
+                                    let child_layout_idx =
+                                        self.layout_elements[child_idx as usize].layout_config_index;
+                                    let child_sizing = if x_axis {
+                                        self.layout_configs[child_layout_idx].sizing.width
+                                    } else {
+                                        self.layout_configs[child_layout_idx].sizing.height
+                                    };
+
+                                    total_weight += child_sizing.grow_weight;
+
+                                    let child_size = if x_axis {
+                                        self.layout_elements[child_idx as usize].dimensions.width
+                                    } else {
+                                        self.layout_elements[child_idx as usize].dimensions.height
+                                    };
+                                    let child_ratio = child_size / child_sizing.grow_weight;
+
+                                    if float_equal(child_ratio, smallest_ratio) {
+                                        continue;
+                                    }
+                                    if child_ratio < smallest_ratio {
+                                        second_smallest_ratio = smallest_ratio;
+                                        smallest_ratio = child_ratio;
+                                    } else if child_ratio > smallest_ratio {
+                                        second_smallest_ratio = f32::min(second_smallest_ratio, child_ratio);
+                                    }
+                                }
+
+                                if total_weight <= 0.0 {
+                                    break;
+                                }
+
+                                let per_weight_growth = distribute / total_weight;
+
+                                let ratio_step_cap = if second_smallest_ratio == MAXFLOAT {
+                                    MAXFLOAT
+                                } else {
+                                    second_smallest_ratio - smallest_ratio
                                 };
-                                if float_equal(*child_size_ref, smallest) {
+
+                                let mut resized_any = false;
+
+                                let mut j = 0;
+                                while j < resizable_container_buffer.len() {
+                                    let child_idx = resizable_container_buffer[j] as usize;
+                                    let child_layout_idx =
+                                        self.layout_elements[child_idx].layout_config_index;
+                                    let child_sizing = if x_axis {
+                                        self.layout_configs[child_layout_idx].sizing.width
+                                    } else {
+                                        self.layout_configs[child_layout_idx].sizing.height
+                                    };
+
+                                    let child_size_ref = if x_axis {
+                                        &mut self.layout_elements[child_idx].dimensions.width
+                                    } else {
+                                        &mut self.layout_elements[child_idx].dimensions.height
+                                    };
+
+                                    let child_ratio = *child_size_ref / child_sizing.grow_weight;
+                                    if !float_equal(child_ratio, smallest_ratio) {
+                                        j += 1;
+                                        continue;
+                                    }
+
+                                    let max_size = if x_axis {
+                                        self.layout_configs[child_layout_idx]
+                                            .sizing
+                                            .width
+                                            .min_max
+                                            .max
+                                    } else {
+                                        self.layout_configs[child_layout_idx]
+                                            .sizing
+                                            .height
+                                            .min_max
+                                            .max
+                                    };
+
+                                    let mut growth_share = per_weight_growth * child_sizing.grow_weight;
+                                    if ratio_step_cap != MAXFLOAT {
+                                        growth_share =
+                                            f32::min(growth_share, ratio_step_cap * child_sizing.grow_weight);
+                                    }
+
                                     let previous = *child_size_ref;
-                                    *child_size_ref += width_to_add;
-                                    if *child_size_ref >= max_size {
+                                    let proposed = previous + growth_share;
+                                    if proposed >= max_size {
                                         *child_size_ref = max_size;
+                                        resized_any = true;
                                         resizable_container_buffer.swap_remove(j);
                                         continue;
                                     }
+
+                                    *child_size_ref = proposed;
                                     distribute -= *child_size_ref - previous;
+                                    resized_any = true;
+                                    j += 1;
                                 }
-                                j += 1;
+
+                                if !resized_any {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -2515,7 +2607,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             &mut self.layout_elements[child_idx].dimensions.height
                         };
 
-                        if child_sizing.type_ == SizingType::Grow {
+                        if child_sizing.type_ == SizingType::Grow && child_sizing.grow_weight > 0.0 {
                             *child_size_ref =
                                 f32::min(max_size, child_sizing.min_max.max);
                         }
@@ -5439,14 +5531,26 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.debug_text(label, config_index);
         if matches!(sizing.type_, SizingType::Grow | SizingType::Fit | SizingType::Fixed) {
             self.debug_text("(", config_index);
+            let mut wrote_any = false;
+
+            if sizing.type_ == SizingType::Grow && !float_equal(sizing.grow_weight, 1.0) {
+                self.debug_text("weight: ", config_index);
+                self.debug_float_text(sizing.grow_weight, config_index);
+                wrote_any = true;
+            }
+
             if sizing.min_max.min != 0.0 {
-                self.debug_text("min: ", config_index);
-                self.debug_int_text(sizing.min_max.min, config_index);
-                if sizing.min_max.max != MAXFLOAT {
+                if wrote_any {
                     self.debug_text(", ", config_index);
                 }
+                self.debug_text("min: ", config_index);
+                self.debug_int_text(sizing.min_max.min, config_index);
+                wrote_any = true;
             }
             if sizing.min_max.max != MAXFLOAT {
+                if wrote_any {
+                    self.debug_text(", ", config_index);
+                }
                 self.debug_text("max: ", config_index);
                 self.debug_int_text(sizing.min_max.max, config_index);
             }

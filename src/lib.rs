@@ -1448,6 +1448,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_grow_weights_distribute_proportionally() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(600.0, 120.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(600.0))
+            .height(fixed!(120.0))
+            .layout(|l| l.direction(crate::layout::LayoutDirection::LeftToRight))
+            .children(|ui| {
+                ui.element()
+                    .width(grow!(0.0, f32::MAX, 1.0))
+                    .height(grow!())
+                    .background_color(0xFF0000)
+                    .empty();
+
+                ui.element()
+                    .width(grow!(0.0, f32::MAX, 2.0))
+                    .height(grow!())
+                    .background_color(0x00FF00)
+                    .empty();
+            });
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].bounding_box.width, 200.0);
+        assert_eq!(items[1].bounding_box.width, 400.0);
+    }
+
+    #[test]
+    fn test_zero_weight_grow_behaves_like_fit() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(600.0, 120.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(600.0))
+            .height(fixed!(120.0))
+            .layout(|l| l.direction(crate::layout::LayoutDirection::LeftToRight))
+            .children(|ui| {
+                ui.element()
+                    .width(grow!(50.0, f32::MAX, 0.0))
+                    .height(grow!())
+                    .background_color(0xFF0000)
+                    .empty();
+
+                ui.element()
+                    .width(grow!())
+                    .height(grow!())
+                    .background_color(0x00FF00)
+                    .empty();
+            });
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].bounding_box.width, 50.0);
+        assert_eq!(items[1].bounding_box.width, 550.0);
+    }
+
+    #[test]
+    fn test_single_main_axis_grow_respects_max() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(600.0, 120.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(600.0))
+            .height(fixed!(120.0))
+            .layout(|l| l.direction(crate::layout::LayoutDirection::LeftToRight))
+            .children(|ui| {
+                ui.element()
+                    .width(grow!(0.0, 300.0, 2.0))
+                    .height(grow!())
+                    .background_color(0xFF0000)
+                    .empty();
+            });
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].bounding_box.width, 300.0);
+    }
+
     #[rustfmt::skip]
     #[test]
     fn test_floating() {

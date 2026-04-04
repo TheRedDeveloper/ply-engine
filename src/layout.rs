@@ -64,7 +64,10 @@ pub enum Sizing {
     /// Fits the element’s width/height within a min and max constraint.
     Fit(f32, f32),
     /// Expands the element to fill available space within min/max constraints.
-    Grow(f32, f32),
+    ///
+    /// The third argument is the grow weight. A weight of `1.0` is the default behavior.
+    /// A weight of `0.0` means the element does not grow (behaves like `Fit` in practice).
+    Grow(f32, f32, f32),
     /// Sets a fixed width/height.
     Fixed(f32),
     /// Sets width/height as a percentage of its parent. Value should be between `0.0` and `1.0`.
@@ -79,12 +82,27 @@ impl From<Sizing> for engine::SizingAxis {
                 type_: engine::SizingType::Fit,
                 min_max: engine::SizingMinMax { min, max },
                 percent: 0.0,
+                grow_weight: 1.0,
             },
-            Sizing::Grow(min, max) => Self {
-                type_: engine::SizingType::Grow,
-                min_max: engine::SizingMinMax { min, max },
-                percent: 0.0,
-            },
+            Sizing::Grow(min, max, weight) => {
+                assert!(weight >= 0.0, "Grow weight must be non-negative.");
+
+                if weight == 0.0 {
+                    Self {
+                        type_: engine::SizingType::Fit,
+                        min_max: engine::SizingMinMax { min, max },
+                        percent: 0.0,
+                        grow_weight: 1.0,
+                    }
+                } else {
+                    Self {
+                        type_: engine::SizingType::Grow,
+                        min_max: engine::SizingMinMax { min, max },
+                        percent: 0.0,
+                        grow_weight: weight,
+                    }
+                }
+            }
             Sizing::Fixed(size) => Self {
                 type_: engine::SizingType::Fixed,
                 min_max: engine::SizingMinMax {
@@ -92,11 +110,13 @@ impl From<Sizing> for engine::SizingAxis {
                     max: size,
                 },
                 percent: 0.0,
+                grow_weight: 1.0,
             },
             Sizing::Percent(percent) => Self {
                 type_: engine::SizingType::Percent,
                 min_max: engine::SizingMinMax { min: 0.0, max: 0.0 },
                 percent,
+                grow_weight: 1.0,
             },
         }
     }
@@ -224,11 +244,14 @@ macro_rules! fit {
     };
 }
 
-/// Shorthand macro for [`Sizing::Grow`]. Defaults max to `f32::MAX` if omitted.
+/// Shorthand macro for [`Sizing::Grow`]. Defaults max to `f32::MAX` and weight to `1.0` if omitted.
 #[macro_export]
 macro_rules! grow {
+    ($min:expr, $max:expr, $weight:expr) => {
+        $crate::layout::Sizing::Grow($min, $max, $weight)
+    };
     ($min:expr, $max:expr) => {
-        $crate::layout::Sizing::Grow($min, $max)
+        grow!($min, $max, 1.0)
     };
     ($min:expr) => {
         grow!($min, f32::MAX)
@@ -277,14 +300,31 @@ mod test {
 
     #[test]
     fn grow_macro() {
+        let three_args = grow!(12.0, 34.0, 2.5);
+        assert!(matches!(three_args, Sizing::Grow(12.0, 34.0, 2.5)));
+
         let both_args = grow!(12.0, 34.0);
-        assert!(matches!(both_args, Sizing::Grow(12.0, 34.0)));
+        assert!(matches!(both_args, Sizing::Grow(12.0, 34.0, 1.0)));
 
         let one_arg = grow!(12.0);
-        assert!(matches!(one_arg, Sizing::Grow(12.0, f32::MAX)));
+        assert!(matches!(one_arg, Sizing::Grow(12.0, f32::MAX, 1.0)));
 
         let zero_args = grow!();
-        assert!(matches!(zero_args, Sizing::Grow(0.0, f32::MAX)));
+        assert!(matches!(zero_args, Sizing::Grow(0.0, f32::MAX, 1.0)));
+    }
+
+    #[test]
+    fn zero_weight_grow_converts_to_fit_axis() {
+        let axis: engine::SizingAxis = grow!(12.0, 34.0, 0.0).into();
+        assert_eq!(axis.type_, engine::SizingType::Fit);
+        assert_eq!(axis.min_max.min, 12.0);
+        assert_eq!(axis.min_max.max, 34.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Grow weight must be non-negative.")]
+    fn negative_grow_weight_panics() {
+        let _axis: engine::SizingAxis = grow!(0.0, f32::MAX, -1.0).into();
     }
 
     #[test]
