@@ -5949,6 +5949,35 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 return;
             }
         }
+
+        if let Some(ti_idx) = self.text_input_element_ids.iter().position(|&elem_id| elem_id == id.id) {
+            let Some(config) = self.text_input_configs.get(ti_idx).cloned() else {
+                return;
+            };
+
+            let Some(state_snapshot) = self.text_edit_states.get(&id.id).cloned() else {
+                return;
+            };
+
+            let (visible_width, visible_height) = self
+                .layout_element_map
+                .get(&id.id)
+                .map(|item| (item.bounding_box.width, item.bounding_box.height))
+                .unwrap_or((0.0, 0.0));
+
+            let (content_width, content_height) =
+                self.text_input_content_size(&state_snapshot, &config, visible_width);
+
+            let max_scroll_x = (content_width - visible_width).max(0.0);
+            let max_scroll_y = (content_height - visible_height).max(0.0);
+
+            if let Some(state) = self.text_edit_states.get_mut(&id.id) {
+                state.scroll_offset = position.x.clamp(0.0, max_scroll_x);
+                state.scroll_offset_y = position.y.clamp(0.0, max_scroll_y);
+            }
+
+            self.text_input_scrollbar_idle_frames.insert(id.id, 0);
+        }
     }
 
     fn render_scrollbar_geometry(

@@ -1012,7 +1012,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         }
     }
 
-    /// Sets the scroll position for the scroll container with the given ID.
+    /// Sets the scroll position for a scroll container or text input with the given ID.
     pub fn set_scroll_position(&mut self, id: impl Into<Id>, position: impl Into<Vector2>) {
         self.context.set_scroll_position(id.into(), position.into());
     }
