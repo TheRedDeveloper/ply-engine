@@ -5,6 +5,7 @@ pub mod accessibility_web;
 pub mod accessibility_native;
 pub mod align;
 pub mod color;
+pub mod easing;
 pub mod elements;
 pub mod engine;
 pub mod id;

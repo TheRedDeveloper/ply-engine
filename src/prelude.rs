@@ -12,6 +12,7 @@ pub use crate::renderer::GraphicAsset;
 pub use crate::renderer::FontAsset;
 pub use crate::shaders::ShaderAsset;
 pub use crate::lerp::Lerp;
+pub use crate::easing::*;
 
 // Utility functions
 pub use crate::renderer::render_to_texture;
