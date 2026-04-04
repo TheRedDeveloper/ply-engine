@@ -8,6 +8,7 @@ pub mod color;
 pub mod elements;
 pub mod engine;
 pub mod id;
+pub mod lerp;
 pub mod layout;
 pub mod math;
 pub mod render_commands;
