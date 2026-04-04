@@ -590,10 +590,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             } else {
                 scroll_delta
             };
+            let touch_input_active = !macroquad::prelude::touches().is_empty();
             self.context.update_scroll_containers(
                 true,
                 container_scroll,
                 macroquad::prelude::get_frame_time(),
+                touch_input_active,
             );
 
             // Keyboard input handling
@@ -944,8 +946,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         scroll_delta: Vector2,
         delta_time: f32,
     ) {
+        let touch_input_active = if self.headless {
+            false
+        } else {
+            !macroquad::prelude::touches().is_empty()
+        };
         self.context
-            .update_scroll_containers(drag_scrolling_enabled, scroll_delta, delta_time);
+            .update_scroll_containers(drag_scrolling_enabled, scroll_delta, delta_time, touch_input_active);
     }
 
     /// Returns the ID of the currently focused element, or None.

@@ -244,6 +244,7 @@ pub struct ClipConfig {
     pub vertical: bool,
     pub scroll_x: bool,
     pub scroll_y: bool,
+    pub no_drag_scroll: bool,
     pub child_offset: Vector2,
     pub scrollbar: Option<ScrollbarConfig>,
 }
@@ -468,6 +469,7 @@ struct ScrollContainerDataInternal {
     scrollbar: Option<ScrollbarConfig>,
     scroll_x_enabled: bool,
     scroll_y_enabled: bool,
+    no_drag_scroll: bool,
     scrollbar_idle_frames: u32,
     scrollbar_activity_this_frame: bool,
     scrollbar_thumb_drag_active_x: bool,
@@ -1440,6 +1442,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         scd.scrollbar = clip.scrollbar;
                         scd.scroll_x_enabled = clip.scroll_x;
                         scd.scroll_y_enabled = clip.scroll_y;
+                        scd.no_drag_scroll = clip.no_drag_scroll;
                         found_existing = true;
                         break;
                     }
@@ -1451,6 +1454,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         scrollbar: clip.scrollbar,
                         scroll_x_enabled: clip.scroll_x,
                         scroll_y_enabled: clip.scroll_y,
+                        no_drag_scroll: clip.no_drag_scroll,
                         element_id: elem_id,
                         open_this_frame: true,
                         ..Default::default()
@@ -5346,6 +5350,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         enable_drag_scrolling: bool,
         scroll_delta: Vector2,
         delta_time: f32,
+        touch_input_active: bool,
     ) {
         let pointer = self.pointer_info.position;
         let dt = delta_time.max(0.0001); // Guard against zero/negative dt
@@ -5374,7 +5379,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     // Find the deepest scroll container under the pointer and start drag
                     let mut best: Option<usize> = None;
                     for si in 0..self.scroll_container_datas.len() {
-                        let bb = self.scroll_container_datas[si].bounding_box;
+                        let scd = &self.scroll_container_datas[si];
+                        let bb = scd.bounding_box;
                         if pointer.x >= bb.x
                             && pointer.x <= bb.x + bb.width
                             && pointer.y >= bb.y
@@ -5431,7 +5437,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             scd.scrollbar_drag_scroll_origin =
                                 Vector2::new(-scd.scroll_position.x, -scd.scroll_position.y);
                             scd.scrollbar_activity_this_frame = true;
-                        } else {
+                        } else if !(scd.no_drag_scroll && !touch_input_active) {
                             scd.pointer_scroll_active = true;
                             scd.pointer_origin = pointer;
                             scd.scroll_origin = scd.scroll_position;

@@ -218,6 +218,15 @@ impl OverflowBuilder {
         self
     }
 
+    /// Disables mouse drag scrolling for this overflow container.
+    ///
+    /// Touch drag and scroll wheel input remain enabled.
+    #[inline]
+    pub fn no_drag_scroll(&mut self) -> &mut Self {
+        self.config.no_drag_scroll = true;
+        self
+    }
+
     /// Enables and configures the overflow scrollbar.
     #[inline]
     pub fn scrollbar(
