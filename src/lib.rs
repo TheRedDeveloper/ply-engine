@@ -129,6 +129,17 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self.inner.layout.sizing.width = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
         self.inner.layout.sizing.height = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
         self.inner.aspect_ratio = aspect_ratio;
+        self.inner.cover_aspect_ratio = false;
+        self
+    }
+
+    /// Sizes the element to completely cover its parent while preserving `aspect_ratio`.
+    #[inline]
+    pub fn cover(mut self, aspect_ratio: f32) -> Self {
+        self.inner.layout.sizing.width = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
+        self.inner.layout.sizing.height = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
+        self.inner.aspect_ratio = aspect_ratio;
+        self.inner.cover_aspect_ratio = true;
         self
     }
 

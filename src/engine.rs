@@ -305,6 +305,7 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub background_color: Color,
     pub corner_radius: CornerRadius,
     pub aspect_ratio: f32,
+    pub cover_aspect_ratio: bool,
     pub image_data: Option<ImageSource>,
     pub floating: FloatingConfig,
     pub custom_data: Option<CustomElementData>,
@@ -327,6 +328,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
             background_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
             corner_radius: CornerRadius::default(),
             aspect_ratio: 0.0,
+            cover_aspect_ratio: false,
             image_data: None,
             floating: FloatingConfig::default(),
             custom_data: None,
@@ -654,6 +656,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     element_configs: Vec<ElementConfig>,
     text_element_configs: Vec<TextConfig>,
     aspect_ratio_configs: Vec<f32>,
+    aspect_ratio_cover_configs: Vec<bool>,
     image_element_configs: Vec<ImageSource>,
     floating_element_configs: Vec<FloatingConfig>,
     clip_element_configs: Vec<ClipConfig>,
@@ -1008,6 +1011,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             element_configs: Vec::new(),
             text_element_configs: Vec::new(),
             aspect_ratio_configs: Vec::new(),
+            aspect_ratio_cover_configs: Vec::new(),
             image_element_configs: Vec::new(),
             floating_element_configs: Vec::new(),
             clip_element_configs: Vec::new(),
@@ -1339,6 +1343,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         // Aspect ratio config
         if declaration.aspect_ratio > 0.0 {
             self.aspect_ratio_configs.push(declaration.aspect_ratio);
+            self.aspect_ratio_cover_configs
+                .push(declaration.cover_aspect_ratio);
             let idx = self.aspect_ratio_configs.len() - 1;
             self.attach_element_config(ElementConfigType::Aspect, idx);
             self.aspect_ratio_element_indexes
@@ -2287,6 +2293,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.element_configs.clear();
         self.text_element_configs.clear();
         self.aspect_ratio_configs.clear();
+        self.aspect_ratio_cover_configs.clear();
         self.image_element_configs.clear();
         self.floating_element_configs.clear();
         self.clip_element_configs.clear();
@@ -3277,6 +3284,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             }
                         }
 
+                        let is_cover_aspect = self
+                            .find_element_config_index(child_idx, ElementConfigType::Aspect)
+                            .map(|cfg_idx| self.aspect_ratio_cover_configs[cfg_idx])
+                            .unwrap_or(false);
+
                         let child_size_ref = if x_axis {
                             &mut self.layout_elements[child_idx].dimensions.width
                         } else {
@@ -3284,10 +3296,18 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         };
 
                         if child_sizing.type_ == SizingType::Grow && child_sizing.grow_weight > 0.0 {
-                            *child_size_ref =
-                                f32::min(max_size, child_sizing.min_max.max);
+                            if is_cover_aspect {
+                                *child_size_ref = f32::max(*child_size_ref, max_size);
+                            } else {
+                                *child_size_ref = f32::min(max_size, child_sizing.min_max.max);
+                            }
                         }
-                        *child_size_ref = f32::max(min_size, f32::min(*child_size_ref, max_size));
+
+                        if is_cover_aspect {
+                            *child_size_ref = f32::max(min_size, *child_size_ref);
+                        } else {
+                            *child_size_ref = f32::max(min_size, f32::min(*child_size_ref, max_size));
+                        }
                     }
                 }
             }
@@ -3308,12 +3328,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 self.find_element_config_index(elem_idx, ElementConfigType::Aspect)
             {
                 let aspect_ratio = self.aspect_ratio_configs[cfg_idx];
+                let is_cover = self.aspect_ratio_cover_configs[cfg_idx];
                 let new_height =
                     (1.0 / aspect_ratio) * self.layout_elements[elem_idx].dimensions.width;
                 self.layout_elements[elem_idx].dimensions.height = new_height;
                 let layout_idx = self.layout_elements[elem_idx].layout_config_index;
                 self.layout_configs[layout_idx].sizing.height.min_max.min = new_height;
-                self.layout_configs[layout_idx].sizing.height.min_max.max = new_height;
+                self.layout_configs[layout_idx].sizing.height.min_max.max = if is_cover {
+                    MAXFLOAT
+                } else {
+                    new_height
+                };
             }
         }
 
@@ -3330,12 +3355,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 self.find_element_config_index(elem_idx, ElementConfigType::Aspect)
             {
                 let aspect_ratio = self.aspect_ratio_configs[cfg_idx];
+                let is_cover = self.aspect_ratio_cover_configs[cfg_idx];
                 let new_width =
                     aspect_ratio * self.layout_elements[elem_idx].dimensions.height;
                 self.layout_elements[elem_idx].dimensions.width = new_width;
                 let layout_idx = self.layout_elements[elem_idx].layout_config_index;
                 self.layout_configs[layout_idx].sizing.width.min_max.min = new_width;
-                self.layout_configs[layout_idx].sizing.width.min_max.max = new_width;
+                self.layout_configs[layout_idx].sizing.width.min_max.max = if is_cover {
+                    MAXFLOAT
+                } else {
+                    new_width
+                };
             }
         }
 
