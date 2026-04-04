@@ -720,6 +720,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     pub(crate) text_input_drag_origin: crate::math::Vector2,
     pub(crate) text_input_drag_scroll_origin: crate::math::Vector2,
     pub(crate) text_input_drag_element_id: u32,
+    pub(crate) text_input_drag_from_touch: bool,
     pub(crate) text_input_scrollbar_drag_active: bool,
     pub(crate) text_input_scrollbar_drag_vertical: bool,
     pub(crate) text_input_scrollbar_drag_origin: f32,
@@ -1044,6 +1045,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             text_input_drag_origin: Vector2::default(),
             text_input_drag_scroll_origin: Vector2::default(),
             text_input_drag_element_id: 0,
+            text_input_drag_from_touch: false,
             text_input_scrollbar_drag_active: false,
             text_input_scrollbar_drag_vertical: false,
             text_input_scrollbar_drag_origin: 0.0,
@@ -6251,7 +6253,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     /// Mobile-first: dragging scrolls the content rather than selecting text.
     /// `scroll_delta` contains (x, y) scroll wheel deltas. For single-line, both axes
     /// map to horizontal scroll. For multiline, y scrolls vertically.
-    pub fn update_text_input_pointer_scroll(&mut self, scroll_delta: Vector2) -> bool {
+    pub fn update_text_input_pointer_scroll(&mut self, scroll_delta: Vector2, touch_input_active: bool) -> bool {
         for idle in self.text_input_scrollbar_idle_frames.values_mut() {
             *idle = idle.saturating_add(1);
         }
@@ -6311,6 +6313,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 let pointer_state = self.pointer_info.state;
                 if matches!(pointer_state, PointerDataInteractionState::ReleasedThisFrame | PointerDataInteractionState::Released) {
                     self.text_input_drag_active = false;
+                    self.text_input_drag_from_touch = false;
                 }
             }
             self.text_input_scrollbar_drag_active = false;
@@ -6326,6 +6329,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 let pointer_state = self.pointer_info.state;
                 if matches!(pointer_state, PointerDataInteractionState::ReleasedThisFrame | PointerDataInteractionState::Released) {
                     self.text_input_drag_active = false;
+                    self.text_input_drag_from_touch = false;
                 }
             }
             self.text_input_scrollbar_drag_active = false;
@@ -6411,6 +6415,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                     if started_scrollbar_drag {
                         self.text_input_drag_active = false;
+                        self.text_input_drag_from_touch = false;
                         self.text_input_drag_element_id = focused;
                         self.pending_text_click = None;
                         self.text_input_scrollbar_idle_frames.insert(focused, 0);
@@ -6425,6 +6430,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     self.text_input_drag_origin = pointer;
                     self.text_input_drag_scroll_origin = Vector2::new(scroll_x, scroll_y);
                     self.text_input_drag_element_id = focused;
+                    self.text_input_drag_from_touch = touch_input_active;
                     self.text_input_scrollbar_drag_active = false;
                 }
             }
@@ -6485,7 +6491,131 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                     }
                 } else if self.text_input_drag_active {
-                    if let Some(state) = self.text_edit_states.get_mut(&self.text_input_drag_element_id) {
+                    let drag_id = self.text_input_drag_element_id;
+                    if ti_cfg.drag_select && !self.text_input_drag_from_touch {
+                        consumed_scroll = true;
+
+                        if let (Some(item), Some(measure_fn)) = (
+                            self.layout_element_map.get(&drag_id),
+                            self.measure_text_fn.as_ref(),
+                        ) {
+                            let bbox = item.bounding_box;
+                            let click_x = pointer.x - bbox.x;
+                            let click_y = pointer.y - bbox.y;
+
+                            if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
+                                if ti_cfg.is_multiline {
+                                    if click_y < 0.0 {
+                                        state.scroll_offset_y = (state.scroll_offset_y + click_y).max(0.0);
+                                    } else if click_y > bbox.height {
+                                        state.scroll_offset_y += click_y - bbox.height;
+                                    }
+                                } else {
+                                    if click_x < 0.0 {
+                                        state.scroll_offset = (state.scroll_offset + click_x).max(0.0);
+                                    } else if click_x > bbox.width {
+                                        state.scroll_offset += click_x - bbox.width;
+                                    }
+                                }
+                            }
+
+                            if let Some(state_snapshot) = self.text_edit_states.get(&drag_id).cloned() {
+                                let clamped_x = click_x.clamp(0.0, bbox.width.max(0.0));
+                                let clamped_y = click_y.clamp(0.0, bbox.height.max(0.0));
+                                let disp_text = crate::text_input::display_text(
+                                    &state_snapshot.text,
+                                    &ti_cfg.placeholder,
+                                    ti_cfg.is_password,
+                                );
+
+                                if !state_snapshot.text.is_empty() {
+                                    if ti_cfg.is_multiline {
+                                        let visual_lines = crate::text_input::wrap_lines(
+                                            &disp_text,
+                                            bbox.width,
+                                            ti_cfg.font_asset,
+                                            ti_cfg.font_size,
+                                            measure_fn.as_ref(),
+                                        );
+                                        if !visual_lines.is_empty() {
+                                            let line_height = if ti_cfg.line_height > 0 {
+                                                ti_cfg.line_height as f32
+                                            } else {
+                                                let config = crate::text::TextConfig {
+                                                    font_asset: ti_cfg.font_asset,
+                                                    font_size: ti_cfg.font_size,
+                                                    ..Default::default()
+                                                };
+                                                measure_fn("Mg", &config).height
+                                            };
+
+                                            let adjusted_y = clamped_y + state_snapshot.scroll_offset_y;
+                                            let clicked_line = (adjusted_y / line_height).floor().max(0.0) as usize;
+                                            let clicked_line = clicked_line.min(visual_lines.len().saturating_sub(1));
+
+                                            let vl = &visual_lines[clicked_line];
+                                            let line_char_x_positions = crate::text_input::compute_char_x_positions(
+                                                &vl.text,
+                                                ti_cfg.font_asset,
+                                                ti_cfg.font_size,
+                                                measure_fn.as_ref(),
+                                            );
+                                            let col = crate::text_input::find_nearest_char_boundary(
+                                                clamped_x,
+                                                &line_char_x_positions,
+                                            );
+                                            let raw_pos = vl.global_char_start + col;
+
+                                            if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
+                                                #[cfg(feature = "text-styling")]
+                                                {
+                                                    let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_pos);
+                                                    state.click_to_cursor_styled(visual_pos, true);
+                                                }
+                                                #[cfg(not(feature = "text-styling"))]
+                                                {
+                                                    if state.selection_anchor.is_none() {
+                                                        state.selection_anchor = Some(state.cursor_pos);
+                                                    }
+                                                    state.cursor_pos = raw_pos;
+                                                    if state.selection_anchor == Some(state.cursor_pos) {
+                                                        state.selection_anchor = None;
+                                                    }
+                                                    state.reset_blink();
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        let char_x_positions = crate::text_input::compute_char_x_positions(
+                                            &disp_text,
+                                            ti_cfg.font_asset,
+                                            ti_cfg.font_size,
+                                            measure_fn.as_ref(),
+                                        );
+                                        let adjusted_x = clamped_x + state_snapshot.scroll_offset;
+
+                                        if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
+                                            #[cfg(feature = "text-styling")]
+                                            {
+                                                let raw_pos = crate::text_input::find_nearest_char_boundary(
+                                                    adjusted_x,
+                                                    &char_x_positions,
+                                                );
+                                                let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_pos);
+                                                state.click_to_cursor_styled(visual_pos, true);
+                                            }
+                                            #[cfg(not(feature = "text-styling"))]
+                                            {
+                                                state.click_to_cursor(adjusted_x, &char_x_positions, true);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            self.text_input_scrollbar_idle_frames.insert(drag_id, 0);
+                        }
+                    } else if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
                         if is_multiline {
                             let drag_delta_y = self.text_input_drag_origin.y - pointer.y;
                             state.scroll_offset_y = (self.text_input_drag_scroll_origin.y + drag_delta_y).max(0.0);
@@ -6494,13 +6624,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             state.scroll_offset = (self.text_input_drag_scroll_origin.x + drag_delta_x).max(0.0);
                         }
                         self.text_input_scrollbar_idle_frames
-                            .insert(self.text_input_drag_element_id, 0);
+                            .insert(drag_id, 0);
                     }
                 }
             }
             PointerDataInteractionState::ReleasedThisFrame
             | PointerDataInteractionState::Released => {
                 self.text_input_drag_active = false;
+                self.text_input_drag_from_touch = false;
                 self.text_input_scrollbar_drag_active = false;
             }
         }

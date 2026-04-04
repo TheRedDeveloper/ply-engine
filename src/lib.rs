@@ -579,9 +579,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             } else {
                 Vector2::new(scroll_x * SCROLL_SPEED, scroll_y * SCROLL_SPEED)
             };
+            let touch_input_active = !macroquad::prelude::touches().is_empty();
 
             // Text input pointer scrolling (scroll wheel + drag) — consumes scroll if applicable
-            let text_consumed_scroll = self.context.update_text_input_pointer_scroll(scroll_delta);
+            let text_consumed_scroll = self.context.update_text_input_pointer_scroll(
+                scroll_delta,
+                touch_input_active,
+            );
             self.context.clamp_text_input_scroll();
 
             // Only pass scroll to scroll containers if text input didn't consume it
@@ -590,7 +594,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             } else {
                 scroll_delta
             };
-            let touch_input_active = !macroquad::prelude::touches().is_empty();
             self.context.update_scroll_containers(
                 true,
                 container_scroll,

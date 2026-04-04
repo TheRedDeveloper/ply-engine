@@ -1161,6 +1161,8 @@ pub struct TextInputConfig {
     pub is_password: bool,
     /// When true, the input supports multiple lines (Enter inserts newline).
     pub is_multiline: bool,
+    /// When true, mouse drag performs selection instead of drag-scrolling.
+    pub drag_select: bool,
     /// Font size in pixels.
     pub font_size: u16,
     /// Color of the input text.
@@ -1188,6 +1190,7 @@ impl Default for TextInputConfig {
             max_length: None,
             is_password: false,
             is_multiline: false,
+            drag_select: false,
             font_size: 0,
             text_color: Color::rgba(255.0, 255.0, 255.0, 255.0),
             placeholder_color: Color::rgba(128.0, 128.0, 128.0, 255.0),
@@ -1242,6 +1245,13 @@ impl TextInputBuilder {
     #[inline]
     pub fn multiline(&mut self, enabled: bool) -> &mut Self {
         self.config.is_multiline = enabled;
+        self
+    }
+
+    /// Enables mouse drag-to-select behavior.
+    #[inline]
+    pub fn drag_select(&mut self) -> &mut Self {
+        self.config.drag_select = true;
         self
     }
 
