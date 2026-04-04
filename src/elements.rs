@@ -120,6 +120,55 @@ pub struct OverflowBuilder {
     pub(crate) config: engine::ClipConfig,
 }
 
+/// Builder for configuring scrollbars on overflow and text inputs.
+pub struct ScrollbarBuilder {
+    pub(crate) config: engine::ScrollbarConfig,
+}
+
+impl ScrollbarBuilder {
+    /// Thumb thickness in pixels.
+    #[inline]
+    pub fn width(&mut self, width: f32) -> &mut Self {
+        self.config.width = width.max(1.0);
+        self
+    }
+
+    /// Corner radius for the scrollbar thumb.
+    #[inline]
+    pub fn corner_radius(&mut self, radius: f32) -> &mut Self {
+        self.config.corner_radius = radius.max(0.0);
+        self
+    }
+
+    /// Scrollbar thumb color.
+    #[inline]
+    pub fn thumb_color(&mut self, color: impl Into<Color>) -> &mut Self {
+        self.config.thumb_color = color.into();
+        self
+    }
+
+    /// Optional track color rendered behind the thumb.
+    #[inline]
+    pub fn track_color(&mut self, color: impl Into<Color>) -> &mut Self {
+        self.config.track_color = Some(color.into());
+        self
+    }
+
+    /// Minimum thumb size in pixels.
+    #[inline]
+    pub fn min_thumb_size(&mut self, size: f32) -> &mut Self {
+        self.config.min_thumb_size = size.max(1.0);
+        self
+    }
+
+    /// Frames before auto-hide starts fading.
+    #[inline]
+    pub fn hide_after_frames(&mut self, frames: u32) -> &mut Self {
+        self.config.hide_after_frames = Some(frames);
+        self
+    }
+}
+
 impl OverflowBuilder {
     /// Clips horizontal overflow without enabling scrolling.
     #[inline]
@@ -166,6 +215,20 @@ impl OverflowBuilder {
         self.config.vertical = true;
         self.config.scroll_x = true;
         self.config.scroll_y = true;
+        self
+    }
+
+    /// Enables and configures the overflow scrollbar.
+    #[inline]
+    pub fn scrollbar(
+        &mut self,
+        f: impl for<'a> FnOnce(&'a mut ScrollbarBuilder) -> &'a mut ScrollbarBuilder,
+    ) -> &mut Self {
+        let mut builder = ScrollbarBuilder {
+            config: self.config.scrollbar.unwrap_or_default(),
+        };
+        f(&mut builder);
+        self.config.scrollbar = Some(builder.config);
         self
     }
 }

@@ -243,6 +243,30 @@ pub struct ClipConfig {
     pub scroll_x: bool,
     pub scroll_y: bool,
     pub child_offset: Vector2,
+    pub scrollbar: Option<ScrollbarConfig>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollbarConfig {
+    pub width: f32,
+    pub corner_radius: f32,
+    pub thumb_color: Color,
+    pub track_color: Option<Color>,
+    pub min_thumb_size: f32,
+    pub hide_after_frames: Option<u32>,
+}
+
+impl Default for ScrollbarConfig {
+    fn default() -> Self {
+        Self {
+            width: 6.0,
+            corner_radius: 3.0,
+            thumb_color: Color::rgba(128.0, 128.0, 128.0, 128.0),
+            track_color: None,
+            min_thumb_size: 20.0,
+            hide_after_frames: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -439,6 +463,15 @@ struct ScrollContainerDataInternal {
     scroll_momentum: Vector2,
     scroll_position: Vector2,
     previous_delta: Vector2,
+    scrollbar: Option<ScrollbarConfig>,
+    scroll_x_enabled: bool,
+    scroll_y_enabled: bool,
+    scrollbar_idle_frames: u32,
+    scrollbar_activity_this_frame: bool,
+    scrollbar_thumb_drag_active_x: bool,
+    scrollbar_thumb_drag_active_y: bool,
+    scrollbar_drag_origin: Vector2,
+    scrollbar_drag_scroll_origin: Vector2,
     element_id: u32,
     layout_element_index: i32,
     open_this_frame: bool,
@@ -676,11 +709,17 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     pub(crate) text_input_element_ids: Vec<u32>,
     /// Pending click on a text input: (element_id, click_x_relative, click_y_relative, shift_held)
     pub(crate) pending_text_click: Option<(u32, f32, f32, bool)>,
+    /// Text input scrollbar auto-hide counters (frames since last activity) by element id.
+    pub(crate) text_input_scrollbar_idle_frames: FxHashMap<u32, u32>,
     /// Text input drag-scroll state (mobile-first: drag scrolls, doesn't select).
     pub(crate) text_input_drag_active: bool,
     pub(crate) text_input_drag_origin: crate::math::Vector2,
     pub(crate) text_input_drag_scroll_origin: crate::math::Vector2,
     pub(crate) text_input_drag_element_id: u32,
+    pub(crate) text_input_scrollbar_drag_active: bool,
+    pub(crate) text_input_scrollbar_drag_vertical: bool,
+    pub(crate) text_input_scrollbar_drag_origin: f32,
+    pub(crate) text_input_scrollbar_drag_scroll_origin: f32,
     /// Current absolute time in seconds (set by lib.rs each frame).
     pub(crate) current_time: f64,
     /// Delta time for the current frame in seconds (set by lib.rs each frame).
@@ -807,6 +846,124 @@ fn point_is_inside_rect(point: Vector2, rect: BoundingBox) -> bool {
         && point.y <= rect.y + rect.height
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ScrollbarAxisGeometry {
+    track_bbox: BoundingBox,
+    thumb_bbox: BoundingBox,
+    max_scroll: f32,
+    thumb_travel: f32,
+}
+
+fn scrollbar_visibility_alpha(config: ScrollbarConfig, idle_frames: u32) -> f32 {
+    match config.hide_after_frames {
+        None => 1.0,
+        Some(hide) => {
+            if hide == 0 {
+                return 0.0;
+            }
+            if idle_frames <= hide {
+                return 1.0;
+            }
+            let fade_frames = ((hide as f32) * 0.25).ceil().max(1.0) as u32;
+            let fade_progress = (idle_frames - hide) as f32 / fade_frames as f32;
+            (1.0 - fade_progress).clamp(0.0, 1.0)
+        }
+    }
+}
+
+fn apply_alpha(color: Color, alpha_mul: f32) -> Color {
+    Color::rgba(
+        color.r,
+        color.g,
+        color.b,
+        (color.a * alpha_mul).clamp(0.0, 255.0),
+    )
+}
+
+fn compute_vertical_scrollbar_geometry(
+    bbox: BoundingBox,
+    content_height: f32,
+    scroll_position_positive: f32,
+    config: ScrollbarConfig,
+) -> Option<ScrollbarAxisGeometry> {
+    let viewport = bbox.height;
+    let max_scroll = (content_height - viewport).max(0.0);
+    if viewport <= 0.0 || max_scroll <= 0.0 {
+        return None;
+    }
+
+    let thickness = config.width.max(1.0);
+    let track_len = viewport;
+    let thumb_len = (track_len * (viewport / content_height.max(viewport)))
+        .max(config.min_thumb_size.max(1.0))
+        .min(track_len);
+    let thumb_travel = (track_len - thumb_len).max(0.0);
+    let thumb_offset = if thumb_travel <= 0.0 {
+        0.0
+    } else {
+        (scroll_position_positive.clamp(0.0, max_scroll) / max_scroll) * thumb_travel
+    };
+
+    Some(ScrollbarAxisGeometry {
+        track_bbox: BoundingBox::new(
+            bbox.x + bbox.width - thickness,
+            bbox.y,
+            thickness,
+            track_len,
+        ),
+        thumb_bbox: BoundingBox::new(
+            bbox.x + bbox.width - thickness,
+            bbox.y + thumb_offset,
+            thickness,
+            thumb_len,
+        ),
+        max_scroll,
+        thumb_travel,
+    })
+}
+
+fn compute_horizontal_scrollbar_geometry(
+    bbox: BoundingBox,
+    content_width: f32,
+    scroll_position_positive: f32,
+    config: ScrollbarConfig,
+) -> Option<ScrollbarAxisGeometry> {
+    let viewport = bbox.width;
+    let max_scroll = (content_width - viewport).max(0.0);
+    if viewport <= 0.0 || max_scroll <= 0.0 {
+        return None;
+    }
+
+    let thickness = config.width.max(1.0);
+    let track_len = viewport;
+    let thumb_len = (track_len * (viewport / content_width.max(viewport)))
+        .max(config.min_thumb_size.max(1.0))
+        .min(track_len);
+    let thumb_travel = (track_len - thumb_len).max(0.0);
+    let thumb_offset = if thumb_travel <= 0.0 {
+        0.0
+    } else {
+        (scroll_position_positive.clamp(0.0, max_scroll) / max_scroll) * thumb_travel
+    };
+
+    Some(ScrollbarAxisGeometry {
+        track_bbox: BoundingBox::new(
+            bbox.x,
+            bbox.y + bbox.height - thickness,
+            track_len,
+            thickness,
+        ),
+        thumb_bbox: BoundingBox::new(
+            bbox.x + thumb_offset,
+            bbox.y + bbox.height - thickness,
+            thumb_len,
+            thickness,
+        ),
+        max_scroll,
+        thumb_travel,
+    })
+}
+
 impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElementData> {
     pub fn new(dimensions: Dimensions) -> Self {
         let max_element_count = DEFAULT_MAX_ELEMENT_COUNT;
@@ -870,10 +1027,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             text_input_configs: Vec::new(),
             text_input_element_ids: Vec::new(),
             pending_text_click: None,
+            text_input_scrollbar_idle_frames: FxHashMap::default(),
             text_input_drag_active: false,
             text_input_drag_origin: Vector2::default(),
             text_input_drag_scroll_origin: Vector2::default(),
             text_input_drag_element_id: 0,
+            text_input_scrollbar_drag_active: false,
+            text_input_scrollbar_drag_vertical: false,
+            text_input_scrollbar_drag_origin: 0.0,
+            text_input_scrollbar_drag_scroll_origin: 0.0,
             current_time: 0.0,
             frame_delta_time: 0.0,
             tree_node_visited: Vec::new(),
@@ -1265,6 +1427,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     if elem_id == scd.element_id {
                         scd.layout_element_index = open_idx as i32;
                         scd.open_this_frame = true;
+                        scd.scrollbar = clip.scrollbar;
+                        scd.scroll_x_enabled = clip.scroll_x;
+                        scd.scroll_y_enabled = clip.scroll_y;
                         found_existing = true;
                         break;
                     }
@@ -1273,6 +1438,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     self.scroll_container_datas.push(ScrollContainerDataInternal {
                         layout_element_index: open_idx as i32,
                         scroll_origin: Vector2::new(-1.0, -1.0),
+                        scrollbar: clip.scrollbar,
+                        scroll_x_enabled: clip.scroll_x,
+                        scroll_y_enabled: clip.scroll_y,
                         element_id: elem_id,
                         open_this_frame: true,
                         ..Default::default()
@@ -1343,6 +1511,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             // Ensure a TextEditState exists for this element
             self.text_edit_states.entry(elem_id)
                 .or_insert_with(crate::text_input::TextEditState::default);
+
+            self.text_input_scrollbar_idle_frames
+                .entry(elem_id)
+                .or_insert(0);
 
             // Sync config flags to persistent state
             if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
@@ -3317,6 +3489,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     } else {
                                         ti_config.text_color
                                     };
+                                    let mut content_width = 0.0_f32;
+                                    let mut content_height = 0.0_f32;
+                                    let mut scroll_pos_x = state.scroll_offset;
+                                    let mut scroll_pos_y = state.scroll_offset_y;
 
                                     // Measure font height for cursor
                                     let natural_font_height = self.font_height(ti_config.font_asset, ti_config.font_size);
@@ -3388,6 +3564,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         } else {
                                             visual_lines.iter().map(|_| vec![0.0]).collect()
                                         };
+                                        content_width = line_positions.iter()
+                                            .filter_map(|p| p.last().copied())
+                                            .fold(0.0_f32, |a, b| a.max(b));
+                                        content_height = visual_lines.len() as f32 * line_step;
+                                        scroll_pos_x = scroll_offset_x;
+                                        scroll_pos_y = scroll_offset_y;
 
                                         // Selection rendering (multiline)
                                         if is_focused {
@@ -3555,6 +3737,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         // Text
                                         if !disp_text.is_empty() {
                                             let text_width = char_x_positions.last().copied().unwrap_or(0.0);
+                                            content_width = text_width;
+                                            content_height = font_height;
+                                            scroll_pos_x = scroll_offset;
+                                            scroll_pos_y = 0.0;
                                             let text_y = current_bbox.y + (current_bbox.height - font_height) / 2.0;
                                             self.add_render_command(InternalRenderCommand {
                                                 bounding_box: BoundingBox::new(
@@ -3607,6 +3793,45 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 shape_rotation: None,
                                                 effects: Vec::new(),
                                             });
+                                        }
+                                    }
+
+                                    if let Some(scrollbar_cfg) = ti_config.scrollbar {
+                                        let idle_frames = self
+                                            .text_input_scrollbar_idle_frames
+                                            .get(&elem_id)
+                                            .copied()
+                                            .unwrap_or(0);
+                                        let alpha = scrollbar_visibility_alpha(scrollbar_cfg, idle_frames);
+                                        if alpha > 0.0 {
+                                            let vertical = if ti_config.is_multiline {
+                                                compute_vertical_scrollbar_geometry(
+                                                    current_bbox,
+                                                    content_height,
+                                                    scroll_pos_y,
+                                                    scrollbar_cfg,
+                                                )
+                                            } else {
+                                                None
+                                            };
+
+                                            let horizontal = compute_horizontal_scrollbar_geometry(
+                                                current_bbox,
+                                                content_width,
+                                                scroll_pos_x,
+                                                scrollbar_cfg,
+                                            );
+
+                                            if vertical.is_some() || horizontal.is_some() {
+                                                self.render_scrollbar_geometry(
+                                                    hash_number(elem_id, 8010).id,
+                                                    root.z_index,
+                                                    scrollbar_cfg,
+                                                    alpha,
+                                                    vertical,
+                                                    horizontal,
+                                                );
+                                            }
                                         }
                                     }
 
@@ -3755,6 +3980,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     // Returning upward in DFS
 
                     let mut close_clip = false;
+                    let mut scroll_container_data_idx: Option<usize> = None;
 
                     if self.element_has_config(current_elem_idx, ElementConfigType::Clip) {
                         close_clip = true;
@@ -3767,6 +3993,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     == current_elem_idx as i32
                                 {
                                     scroll_offset = clip_config.child_offset;
+                                    scroll_container_data_idx = Some(si);
                                     break;
                                 }
                             }
@@ -3907,6 +4134,47 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     + layout_config.child_gap as f32;
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(si) = scroll_container_data_idx {
+                        let scd = self.scroll_container_datas[si];
+                        if let Some(scrollbar_cfg) = scd.scrollbar {
+                            let alpha = scrollbar_visibility_alpha(scrollbar_cfg, scd.scrollbar_idle_frames);
+                            if alpha > 0.0 {
+                                let vertical = if scd.scroll_y_enabled {
+                                    compute_vertical_scrollbar_geometry(
+                                        scd.bounding_box,
+                                        scd.content_size.height,
+                                        -scd.scroll_position.y,
+                                        scrollbar_cfg,
+                                    )
+                                } else {
+                                    None
+                                };
+
+                                let horizontal = if scd.scroll_x_enabled {
+                                    compute_horizontal_scrollbar_geometry(
+                                        scd.bounding_box,
+                                        scd.content_size.width,
+                                        -scd.scroll_position.x,
+                                        scrollbar_cfg,
+                                    )
+                                } else {
+                                    None
+                                };
+
+                                if vertical.is_some() || horizontal.is_some() {
+                                    self.render_scrollbar_geometry(
+                                        scd.element_id,
+                                        root.z_index,
+                                        scrollbar_cfg,
+                                        alpha,
+                                        vertical,
+                                        horizontal,
+                                    );
                                 }
                             }
                         }
@@ -4315,6 +4583,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             i += 1;
         }
 
+        for scd in &mut self.scroll_container_datas {
+            scd.scrollbar_activity_this_frame = false;
+        }
+
         // --- Drag scrolling ---
         if enable_drag_scrolling {
             let pointer_state = self.pointer_info.state;
@@ -4335,17 +4607,110 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     }
                     if let Some(si) = best {
                         let scd = &mut self.scroll_container_datas[si];
-                        scd.pointer_scroll_active = true;
-                        scd.pointer_origin = pointer;
-                        scd.scroll_origin = scd.scroll_position;
                         scd.scroll_momentum = Vector2::default();
                         scd.previous_delta = Vector2::default();
+
+                        scd.pointer_scroll_active = false;
+                        scd.scrollbar_thumb_drag_active_x = false;
+                        scd.scrollbar_thumb_drag_active_y = false;
+
+                        let mut started_thumb_drag = false;
+                        if let Some(scrollbar_cfg) = scd.scrollbar {
+                            let alpha = scrollbar_visibility_alpha(scrollbar_cfg, scd.scrollbar_idle_frames);
+                            if alpha > 0.0 {
+                                if scd.scroll_y_enabled {
+                                    if let Some(geo) = compute_vertical_scrollbar_geometry(
+                                        scd.bounding_box,
+                                        scd.content_size.height,
+                                        -scd.scroll_position.y,
+                                        scrollbar_cfg,
+                                    ) {
+                                        if point_is_inside_rect(pointer, geo.thumb_bbox) {
+                                            scd.scrollbar_thumb_drag_active_y = true;
+                                            started_thumb_drag = true;
+                                        }
+                                    }
+                                }
+
+                                if !started_thumb_drag && scd.scroll_x_enabled {
+                                    if let Some(geo) = compute_horizontal_scrollbar_geometry(
+                                        scd.bounding_box,
+                                        scd.content_size.width,
+                                        -scd.scroll_position.x,
+                                        scrollbar_cfg,
+                                    ) {
+                                        if point_is_inside_rect(pointer, geo.thumb_bbox) {
+                                            scd.scrollbar_thumb_drag_active_x = true;
+                                            started_thumb_drag = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if started_thumb_drag {
+                            scd.scrollbar_drag_origin = pointer;
+                            scd.scrollbar_drag_scroll_origin =
+                                Vector2::new(-scd.scroll_position.x, -scd.scroll_position.y);
+                            scd.scrollbar_activity_this_frame = true;
+                        } else {
+                            scd.pointer_scroll_active = true;
+                            scd.pointer_origin = pointer;
+                            scd.scroll_origin = scd.scroll_position;
+                        }
                     }
                 }
                 PointerDataInteractionState::Pressed => {
                     // Update drag: move scroll position to follow pointer
                     for si in 0..self.scroll_container_datas.len() {
                         let scd = &mut self.scroll_container_datas[si];
+
+                        if scd.scrollbar_thumb_drag_active_y {
+                            if let Some(scrollbar_cfg) = scd.scrollbar {
+                                if let Some(geo) = compute_vertical_scrollbar_geometry(
+                                    scd.bounding_box,
+                                    scd.content_size.height,
+                                    scd.scrollbar_drag_scroll_origin.y,
+                                    scrollbar_cfg,
+                                ) {
+                                    let delta = pointer.y - scd.scrollbar_drag_origin.y;
+                                    let new_scroll = if geo.thumb_travel <= 0.0 {
+                                        0.0
+                                    } else {
+                                        scd.scrollbar_drag_scroll_origin.y
+                                            + delta * (geo.max_scroll / geo.thumb_travel)
+                                    };
+                                    scd.scroll_position.y = -new_scroll.clamp(0.0, geo.max_scroll);
+                                }
+                            }
+                            scd.scroll_momentum.y = 0.0;
+                            scd.scrollbar_activity_this_frame = true;
+                            continue;
+                        }
+
+                        if scd.scrollbar_thumb_drag_active_x {
+                            if let Some(scrollbar_cfg) = scd.scrollbar {
+                                if let Some(geo) = compute_horizontal_scrollbar_geometry(
+                                    scd.bounding_box,
+                                    scd.content_size.width,
+                                    scd.scrollbar_drag_scroll_origin.x,
+                                    scrollbar_cfg,
+                                ) {
+                                    let delta = pointer.x - scd.scrollbar_drag_origin.x;
+                                    let new_scroll = if geo.thumb_travel <= 0.0 {
+                                        0.0
+                                    } else {
+                                        scd.scrollbar_drag_scroll_origin.x
+                                            + delta * (geo.max_scroll / geo.thumb_travel)
+                                    };
+                                    scd.scroll_position.x = -new_scroll.clamp(0.0, geo.max_scroll);
+                                }
+                            }
+                            scd.scroll_momentum.x = 0.0;
+                            scd.scrollbar_activity_this_frame = true;
+                            continue;
+                        }
+
                         if !scd.pointer_scroll_active {
                             continue;
                         }
@@ -4377,6 +4742,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 scd.scroll_momentum.x * (1.0 - s) + instant_velocity.x * s,
                                 scd.scroll_momentum.y * (1.0 - s) + instant_velocity.y * s,
                             );
+                            scd.scrollbar_activity_this_frame = true;
                         }
                         scd.previous_delta = drag_delta;
                     }
@@ -4385,10 +4751,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 | PointerDataInteractionState::Released => {
                     for si in 0..self.scroll_container_datas.len() {
                         let scd = &mut self.scroll_container_datas[si];
-                        if !scd.pointer_scroll_active {
-                            continue;
+                        if scd.scrollbar_thumb_drag_active_x
+                            || scd.scrollbar_thumb_drag_active_y
+                        {
+                            scd.scrollbar_activity_this_frame = true;
                         }
                         scd.pointer_scroll_active = false;
+                        scd.scrollbar_thumb_drag_active_x = false;
+                        scd.scrollbar_thumb_drag_active_y = false;
                     }
                 }
             }
@@ -4397,7 +4767,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         // --- Momentum scrolling (apply when not actively dragging) ---
         for si in 0..self.scroll_container_datas.len() {
             let scd = &mut self.scroll_container_datas[si];
-            if scd.pointer_scroll_active {
+            if scd.pointer_scroll_active
+                || scd.scrollbar_thumb_drag_active_x
+                || scd.scrollbar_thumb_drag_active_y
+            {
                 // Still dragging — skip momentum
             } else if scd.scroll_momentum.x.abs() > Self::SCROLL_MIN_VELOCITY
                 || scd.scroll_momentum.y.abs() > Self::SCROLL_MIN_VELOCITY
@@ -4405,6 +4778,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 // Apply momentum
                 scd.scroll_position.x += scd.scroll_momentum.x * dt;
                 scd.scroll_position.y += scd.scroll_momentum.y * dt;
+                scd.scrollbar_activity_this_frame = true;
 
                 // Exponential decay (frame-rate independent)
                 let decay = (-Self::SCROLL_DECEL * dt).exp();
@@ -4441,6 +4815,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 scd.scroll_position.x += scroll_delta.x;
                 // Kill any active momentum when mouse wheel is used
                 scd.scroll_momentum = Vector2::default();
+                scd.scrollbar_activity_this_frame = true;
             }
         }
 
@@ -4460,6 +4835,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
             if scd.scroll_position.x >= 0.0 || scd.scroll_position.x <= max_scroll_x {
                 scd.scroll_momentum.x = 0.0;
+            }
+
+            if scd.scrollbar.is_some() {
+                if scd.scrollbar_activity_this_frame {
+                    scd.scrollbar_idle_frames = 0;
+                } else {
+                    scd.scrollbar_idle_frames = scd.scrollbar_idle_frames.saturating_add(1);
+                }
             }
         }
     }
@@ -5085,6 +5468,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     /// `scroll_delta` contains (x, y) scroll wheel deltas. For single-line, both axes
     /// map to horizontal scroll. For multiline, y scrolls vertically.
     pub fn update_text_input_pointer_scroll(&mut self, scroll_delta: Vector2) -> bool {
+        for idle in self.text_input_scrollbar_idle_frames.values_mut() {
+            *idle = idle.saturating_add(1);
+        }
+
         let mut consumed_scroll = false;
 
         let focused = self.focused_element_id;
@@ -5129,6 +5516,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                     }
                     consumed_scroll = true;
+                    self.text_input_scrollbar_idle_frames.insert(elem_id, 0);
                 }
             }
         }
@@ -5141,24 +5529,29 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     self.text_input_drag_active = false;
                 }
             }
+            self.text_input_scrollbar_drag_active = false;
             return consumed_scroll;
         }
 
-        let ti_info = self.text_input_element_ids.iter()
-            .position(|&id| id == focused)
-            .and_then(|idx| self.text_input_configs.get(idx).map(|cfg| cfg.is_multiline));
-        let is_text_input = ti_info.is_some();
-        let is_multiline = ti_info.unwrap_or(false);
-
-        if !is_text_input {
+        let ti_index = self
+            .text_input_element_ids
+            .iter()
+            .position(|&id| id == focused);
+        let Some(ti_index) = ti_index else {
             if self.text_input_drag_active {
                 let pointer_state = self.pointer_info.state;
                 if matches!(pointer_state, PointerDataInteractionState::ReleasedThisFrame | PointerDataInteractionState::Released) {
                     self.text_input_drag_active = false;
                 }
             }
+            self.text_input_scrollbar_drag_active = false;
             return consumed_scroll;
-        }
+        };
+        let Some(ti_cfg) = self.text_input_configs.get(ti_index).cloned() else {
+            self.text_input_scrollbar_drag_active = false;
+            return consumed_scroll;
+        };
+        let is_multiline = ti_cfg.is_multiline;
 
         let pointer_over_focused = self.layout_element_map.get(&focused)
             .map(|item| {
@@ -5175,6 +5568,72 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         match pointer_state {
             PointerDataInteractionState::PressedThisFrame => {
                 if pointer_over_focused {
+                    let mut started_scrollbar_drag = false;
+
+                    if let Some(scrollbar_cfg) = ti_cfg.scrollbar {
+                        if let Some(item) = self.layout_element_map.get(&focused) {
+                            if let Some(state) = self.text_edit_states.get(&focused).cloned() {
+                                let bbox = item.bounding_box;
+                                let (content_width, content_height) =
+                                    self.text_input_content_size(&state, &ti_cfg, bbox.width);
+
+                                let idle_frames = self
+                                    .text_input_scrollbar_idle_frames
+                                    .get(&focused)
+                                    .copied()
+                                    .unwrap_or(0);
+                                let alpha = scrollbar_visibility_alpha(scrollbar_cfg, idle_frames);
+
+                                if alpha > 0.0 {
+                                    if ti_cfg.is_multiline {
+                                        if let Some(geo) = compute_vertical_scrollbar_geometry(
+                                            bbox,
+                                            content_height,
+                                            state.scroll_offset_y,
+                                            scrollbar_cfg,
+                                        ) {
+                                            if point_is_inside_rect(pointer, geo.thumb_bbox) {
+                                                started_scrollbar_drag = true;
+                                                self.text_input_scrollbar_drag_active = true;
+                                                self.text_input_scrollbar_drag_vertical = true;
+                                                self.text_input_scrollbar_drag_origin = pointer.y;
+                                                self.text_input_scrollbar_drag_scroll_origin =
+                                                    state.scroll_offset_y;
+                                            }
+                                        }
+                                    }
+
+                                    if !started_scrollbar_drag {
+                                        if let Some(geo) = compute_horizontal_scrollbar_geometry(
+                                            bbox,
+                                            content_width,
+                                            state.scroll_offset,
+                                            scrollbar_cfg,
+                                        ) {
+                                            if point_is_inside_rect(pointer, geo.thumb_bbox) {
+                                                started_scrollbar_drag = true;
+                                                self.text_input_scrollbar_drag_active = true;
+                                                self.text_input_scrollbar_drag_vertical = false;
+                                                self.text_input_scrollbar_drag_origin = pointer.x;
+                                                self.text_input_scrollbar_drag_scroll_origin =
+                                                    state.scroll_offset;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if started_scrollbar_drag {
+                        self.text_input_drag_active = false;
+                        self.text_input_drag_element_id = focused;
+                        self.pending_text_click = None;
+                        self.text_input_scrollbar_idle_frames.insert(focused, 0);
+                        consumed_scroll = true;
+                        return consumed_scroll;
+                    }
+
                     let (scroll_x, scroll_y) = self.text_edit_states.get(&focused)
                         .map(|s| (s.scroll_offset, s.scroll_offset_y))
                         .unwrap_or((0.0, 0.0));
@@ -5182,10 +5641,66 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     self.text_input_drag_origin = pointer;
                     self.text_input_drag_scroll_origin = Vector2::new(scroll_x, scroll_y);
                     self.text_input_drag_element_id = focused;
+                    self.text_input_scrollbar_drag_active = false;
                 }
             }
             PointerDataInteractionState::Pressed => {
-                if self.text_input_drag_active {
+                if self.text_input_scrollbar_drag_active {
+                    if let Some(item) = self.layout_element_map.get(&self.text_input_drag_element_id)
+                    {
+                        if let Some(state_snapshot) = self
+                            .text_edit_states
+                            .get(&self.text_input_drag_element_id)
+                            .cloned()
+                        {
+                            if let Some(scrollbar_cfg) = ti_cfg.scrollbar {
+                                let bbox = item.bounding_box;
+                                let (content_width, content_height) = self
+                                    .text_input_content_size(&state_snapshot, &ti_cfg, bbox.width);
+
+                                if let Some(state) =
+                                    self.text_edit_states.get_mut(&self.text_input_drag_element_id)
+                                {
+                                    if self.text_input_scrollbar_drag_vertical {
+                                        if let Some(geo) = compute_vertical_scrollbar_geometry(
+                                            bbox,
+                                            content_height,
+                                            self.text_input_scrollbar_drag_scroll_origin,
+                                            scrollbar_cfg,
+                                        ) {
+                                            let delta = pointer.y - self.text_input_scrollbar_drag_origin;
+                                            let new_scroll = if geo.thumb_travel <= 0.0 {
+                                                0.0
+                                            } else {
+                                                self.text_input_scrollbar_drag_scroll_origin
+                                                    + delta * (geo.max_scroll / geo.thumb_travel)
+                                            };
+                                            state.scroll_offset_y = new_scroll.clamp(0.0, geo.max_scroll);
+                                        }
+                                    } else if let Some(geo) = compute_horizontal_scrollbar_geometry(
+                                        bbox,
+                                        content_width,
+                                        self.text_input_scrollbar_drag_scroll_origin,
+                                        scrollbar_cfg,
+                                    ) {
+                                        let delta = pointer.x - self.text_input_scrollbar_drag_origin;
+                                        let new_scroll = if geo.thumb_travel <= 0.0 {
+                                            0.0
+                                        } else {
+                                            self.text_input_scrollbar_drag_scroll_origin
+                                                + delta * (geo.max_scroll / geo.thumb_travel)
+                                        };
+                                        state.scroll_offset = new_scroll.clamp(0.0, geo.max_scroll);
+                                    }
+                                }
+
+                                self.text_input_scrollbar_idle_frames
+                                    .insert(self.text_input_drag_element_id, 0);
+                                consumed_scroll = true;
+                            }
+                        }
+                    }
+                } else if self.text_input_drag_active {
                     if let Some(state) = self.text_edit_states.get_mut(&self.text_input_drag_element_id) {
                         if is_multiline {
                             let drag_delta_y = self.text_input_drag_origin.y - pointer.y;
@@ -5194,12 +5709,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             let drag_delta_x = self.text_input_drag_origin.x - pointer.x;
                             state.scroll_offset = (self.text_input_drag_scroll_origin.x + drag_delta_x).max(0.0);
                         }
+                        self.text_input_scrollbar_idle_frames
+                            .insert(self.text_input_drag_element_id, 0);
                     }
                 }
             }
             PointerDataInteractionState::ReleasedThisFrame
             | PointerDataInteractionState::Released => {
                 self.text_input_drag_active = false;
+                self.text_input_scrollbar_drag_active = false;
             }
         }
         consumed_scroll
@@ -5395,8 +5913,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         scd.bounding_box.height,
                     ),
                     content_dimensions: scd.content_size,
-                    horizontal: false,
-                    vertical: false,
+                    horizontal: scd.scroll_x_enabled,
+                    vertical: scd.scroll_y_enabled,
                     found: true,
                 };
             }
@@ -5425,8 +5943,150 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 let clamped_y = position.y.clamp(0.0, max_scroll_y);
                 scd.scroll_position.x = -clamped_x;
                 scd.scroll_position.y = -clamped_y;
+                if scd.scrollbar.is_some() {
+                    scd.scrollbar_idle_frames = 0;
+                }
                 return;
             }
+        }
+    }
+
+    fn render_scrollbar_geometry(
+        &mut self,
+        id: u32,
+        z_index: i16,
+        config: ScrollbarConfig,
+        alpha_mul: f32,
+        vertical: Option<ScrollbarAxisGeometry>,
+        horizontal: Option<ScrollbarAxisGeometry>,
+    ) {
+        if alpha_mul <= 0.0 {
+            return;
+        }
+
+        let thumb_color = apply_alpha(config.thumb_color, alpha_mul);
+        let track_color = config.track_color.map(|c| apply_alpha(c, alpha_mul));
+
+        if let Some(v) = vertical {
+            if let Some(track) = track_color {
+                self.add_render_command(InternalRenderCommand {
+                    bounding_box: v.track_bbox,
+                    command_type: RenderCommandType::Rectangle,
+                    render_data: InternalRenderData::Rectangle {
+                        background_color: track,
+                        corner_radius: config.corner_radius.into(),
+                    },
+                    id: hash_number(id, 8001).id,
+                    z_index,
+                    ..Default::default()
+                });
+            }
+
+            self.add_render_command(InternalRenderCommand {
+                bounding_box: v.thumb_bbox,
+                command_type: RenderCommandType::Rectangle,
+                render_data: InternalRenderData::Rectangle {
+                    background_color: thumb_color,
+                    corner_radius: config.corner_radius.into(),
+                },
+                id: hash_number(id, 8002).id,
+                z_index,
+                ..Default::default()
+            });
+        }
+
+        if let Some(h) = horizontal {
+            if let Some(track) = track_color {
+                self.add_render_command(InternalRenderCommand {
+                    bounding_box: h.track_bbox,
+                    command_type: RenderCommandType::Rectangle,
+                    render_data: InternalRenderData::Rectangle {
+                        background_color: track,
+                        corner_radius: config.corner_radius.into(),
+                    },
+                    id: hash_number(id, 8003).id,
+                    z_index,
+                    ..Default::default()
+                });
+            }
+
+            self.add_render_command(InternalRenderCommand {
+                bounding_box: h.thumb_bbox,
+                command_type: RenderCommandType::Rectangle,
+                render_data: InternalRenderData::Rectangle {
+                    background_color: thumb_color,
+                    corner_radius: config.corner_radius.into(),
+                },
+                id: hash_number(id, 8004).id,
+                z_index,
+                ..Default::default()
+            });
+        }
+    }
+
+    fn text_input_content_size(
+        &mut self,
+        state: &crate::text_input::TextEditState,
+        config: &crate::text_input::TextInputConfig,
+        visible_width: f32,
+    ) -> (f32, f32) {
+        if state.text.is_empty() || visible_width <= 0.0 {
+            return (0.0, 0.0);
+        }
+
+        let Some(measure_fn) = self.measure_text_fn.as_ref() else {
+            return (0.0, 0.0);
+        };
+
+        let display_text = crate::text_input::display_text(
+            &state.text,
+            &config.placeholder,
+            config.is_password && !config.is_multiline,
+        );
+
+        if config.is_multiline {
+            let visual_lines = crate::text_input::wrap_lines(
+                &display_text,
+                visible_width,
+                config.font_asset,
+                config.font_size,
+                measure_fn.as_ref(),
+            );
+
+            let content_width = visual_lines
+                .iter()
+                .map(|line| {
+                    crate::text_input::compute_char_x_positions(
+                        &line.text,
+                        config.font_asset,
+                        config.font_size,
+                        measure_fn.as_ref(),
+                    )
+                    .last()
+                    .copied()
+                    .unwrap_or(0.0)
+                })
+                .fold(0.0_f32, |a, b| a.max(b));
+
+            let natural_height = self.font_height(config.font_asset, config.font_size);
+            let line_height = if config.line_height > 0 {
+                config.line_height as f32
+            } else {
+                natural_height
+            };
+
+            (content_width, visual_lines.len() as f32 * line_height)
+        } else {
+            let positions = crate::text_input::compute_char_x_positions(
+                &display_text,
+                config.font_asset,
+                config.font_size,
+                measure_fn.as_ref(),
+            );
+            (
+                positions.last().copied().unwrap_or(0.0),
+                self.font_height(config.font_asset, config.font_size),
+            )
         }
     }
 
@@ -6646,6 +7306,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     scroll_x: true,
                     scroll_y: true,
                     child_offset: self.get_scroll_offset(),
+                    ..Default::default()
                 },
                 ..Default::default()
             });

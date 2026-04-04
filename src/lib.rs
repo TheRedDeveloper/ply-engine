@@ -2691,4 +2691,78 @@ mod tests {
             assert!(ring.bounding_box.height > 50.0, "Focus ring should be taller than element");
         }
     }
+
+    #[test]
+    fn test_overflow_scrollbar_renders_and_moves_with_set_scroll_position() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(400.0, 300.0));
+
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("scroll")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .overflow(|o| o.scroll().scrollbar(|s| s))
+                .children(|ui| {
+                    ui.element()
+                        .width(fixed!(300.0))
+                        .height(fixed!(250.0))
+                        .empty();
+                });
+            let items = ui.eval();
+
+            let rects: Vec<_> = items
+                .iter()
+                .filter(|cmd| matches!(cmd.config, render_commands::RenderCommandConfig::Rectangle(_)))
+                .collect();
+            assert!(rects.len() >= 2, "Expected scrollbar thumb rectangles");
+
+            let v_thumb = rects
+                .iter()
+                .find(|cmd| (cmd.bounding_box.width - 6.0).abs() < 0.1 && cmd.bounding_box.height > cmd.bounding_box.width)
+                .expect("Expected vertical scrollbar thumb");
+            let h_thumb = rects
+                .iter()
+                .find(|cmd| (cmd.bounding_box.height - 6.0).abs() < 0.1 && cmd.bounding_box.width > cmd.bounding_box.height)
+                .expect("Expected horizontal scrollbar thumb");
+
+            assert!((v_thumb.bounding_box.x - 94.0).abs() < 0.1);
+            assert!((h_thumb.bounding_box.y - 94.0).abs() < 0.1);
+        }
+
+        ply.set_scroll_position("scroll", (80.0, 90.0));
+
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("scroll")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .overflow(|o| o.scroll().scrollbar(|s| s))
+                .children(|ui| {
+                    ui.element()
+                        .width(fixed!(300.0))
+                        .height(fixed!(250.0))
+                        .empty();
+                });
+            let items = ui.eval();
+
+            let rects: Vec<_> = items
+                .iter()
+                .filter(|cmd| matches!(cmd.config, render_commands::RenderCommandConfig::Rectangle(_)))
+                .collect();
+
+            let v_thumb = rects
+                .iter()
+                .find(|cmd| (cmd.bounding_box.width - 6.0).abs() < 0.1 && cmd.bounding_box.height > cmd.bounding_box.width)
+                .expect("Expected vertical scrollbar thumb");
+            let h_thumb = rects
+                .iter()
+                .find(|cmd| (cmd.bounding_box.height - 6.0).abs() < 0.1 && cmd.bounding_box.width > cmd.bounding_box.height)
+                .expect("Expected horizontal scrollbar thumb");
+
+            assert!(v_thumb.bounding_box.y > 0.0);
+            assert!(h_thumb.bounding_box.x > 0.0);
+        }
+    }
 }

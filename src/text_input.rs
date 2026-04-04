@@ -1,4 +1,4 @@
-use crate::color::Color;
+use crate::{color::Color, elements, engine};
 
 /// Identifies what kind of edit an undo entry was, for grouping consecutive similar edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1177,6 +1177,8 @@ pub struct TextInputConfig {
     pub no_styles_movement: bool,
     /// The font asset to use. Resolved by the renderer.
     pub font_asset: Option<&'static crate::renderer::FontAsset>,
+    /// Optional scrollbar configuration.
+    pub scrollbar: Option<engine::ScrollbarConfig>,
 }
 
 impl Default for TextInputConfig {
@@ -1194,6 +1196,7 @@ impl Default for TextInputConfig {
             line_height: 0,
             no_styles_movement: false,
             font_asset: None,
+            scrollbar: None,
         }
     }
 }
@@ -1294,6 +1297,20 @@ impl TextInputBuilder {
     #[inline]
     pub fn line_height(&mut self, height: u16) -> &mut Self {
         self.config.line_height = height;
+        self
+    }
+
+    /// Enables and configures the input scrollbar.
+    #[inline]
+    pub fn scrollbar(
+        &mut self,
+        f: impl for<'a> FnOnce(&'a mut elements::ScrollbarBuilder) -> &'a mut elements::ScrollbarBuilder,
+    ) -> &mut Self {
+        let mut builder = elements::ScrollbarBuilder {
+            config: self.config.scrollbar.unwrap_or_default(),
+        };
+        f(&mut builder);
+        self.config.scrollbar = Some(builder.config);
         self
     }
 
