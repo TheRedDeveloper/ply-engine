@@ -1236,15 +1236,15 @@ impl TextInputBuilder {
 
     /// Enables password mode (characters shown as dots).
     #[inline]
-    pub fn password(&mut self, enabled: bool) -> &mut Self {
-        self.config.is_password = enabled;
+    pub fn password(&mut self) -> &mut Self {
+        self.config.is_password = true;
         self
     }
 
     /// Enables multiline mode (Enter inserts newline, up/down arrows navigate lines).
     #[inline]
-    pub fn multiline(&mut self, enabled: bool) -> &mut Self {
-        self.config.is_multiline = enabled;
+    pub fn multiline(&mut self) -> &mut Self {
+        self.config.is_multiline = true;
         self
     }
 
