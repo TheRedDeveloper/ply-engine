@@ -24,6 +24,7 @@ pub mod built_in_shaders;
 pub mod net;
 #[cfg(feature = "storage")]
 pub mod storage;
+pub mod jobs;
 pub mod prelude;
 
 use id::Id;
@@ -521,6 +522,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     pub fn begin(
         &mut self,
     ) -> Ui<'_, CustomElementData> {
+        jobs::poll_completions();
+
         if !self.headless {
             self.context.set_layout_dimensions(Dimensions::new(
                 macroquad::prelude::screen_width(),

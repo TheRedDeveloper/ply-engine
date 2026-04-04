@@ -49,6 +49,9 @@ pub use crate::net::WsMessage;
 #[cfg(feature = "storage")]
 pub use crate::storage::Storage;
 
+// Jobs
+pub use crate::jobs;
+
 // Text styling cursor utilities — feature-gated
 #[cfg(feature = "text-styling")]
 pub use crate::text_input::styling;
