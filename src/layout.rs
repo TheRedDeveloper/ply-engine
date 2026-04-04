@@ -242,6 +242,27 @@ macro_rules! fit {
     () => {
         fit!(0.0)
     };
+
+    ($($name:ident : $value:expr),+ $(,)?) => {
+        $crate::fit!(@named (0.0, f32::MAX); $($name : $value,)+)
+    };
+
+    (@named ($min:expr, $max:expr); ) => {
+        $crate::layout::Sizing::Fit($min, $max)
+    };
+    (@named ($min:expr, $max:expr); min : $value:expr, $($rest:tt)*) => {
+        $crate::fit!(@named ($value, $max); $($rest)*)
+    };
+    (@named ($min:expr, $max:expr); max : $value:expr, $($rest:tt)*) => {
+        $crate::fit!(@named ($min, $value); $($rest)*)
+    };
+    (@named ($min:expr, $max:expr); $unknown:ident : $value:expr, $($rest:tt)*) => {
+        compile_error!("Unknown named argument for fit!(). Expected: min, max.");
+    };
+
+    ($first:expr, $($rest:tt)+) => {
+        compile_error!("Do not mix positional and named arguments in fit!().");
+    };
 }
 
 /// Shorthand macro for [`Sizing::Grow`]. Defaults max to `f32::MAX` and weight to `1.0` if omitted.
@@ -258,6 +279,26 @@ macro_rules! grow {
     };
     () => {
         grow!(0.0)
+    };
+
+    ($($name:ident : $value:expr),+ $(,)?) => {
+        $crate::grow!(@named (0.0, f32::MAX, 1.0); $($name : $value,)+)
+    };
+
+    (@named ($min:expr, $max:expr, $weight:expr); ) => {
+        $crate::layout::Sizing::Grow($min, $max, $weight)
+    };
+    (@named ($min:expr, $max:expr, $weight:expr); min : $value:expr, $($rest:tt)*) => {
+        $crate::grow!(@named ($value, $max, $weight); $($rest)*)
+    };
+    (@named ($min:expr, $max:expr, $weight:expr); max : $value:expr, $($rest:tt)*) => {
+        $crate::grow!(@named ($min, $value, $weight); $($rest)*)
+    };
+    (@named ($min:expr, $max:expr, $weight:expr); weight : $value:expr, $($rest:tt)*) => {
+        $crate::grow!(@named ($min, $max, $value); $($rest)*)
+    };
+    (@named ($min:expr, $max:expr, $weight:expr); $unknown:ident : $value:expr, $($rest:tt)*) => {
+        compile_error!("Unknown named argument for grow!(). Expected: min, max, weight.");
     };
 }
 
@@ -296,6 +337,15 @@ mod test {
 
         let zero_args = fit!();
         assert!(matches!(zero_args, Sizing::Fit(0.0, f32::MAX)));
+
+        let named_max = fit!(max: 34.0);
+        assert!(matches!(named_max, Sizing::Fit(0.0, 34.0)));
+
+        let named_min = fit!(min: 12.0);
+        assert!(matches!(named_min, Sizing::Fit(12.0, f32::MAX)));
+
+        let named_both = fit!(max: 34.0, min: 12.0);
+        assert!(matches!(named_both, Sizing::Fit(12.0, 34.0)));
     }
 
     #[test]
@@ -311,6 +361,18 @@ mod test {
 
         let zero_args = grow!();
         assert!(matches!(zero_args, Sizing::Grow(0.0, f32::MAX, 1.0)));
+
+        let named_weight = grow!(weight: 2.0);
+        assert!(matches!(named_weight, Sizing::Grow(0.0, f32::MAX, 2.0)));
+
+        let named_min_weight = grow!(min: 12.0, weight: 2.0);
+        assert!(matches!(named_min_weight, Sizing::Grow(12.0, f32::MAX, 2.0)));
+
+        let named_max_weight = grow!(max: 34.0, weight: 3.0);
+        assert!(matches!(named_max_weight, Sizing::Grow(0.0, 34.0, 3.0)));
+
+        let named_all = grow!(weight: 2.0, max: 34.0, min: 12.0);
+        assert!(matches!(named_all, Sizing::Grow(12.0, 34.0, 2.0)));
     }
 
     #[test]
