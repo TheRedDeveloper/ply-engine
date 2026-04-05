@@ -215,7 +215,6 @@ storage.export("settings.json").await?;
 ### Jobs module (#45)
 
 - `jobs::spawn(id, job, on_complete)`
-- `jobs::running(id)`
 - `jobs::is_running(id)`
 - `jobs::list()`
 
