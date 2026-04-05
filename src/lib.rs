@@ -952,6 +952,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         self.context.set_debug_mode_enabled(enable);
     }
 
+    /// Sets the debug view panel width in pixels.
+    pub fn set_debug_view_width(&mut self, width: f32) {
+        self.context.set_debug_view_width(width);
+    }
+
     /// Returns if debug mode is enabled
     pub fn is_debug_mode(&self) -> bool {
         self.context.is_debug_mode_enabled()

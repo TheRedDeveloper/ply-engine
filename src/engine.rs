@@ -622,6 +622,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     pub max_element_count: i32,
     pub max_measure_text_cache_word_count: i32,
     pub debug_mode_enabled: bool,
+    debug_view_width: f32,
     pub culling_disabled: bool,
     pub external_scroll_handling_enabled: bool,
     pub debug_selected_element_id: u32,
@@ -992,6 +993,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             max_element_count,
             max_measure_text_cache_word_count,
             debug_mode_enabled: false,
+            debug_view_width: Self::DEBUG_VIEW_DEFAULT_WIDTH,
             culling_disabled: false,
             external_scroll_handling_enabled: false,
             debug_selected_element_id: 0,
@@ -7148,7 +7150,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    const DEBUG_VIEW_WIDTH: f32 = 400.0;
+    const DEBUG_VIEW_DEFAULT_WIDTH: f32 = 400.0;
     const DEBUG_VIEW_ROW_HEIGHT: f32 = 30.0;
     const DEBUG_VIEW_OUTER_PADDING: u16 = 10;
     const DEBUG_VIEW_INDENT_WIDTH: u16 = 16;
@@ -8279,7 +8281,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let initial_elements_length = self.layout_elements.len();
         let row_height = Self::DEBUG_VIEW_ROW_HEIGHT;
         let outer_padding = Self::DEBUG_VIEW_OUTER_PADDING;
-        let debug_width = Self::DEBUG_VIEW_WIDTH;
+        let debug_width = self.debug_view_width;
 
         let info_text_config = self.store_text_element_config(TextConfig {
             color: Self::DEBUG_COLOR_4,
@@ -9359,6 +9361,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     pub fn set_debug_mode_enabled(&mut self, enabled: bool) {
         self.debug_mode_enabled = enabled;
+    }
+
+    pub fn set_debug_view_width(&mut self, width: f32) {
+        self.debug_view_width = width.max(0.0);
     }
 
     pub fn is_debug_mode_enabled(&self) -> bool {
