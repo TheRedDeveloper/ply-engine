@@ -4696,6 +4696,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     && border_config.color.a > 0.0
                                 {
                                     let half_gap = layout_config.child_gap as f32 / 2.0;
+                                    let half_divider =
+                                        border_config.width.between_children as f32 / 2.0;
                                     let children_start =
                                         self.layout_elements[current_elem_idx].children_start;
                                     let children_length = self.layout_elements[current_elem_idx]
@@ -4714,7 +4716,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             if ci > 0 {
                                                 self.add_render_command(InternalRenderCommand {
                                                     bounding_box: BoundingBox::new(
-                                                        bbox.x + border_offset_x + scroll_offset.x,
+                                                        bbox.x + border_offset_x
+                                                            - half_divider
+                                                            + scroll_offset.x,
                                                         bbox.y + scroll_offset.y,
                                                         border_config.width.between_children as f32,
                                                         self.layout_elements[current_elem_idx]
@@ -4753,7 +4757,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 self.add_render_command(InternalRenderCommand {
                                                     bounding_box: BoundingBox::new(
                                                         bbox.x + scroll_offset.x,
-                                                        bbox.y + border_offset_y + scroll_offset.y,
+                                                        bbox.y + border_offset_y
+                                                            - half_divider
+                                                            + scroll_offset.y,
                                                         self.layout_elements[current_elem_idx]
                                                             .dimensions
                                                             .width,
