@@ -4040,7 +4040,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     let is_focused = self.focused_element_id == elem_id;
 
                                     // Emit background rectangle FIRST so text renders on top
-                                    if shared.background_color.a > 0.0 || shared.corner_radius.bottom_left > 0.0 {
+                                    if shared.background_color.a > 0.0 || !shared.corner_radius.is_zero() {
                                         self.add_render_command(InternalRenderCommand {
                                             bounding_box: shape_draw_bbox,
                                             command_type: RenderCommandType::Rectangle,
@@ -7449,27 +7449,77 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.close_element();
     }
 
-    /// Render a corner radius value in the debug view.
-    fn render_debug_view_corner_radius(&mut self, cr: CornerRadius, config_index: usize) {
-        self.debug_open(&ElementDeclaration {
-            layout: LayoutConfig {
-                child_alignment: ChildAlignmentConfig { x: AlignX::Left, y: AlignY::CenterY },
-                ..Default::default()
-            },
-            ..Default::default()
-        });
+    /// Render corner radius values as simple stacked lines.
+    fn render_debug_view_corner_radius(
+        &mut self,
+        cr: CornerRadius,
+        info_text_config: usize,
+    ) {
+        self.debug_open(&ElementDeclaration::default());
         {
-            self.debug_text("{ topLeft: ", config_index);
-            self.debug_int_text(cr.top_left, config_index);
-            self.debug_text(", topRight: ", config_index);
-            self.debug_int_text(cr.top_right, config_index);
-            self.debug_text(", bottomLeft: ", config_index);
-            self.debug_int_text(cr.bottom_left, config_index);
-            self.debug_text(", bottomRight: ", config_index);
-            self.debug_int_text(cr.bottom_right, config_index);
-            self.debug_text(" }", config_index);
+            self.debug_text("topLeft: ", info_text_config);
+            self.debug_float_text(cr.top_left, info_text_config);
         }
         self.close_element();
+        self.debug_open(&ElementDeclaration::default());
+        {
+            self.debug_text("topRight: ", info_text_config);
+            self.debug_float_text(cr.top_right, info_text_config);
+        }
+        self.close_element();
+        self.debug_open(&ElementDeclaration::default());
+        {
+            self.debug_text("bottomLeft: ", info_text_config);
+            self.debug_float_text(cr.bottom_left, info_text_config);
+        }
+        self.close_element();
+        self.debug_open(&ElementDeclaration::default());
+        {
+            self.debug_text("bottomRight: ", info_text_config);
+            self.debug_float_text(cr.bottom_right, info_text_config);
+        }
+        self.close_element();
+    }
+
+    fn debug_border_position_name(position: BorderPosition) -> &'static str {
+        match position {
+            BorderPosition::Outside => "OUTSIDE",
+            BorderPosition::Middle => "MIDDLE",
+            BorderPosition::Inside => "INSIDE",
+        }
+    }
+
+    fn render_debug_scrollbar_config(
+        &mut self,
+        scrollbar: ScrollbarConfig,
+        info_text_config: usize,
+        info_title_config: usize,
+    ) {
+        self.debug_text("Width", info_title_config);
+        self.debug_float_text(scrollbar.width, info_text_config);
+
+        self.debug_text("Corner Radius", info_title_config);
+        self.debug_float_text(scrollbar.corner_radius, info_text_config);
+
+        self.debug_text("Min Thumb Size", info_title_config);
+        self.debug_float_text(scrollbar.min_thumb_size, info_text_config);
+
+        self.debug_text("Hide After Frames", info_title_config);
+        if let Some(frames) = scrollbar.hide_after_frames {
+            self.debug_int_text(frames as f32, info_text_config);
+        } else {
+            self.debug_text("none", info_text_config);
+        }
+
+        self.debug_text("Thumb Color", info_title_config);
+        self.render_debug_view_color(scrollbar.thumb_color, info_text_config);
+
+        self.debug_text("Track Color", info_title_config);
+        if let Some(track) = scrollbar.track_color {
+            self.render_debug_view_color(track, info_text_config);
+        } else {
+            self.debug_text("none", info_text_config);
+        }
     }
 
     /// Render a shader uniform value in the debug view.
@@ -7827,7 +7877,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 }
                                 self.close_element();
                             }
-                            if shared.corner_radius.bottom_left > 0.0 {
+                            if !shared.corner_radius.is_zero() {
                                 let radius_color = Color::rgba(26.0, 188.0, 156.0, 90.0);
                                 self.debug_open(&ElementDeclaration {
                                     layout: LayoutConfig {
@@ -7880,6 +7930,47 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.debug_text(label, tc);
                         }
                         self.close_element();
+
+                        let has_scrollbar = match ec.config_type {
+                            ElementConfigType::Clip => self
+                                .clip_element_configs
+                                .get(ec.config_index)
+                                .and_then(|cfg| cfg.scrollbar)
+                                .is_some(),
+                            ElementConfigType::TextInput => self
+                                .text_input_configs
+                                .get(ec.config_index)
+                                .and_then(|cfg| cfg.scrollbar)
+                                .is_some(),
+                            _ => false,
+                        };
+                        if has_scrollbar {
+                            let bg = Color::rgba(242.0, 196.0, 90.0, 90.0);
+                            let border_color = Color::rgba(242.0, 196.0, 90.0, 255.0);
+                            self.debug_open(&ElementDeclaration {
+                                layout: LayoutConfig {
+                                    padding: PaddingConfig { left: 8, right: 8, top: 2, bottom: 2 },
+                                    ..Default::default()
+                                },
+                                background_color: bg,
+                                corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
+                                border: BorderConfig {
+                                    color: border_color,
+                                    width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            });
+                            {
+                                let tc = self.store_text_element_config(TextConfig {
+                                    color: if offscreen { Self::DEBUG_COLOR_3 } else { Self::DEBUG_COLOR_4 },
+                                    font_size: 16,
+                                    ..Default::default()
+                                });
+                                self.debug_text("Scrollbar", tc);
+                            }
+                            self.close_element();
+                        }
                     }
 
                     // Shader badge
@@ -8612,6 +8703,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 self.debug_text("Child Gap", info_title_config);
                 self.debug_int_text(layout_config.child_gap as f32, info_text_config);
 
+                // Wrap
+                self.debug_text("Wrap", info_title_config);
+                self.debug_text(
+                    if layout_config.wrap { "true" } else { "false" },
+                    info_text_config,
+                );
+
+                // Wrap Gap
+                self.debug_text("Wrap Gap", info_title_config);
+                self.debug_int_text(layout_config.wrap_gap as f32, info_text_config);
+
                 // Child Alignment
                 self.debug_text("Child Alignment", info_title_config);
                 self.debug_open(&ElementDeclaration::default());
@@ -8792,6 +8894,38 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                         self.close_element();
                     }
+                    ElementConfigType::Aspect => {
+                        self.render_debug_view_element_config_header(
+                            elem_id_string.clone(),
+                            ec.config_type,
+                            info_title_config,
+                        );
+                        let aspect_ratio = self.aspect_ratio_configs[ec.config_index];
+                        let is_cover = self
+                            .aspect_ratio_cover_configs
+                            .get(ec.config_index)
+                            .copied()
+                            .unwrap_or(false);
+                        self.debug_open(&ElementDeclaration {
+                            layout: LayoutConfig {
+                                padding: attr_padding,
+                                child_gap: 8,
+                                layout_direction: LayoutDirection::TopToBottom,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        });
+                        {
+                            self.debug_text("Aspect Ratio", info_title_config);
+                            self.debug_float_text(aspect_ratio, info_text_config);
+                            self.debug_text("Mode", info_title_config);
+                            self.debug_text(
+                                if is_cover { "COVER" } else { "CONTAIN" },
+                                info_text_config,
+                            );
+                        }
+                        self.close_element();
+                    }
                     ElementConfigType::Clip => {
                         self.render_debug_view_element_config_header(elem_id_string.clone(), ec.config_type, info_title_config);
                         let clip_config = self.clip_element_configs[ec.config_index];
@@ -8829,8 +8963,44 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 self.debug_text(" }", info_text_config);
                             }
                             self.close_element();
+
+                            self.debug_text("No Drag Scroll", info_title_config);
+                            self.debug_text(
+                                if clip_config.no_drag_scroll {
+                                    "true"
+                                } else {
+                                    "false"
+                                },
+                                info_text_config,
+                            );
                         }
                         self.close_element();
+
+                        if let Some(scrollbar) = clip_config.scrollbar {
+                            let scrollbar_label_color = Color::rgba(242.0, 196.0, 90.0, 255.0);
+                            self.render_debug_view_category_header(
+                                "Scrollbar",
+                                scrollbar_label_color,
+                                elem_id_string.clone(),
+                            );
+                            self.debug_open(&ElementDeclaration {
+                                layout: LayoutConfig {
+                                    padding: attr_padding,
+                                    child_gap: 8,
+                                    layout_direction: LayoutDirection::TopToBottom,
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            });
+                            {
+                                self.render_debug_scrollbar_config(
+                                    scrollbar,
+                                    info_text_config,
+                                    info_title_config,
+                                );
+                            }
+                            self.close_element();
+                        }
                     }
                     ElementConfigType::Floating => {
                         self.render_debug_view_element_config_header(elem_id_string.clone(), ec.config_type, info_title_config);
@@ -8926,17 +9096,44 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.debug_text("Border Widths", info_title_config);
                             self.debug_open(&ElementDeclaration::default());
                             {
-                                self.debug_text("{ left: ", info_text_config);
+                                self.debug_text("left: ", info_text_config);
                                 self.debug_int_text(border_config.width.left as f32, info_text_config);
-                                self.debug_text(", right: ", info_text_config);
-                                self.debug_int_text(border_config.width.right as f32, info_text_config);
-                                self.debug_text(", top: ", info_text_config);
-                                self.debug_int_text(border_config.width.top as f32, info_text_config);
-                                self.debug_text(", bottom: ", info_text_config);
-                                self.debug_int_text(border_config.width.bottom as f32, info_text_config);
-                                self.debug_text(" }", info_text_config);
                             }
                             self.close_element();
+                            self.debug_open(&ElementDeclaration::default());
+                            {
+                                self.debug_text("right: ", info_text_config);
+                                self.debug_int_text(border_config.width.right as f32, info_text_config);
+                            }
+                            self.close_element();
+                            self.debug_open(&ElementDeclaration::default());
+                            {
+                                self.debug_text("top: ", info_text_config);
+                                self.debug_int_text(border_config.width.top as f32, info_text_config);
+                            }
+                            self.close_element();
+                            self.debug_open(&ElementDeclaration::default());
+                            {
+                                self.debug_text("bottom: ", info_text_config);
+                                self.debug_int_text(border_config.width.bottom as f32, info_text_config);
+                            }
+                            self.close_element();
+                            self.debug_open(&ElementDeclaration::default());
+                            {
+                                self.debug_text("betweenChildren: ", info_text_config);
+                                self.debug_int_text(
+                                    border_config.width.between_children as f32,
+                                    info_text_config,
+                                );
+                            }
+                            self.close_element();
+
+                            self.debug_text("Border Position", info_title_config);
+                            self.debug_text(
+                                Self::debug_border_position_name(border_config.position),
+                                info_text_config,
+                            );
+
                             self.debug_text("Border Color", info_title_config);
                             self.render_debug_view_color(border_config.color, info_text_config);
                         }
@@ -8961,6 +9158,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 self.debug_text("Placeholder", info_title_config);
                                 self.debug_raw_text(&ti_cfg.placeholder, info_text_config);
                             }
+                            self.debug_text("Placeholder Color", info_title_config);
+                            self.render_debug_view_color(ti_cfg.placeholder_color, info_text_config);
                             self.debug_text("Max Length", info_title_config);
                             if let Some(max_len) = ti_cfg.max_length {
                                 self.debug_int_text(max_len as f32, info_text_config);
@@ -8971,6 +9170,23 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.debug_text(if ti_cfg.is_password { "true" } else { "false" }, info_text_config);
                             self.debug_text("Multiline", info_title_config);
                             self.debug_text(if ti_cfg.is_multiline { "true" } else { "false" }, info_text_config);
+                            self.debug_text("Drag Select", info_title_config);
+                            self.debug_text(if ti_cfg.drag_select { "true" } else { "false" }, info_text_config);
+                            self.debug_text("Line Height", info_title_config);
+                            if ti_cfg.line_height == 0 {
+                                self.debug_text("auto", info_text_config);
+                            } else {
+                                self.debug_int_text(ti_cfg.line_height as f32, info_text_config);
+                            }
+                            self.debug_text("No Styles Movement", info_title_config);
+                            self.debug_text(
+                                if ti_cfg.no_styles_movement {
+                                    "true"
+                                } else {
+                                    "false"
+                                },
+                                info_text_config,
+                            );
                             self.debug_text("Font", info_title_config);
                             self.debug_open(&ElementDeclaration::default());
                             {
@@ -8990,6 +9206,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.render_debug_view_color(ti_cfg.cursor_color, info_text_config);
                             self.debug_text("Selection Color", info_title_config);
                             self.render_debug_view_color(ti_cfg.selection_color, info_text_config);
+                            self.debug_text("Scrollbar", info_title_config);
+                            if let Some(scrollbar) = ti_cfg.scrollbar {
+                                self.debug_text("configured", info_text_config);
+                                self.render_debug_scrollbar_config(
+                                    scrollbar,
+                                    info_text_config,
+                                    info_title_config,
+                                );
+                            } else {
+                                self.debug_text("none", info_text_config);
+                            }
                             // Show current text value
                             let state_data = self.text_edit_states.get(&selected_id)
                                 .map(|s| (s.text.clone(), s.cursor_pos));
