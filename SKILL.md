@@ -732,6 +732,7 @@ If `plyx` is available, prefer it for setup and platform builds.
 
 - `plyx init`
 - `plyx add [args]`
+- `plyx skill [--install]`
 - `plyx apk [--native] [--install] [--auto]`
 - `plyx web`
 - `plyx ios [--device] [--actions] [--auto]`
@@ -747,6 +748,7 @@ Generates:
 - src/main.rs
 - assets/fonts/<font>.ttf
 - optional build.rs and shaders/ if shader pipeline is selected
+- optional `.claude/skills/ply-engine/SKILL.md`
 
 ### 15.2 `plyx add`
 
@@ -765,8 +767,9 @@ Feature keys recognized by plyx templates:
 - `net-json` (depends on `net`)
 - `audio`
 - `storage`
+- `skill`
 
-`shader-pipeline` is a plyx concept that adds build-dependencies and build.rs, not a direct runtime feature key in `[dependencies]`.
+`skill` and `shader-pipeline` are plyx concepts, not feature keys in `[dependencies]`. `shader-pipeline` adds build-dependencies and build.rs. `skill` installs `.claude/skills/ply-engine/SKILL.md` into the project.
 
 ### 15.3 `plyx web`
 
@@ -806,6 +809,11 @@ Requirements:
 - macOS + Xcode tools (`xcrun`)
 - proper Rust iOS target
 - for `--device`: signing identity, provisioning profile, and entitlements
+
+### 15.6 `plyx skill`
+
+- `plyx skill` prints the bundled skill text to stdout.
+- `plyx skill --install` installs to `~/.claude/skills/ply-engine/SKILL.md`.
 
 ## Part 16: Common Patterns
 
