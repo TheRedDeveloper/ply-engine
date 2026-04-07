@@ -573,13 +573,31 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         // Auto-update pointer state from macroquad
         if !self.headless {
             let (mx, my) = macroquad::prelude::mouse_position();
+            let pointer_pos = Vector2::new(mx, my);
             let is_down = macroquad::prelude::is_mouse_button_down(
                 macroquad::prelude::MouseButton::Left,
             );
-
-            // Check shift state for text input click-to-cursor
-            // Must happen AFTER set_pointer_state, since that's what creates pending_text_click.
-            self.context.set_pointer_state(Vector2::new(mx, my), is_down);
+            let pressed_this_frame = macroquad::prelude::is_mouse_button_pressed(
+                macroquad::prelude::MouseButton::Left,
+            );
+            let released_this_frame = macroquad::prelude::is_mouse_button_released(
+                macroquad::prelude::MouseButton::Left,
+            );
+            
+            match (pressed_this_frame, released_this_frame) {
+                (true, true) => {
+                    if is_down {
+                        self.context.set_pointer_state(pointer_pos, false);
+                        self.context.set_pointer_state(pointer_pos, true);
+                    } else {
+                        self.context.set_pointer_state(pointer_pos, true);
+                        self.context.set_pointer_state(pointer_pos, false);
+                    }
+                }
+                (true, false) => self.context.set_pointer_state(pointer_pos, true),
+                (false, true) => self.context.set_pointer_state(pointer_pos, false),
+                (false, false) => self.context.set_pointer_state(pointer_pos, is_down),
+            }
 
             {
                 use macroquad::prelude::{is_key_down, KeyCode};
@@ -2595,6 +2613,11 @@ mod tests {
                 .width(fixed!(100.0))
                 .height(fixed!(100.0))
                 .children(|ui| {
+                    assert!(ui.just_pressed(), "element should report as just pressed");
+                    assert!(
+                        ui.is_just_pressed("btn"),
+                        "ID query should report just pressed"
+                    );
                     assert!(ui.just_released(), "element should report as just released");
                     assert!(
                         ui.is_just_released("btn"),
@@ -2657,6 +2680,14 @@ mod tests {
                 .width(fixed!(100.0))
                 .height(fixed!(100.0))
                 .children(|ui| {
+                    assert!(
+                        ui.just_pressed(),
+                        "keyboard press should mark just_pressed even if released before frame"
+                    );
+                    assert!(
+                        ui.is_just_pressed("btn"),
+                        "ID query should include keyboard just_pressed"
+                    );
                     assert!(
                         ui.just_released(),
                         "keyboard release should mark just_released"

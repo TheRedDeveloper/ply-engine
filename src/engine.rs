@@ -700,6 +700,8 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     open_clip_element_stack: Vec<i32>,
     pointer_over_ids: Vec<Id>,
     pressed_element_ids: Vec<Id>,
+    pressed_this_frame_ids: Vec<Id>,
+    pressed_this_frame_generation: u32,
     released_this_frame_ids: Vec<Id>,
     released_this_frame_generation: u32,
     keyboard_press_this_frame_generation: u32,
@@ -1039,6 +1041,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             open_clip_element_stack: Vec::new(),
             pointer_over_ids: Vec::new(),
             pressed_element_ids: Vec::new(),
+            pressed_this_frame_ids: Vec::new(),
+            pressed_this_frame_generation: 0,
             released_this_frame_ids: Vec::new(),
             released_this_frame_generation: 0,
             keyboard_press_this_frame_generation: 0,
@@ -2210,6 +2214,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     pub fn begin_layout(&mut self) {
         self.initialize_ephemeral_memory();
         self.generation += 1;
+        if self.pressed_this_frame_generation != self.generation {
+            self.pressed_this_frame_ids.clear();
+        }
         if self.released_this_frame_generation != self.generation {
             self.released_this_frame_ids.clear();
         }
@@ -5373,6 +5380,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                     }
                 }
+
+                let pressed_now = self.pressed_element_ids.clone();
+                self.track_just_pressed_ids(&pressed_now);
             }
             PointerDataInteractionState::ReleasedThisFrame => {
                 // Fire on_release for all elements that were in the pressed chain
@@ -5717,6 +5727,28 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
+    fn track_just_pressed_ids(&mut self, ids: &[Id]) {
+        if ids.is_empty() {
+            return;
+        }
+
+        let target_generation = self.release_query_generation();
+        if self.pressed_this_frame_generation != target_generation {
+            self.pressed_this_frame_ids.clear();
+            self.pressed_this_frame_generation = target_generation;
+        }
+
+        for id in ids {
+            if !self
+                .pressed_this_frame_ids
+                .iter()
+                .any(|existing| existing.id == id.id)
+            {
+                self.pressed_this_frame_ids.push(id.clone());
+            }
+        }
+    }
+
     pub fn on_hover(&mut self, callback: Box<dyn FnMut(Id, PointerData)>) {
         let open_idx = self.get_open_layout_element();
         let elem_id = self.layout_elements[open_idx].id;
@@ -5734,6 +5766,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     pub fn just_pressed(&self) -> bool {
         let open_idx = self.get_open_layout_element();
         let elem_id = self.layout_elements[open_idx].id;
+        if self.pressed_this_frame_generation == self.generation
+            && self
+                .pressed_this_frame_ids
+                .iter()
+                .any(|eid| eid.id == elem_id)
+        {
+            return true;
+        }
+
         self.pressed_element_ids.iter().any(|eid| eid.id == elem_id)
             && (self.pointer_info.state == PointerDataInteractionState::PressedThisFrame
                 || self.keyboard_press_this_frame_generation == self.generation)
@@ -5961,6 +6002,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
     /// Returns true if the given element ID was pressed this frame.
     pub fn is_element_just_pressed(&self, element_id: u32) -> bool {
+        if self.pressed_this_frame_generation == self.generation
+            && self
+                .pressed_this_frame_ids
+                .iter()
+                .any(|eid| eid.id == element_id)
+        {
+            return true;
+        }
+
         self.pressed_element_ids.iter().any(|eid| eid.id == element_id)
             && (self.pointer_info.state == PointerDataInteractionState::PressedThisFrame
                 || self.keyboard_press_this_frame_generation == self.generation)
@@ -6899,6 +6949,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 .map(|item| item.element_id.clone());
             if let Some(id) = id_copy {
                 self.pressed_element_ids = vec![id.clone()];
+                let pressed_now = self.pressed_element_ids.clone();
+                self.track_just_pressed_ids(&pressed_now);
                 self.keyboard_press_this_frame_generation = self.release_query_generation();
                 if let Some(item) = self.layout_element_map.get_mut(&self.focused_element_id) {
                     if let Some(ref mut callback) = item.on_press_fn {
