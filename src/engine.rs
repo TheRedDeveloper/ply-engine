@@ -5856,6 +5856,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
         // Fire on_focus on new element
         if new_id != 0 {
+            // flush pressed chars
+            while let Some(_) = macroquad::prelude::get_char_pressed() {
+                // do nothing
+            }
             if let Some(item) = self.layout_element_map.get_mut(&new_id) {
                 let id_copy = item.element_id.clone();
                 if let Some(ref mut callback) = item.on_focus_fn {
