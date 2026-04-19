@@ -2328,6 +2328,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.tree_node_array.clear();
         self.layout_element_tree_roots.clear();
         self.layout_element_children.clear();
+        self.layout_element_map.clear();
         self.open_layout_element_stack.clear();
         self.text_element_data.clear();
         self.aspect_ratio_element_indexes.clear();
