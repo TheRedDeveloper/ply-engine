@@ -672,6 +672,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 // Route keyboard input to text editing
                 let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
                 let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+                let right_alt = is_key_down(KeyCode::RightAlt);
                 let time = self.context.current_time;
 
                 // Key repeat constants
@@ -838,7 +839,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 // Drain character input queue
                 while let Some(ch) = macroquad::prelude::get_char_pressed() {
                     // Filter out control characters and Ctrl-key combos
-                    if !ch.is_control() && !ctrl {
+                    if !ch.is_control() && ((ctrl && right_alt) || !ctrl) {
                         self.context.process_text_input_char(ch);
                         cursor_moved = true;
                     }
