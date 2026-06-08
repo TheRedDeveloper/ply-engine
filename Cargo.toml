@@ -25,7 +25,7 @@ audio = ["macroquad/audio"]
 storage = ["dep:rfd", "dep:sapp-jsutils"]
 
 [dependencies]
-macroquad = { version = "0.4.14", package = "macroquad-ply" }
+macroquad = { git = "https://github.com/TheRedDeveloper/macroquad-fix", package = "macroquad-ply", default-features = false }
 tinyvg = { version = "0.2", default-features = false, optional = true }
 kurbo = { version = "0.13.0", optional = true }
 lyon = { version = "1.0", optional = true }

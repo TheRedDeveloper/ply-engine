@@ -49,8 +49,13 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     /// Which element was focused when the current repeat started.
     /// Used to clear stale repeat state on focus change.
     text_input_repeat_focus_id: u32,
+    text_input_backspace_consumed: bool,
+    last_ime_preedit_snapshot: String,
     /// Track virtual keyboard state to avoid redundant show/hide calls
     was_text_input_focused: bool,
+    was_ime_enabled: bool,
+    ime_ignore_preedit_until_change: bool,
+    ime_ignored_preedit_value: String,
     #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
     web_a11y_state: accessibility_web::WebAccessibilityState,
     #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
@@ -605,7 +610,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 if shift {
                     // If shift is held and there's a pending text click, update it
                     if let Some(ref mut pending) = self.context.pending_text_click {
-                        pending.3 = true;
+                        pending.5 = true;
                     }
                 }
             }
@@ -652,15 +657,100 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             );
 
             // Keyboard input handling
-            use macroquad::prelude::{is_key_pressed, is_key_down, is_key_released, KeyCode};
+            use macroquad::prelude::{is_key_pressed, is_key_down, is_key_released, ImeCommit, KeyCode};
 
             let text_input_focused = self.context.is_text_input_focused();
             let current_focused_id = self.context.focused_element_id;
+            let mut ime_commit_applied = false;
+            let mut preedit_updated = false;
+            let mut forced_preedit_commit = false;
+
+            if let Some(forced_preedit) = self.context.forced_ime_preedit_value.take() {
+                self.ime_ignore_preedit_until_change = true;
+                self.ime_ignored_preedit_value = forced_preedit;
+                forced_preedit_commit = true;
+            }
+
+            if text_input_focused {
+                if let Some(preedit) = macroquad::prelude::get_ime_preedit() {
+                    if self.ime_ignore_preedit_until_change
+                        && preedit == self.ime_ignored_preedit_value
+                    {
+                        // Ignore
+                    } else {
+                        self.ime_ignore_preedit_until_change = false;
+                        if !preedit.is_empty() {
+                            self.last_ime_preedit_snapshot = preedit.clone();
+                        }
+                        self.context.set_ime_preedit(preedit);
+                        preedit_updated = true;
+                    }
+                } else {
+                    self.context.clear_ime_preedit();
+                    self.ime_ignore_preedit_until_change = false;
+                    self.ime_ignored_preedit_value.clear();
+                }
+                while let Some(commit) = macroquad::prelude::get_ime_commit() {
+                    match commit {
+                        ImeCommit::Text(text) => {
+                            self.context.process_text_input_action(
+                                engine::TextInputAction::ImeCommit { text },
+                            );
+                            self.context.clear_ime_preedit();
+                            self.ime_ignore_preedit_until_change = false;
+                            self.ime_ignored_preedit_value.clear();
+                            self.text_input_backspace_consumed = false;
+                            self.last_ime_preedit_snapshot.clear();
+                            ime_commit_applied = true;
+                        }
+                        ImeCommit::Cancel => {
+                            if self.text_input_backspace_consumed {
+                                self.text_input_backspace_consumed = false;
+                            } else {
+                                let cancel_source = if self.context.text_input_preedit_active
+                                    && !self.context.text_input_preedit.is_empty()
+                                {
+                                    self.context.text_input_preedit.clone()
+                                } else {
+                                    self.last_ime_preedit_snapshot.clone()
+                                };
+                                if !cancel_source.is_empty() {
+                                    let mut sanitized = cancel_source.replace('\'', "");
+                                    sanitized = sanitized.replace('\u{2019}', "");
+                                    self.context.process_text_input_action(
+                                        engine::TextInputAction::ImeCommit { text: sanitized },
+                                    );
+                                }
+                            }
+                            self.context.clear_ime_preedit();
+                            self.ime_ignore_preedit_until_change = false;
+                            self.ime_ignored_preedit_value.clear();
+                            self.text_input_backspace_consumed = false;
+                            self.last_ime_preedit_snapshot.clear();
+                        }
+                    }
+                }
+            } else {
+                if !self.context.text_input_preedit.is_empty() {
+                    self.ime_ignore_preedit_until_change = true;
+                    self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
+                }
+                self.context.clear_ime_preedit();
+                self.last_ime_preedit_snapshot.clear();
+                while let Some(_) = macroquad::prelude::get_ime_commit() {
+                    // Drop
+                }
+            }
 
             // Clear key-repeat state when focus changes (prevents stale
             // repeat from one text input bleeding into another).
             if current_focused_id != self.text_input_repeat_focus_id {
                 self.text_input_repeat_key = 0;
+                if !self.context.text_input_preedit.is_empty() {
+                    self.ime_ignore_preedit_until_change = true;
+                    self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
+                }
+                self.context.clear_ime_preedit();
                 self.text_input_repeat_focus_id = current_focused_id;
             }
 
@@ -702,9 +792,32 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     }};
                 }
 
+                let preedit_active = self.context.text_input_preedit_active;
+
+                // Force-commit preedit first.
+                if preedit_active && ctrl {
+                    self.ime_ignore_preedit_until_change = true;
+                    self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
+                    self.context.commit_ime_preedit_to_text();
+                    // Nudge IME to close suggestion window
+                    if self.context.is_text_input_focused()
+                        && !self.context.is_focused_text_input_password()
+                    {
+                        macroquad::miniquad::window::set_ime_enabled(false);
+                        macroquad::miniquad::window::set_ime_enabled(true);
+                    }
+                    forced_preedit_commit = true;
+                }
+
+                let ime_activity_this_frame =
+                    preedit_active || ime_commit_applied || forced_preedit_commit;
+
                 // Handle special keys with repeat support
                 let mut cursor_moved = false;
-                if key_fires!(KeyCode::Left, 1) {
+                if ime_commit_applied {
+                    cursor_moved = true;
+                }
+                if !preedit_active && key_fires!(KeyCode::Left, 1) {
                     if ctrl {
                         self.context.process_text_input_action(engine::TextInputAction::MoveWordLeft { shift });
                     } else {
@@ -712,7 +825,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     }
                     cursor_moved = true;
                 }
-                if key_fires!(KeyCode::Right, 2) {
+                if !preedit_active && key_fires!(KeyCode::Right, 2) {
                     if ctrl {
                         self.context.process_text_input_action(engine::TextInputAction::MoveWordRight { shift });
                     } else {
@@ -721,14 +834,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     cursor_moved = true;
                 }
                 if key_fires!(KeyCode::Backspace, 3) {
-                    if ctrl {
-                        self.context.process_text_input_action(engine::TextInputAction::BackspaceWord);
-                    } else {
-                        self.context.process_text_input_action(engine::TextInputAction::Backspace);
+                    if preedit_active {
+                        self.text_input_backspace_consumed = true;
+                        cursor_moved = true;
+                    } else if !self.text_input_backspace_consumed {
+                        if ctrl {
+                            self.context.process_text_input_action(engine::TextInputAction::BackspaceWord);
+                        } else {
+                            self.context.process_text_input_action(engine::TextInputAction::Backspace);
+                        }
+                        cursor_moved = true;
                     }
-                    cursor_moved = true;
                 }
-                if key_fires!(KeyCode::Delete, 4) {
+                if !preedit_active && key_fires!(KeyCode::Delete, 4) {
                     if ctrl {
                         self.context.process_text_input_action(engine::TextInputAction::DeleteWord);
                     } else {
@@ -736,17 +854,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     }
                     cursor_moved = true;
                 }
-                if key_fires!(KeyCode::Home, 5) {
+                if !preedit_active && key_fires!(KeyCode::Home, 5) {
                     self.context.process_text_input_action(engine::TextInputAction::MoveHome { shift });
                     cursor_moved = true;
                 }
-                if key_fires!(KeyCode::End, 6) {
+                if !preedit_active && key_fires!(KeyCode::End, 6) {
                     self.context.process_text_input_action(engine::TextInputAction::MoveEnd { shift });
                     cursor_moved = true;
                 }
 
                 // Up/Down arrows for multiline
-                if self.context.is_focused_text_input_multiline() {
+                if !preedit_active && self.context.is_focused_text_input_multiline() {
                     if key_fires!(KeyCode::Up, 7) {
                         self.context.process_text_input_action(engine::TextInputAction::MoveUp { shift });
                         cursor_moved = true;
@@ -759,13 +877,27 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
 
                 // Non-repeating keys
                 if is_key_pressed(KeyCode::Enter) {
-                    self.context.process_text_input_action(engine::TextInputAction::Submit);
-                    cursor_moved = true;
+                    if ime_activity_this_frame {
+                        self.ime_ignore_preedit_until_change = true;
+                        self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
+                        self.context.commit_ime_preedit_to_text();
+                        if self.context.is_text_input_focused()
+                            && !self.context.is_focused_text_input_password()
+                        {
+                            macroquad::miniquad::window::set_ime_enabled(false);
+                            macroquad::miniquad::window::set_ime_enabled(true);
+                        }
+                        cursor_moved = true;
+                    } else {
+                        self.context.process_text_input_action(engine::TextInputAction::Submit);
+                        cursor_moved = true;
+                    }
                 }
-                if ctrl && is_key_pressed(KeyCode::A) {
-                    self.context.process_text_input_action(engine::TextInputAction::SelectAll);
+                if !preedit_active && ctrl && is_key_pressed(KeyCode::A) {
+                    self.context
+                        .process_text_input_action(engine::TextInputAction::SelectAll);
                 }
-                if ctrl && is_key_pressed(KeyCode::Z) {
+                if !preedit_active && ctrl && is_key_pressed(KeyCode::Z) {
                     if shift {
                         self.context.process_text_input_action(engine::TextInputAction::Redo);
                     } else {
@@ -773,11 +905,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     }
                     cursor_moved = true;
                 }
-                if ctrl && is_key_pressed(KeyCode::Y) {
+                if !preedit_active && ctrl && is_key_pressed(KeyCode::Y) {
                     self.context.process_text_input_action(engine::TextInputAction::Redo);
                     cursor_moved = true;
                 }
-                if ctrl && is_key_pressed(KeyCode::C) {
+                if !preedit_active && ctrl && is_key_pressed(KeyCode::C) {
                     // Copy selected text to clipboard
                     let elem_id = self.context.focused_element_id;
                     if let Some(state) = self.context.text_edit_states.get(&elem_id) {
@@ -790,7 +922,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                         }
                     }
                 }
-                if ctrl && is_key_pressed(KeyCode::X) {
+                if !preedit_active && ctrl && is_key_pressed(KeyCode::X) {
                     // Cut: copy then delete selection
                     let elem_id = self.context.focused_element_id;
                     if let Some(state) = self.context.text_edit_states.get(&elem_id) {
@@ -805,7 +937,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     self.context.process_text_input_action(engine::TextInputAction::Cut);
                     cursor_moved = true;
                 }
-                if ctrl && is_key_pressed(KeyCode::V) {
+                if !preedit_active && ctrl && is_key_pressed(KeyCode::V) {
                     // Paste from clipboard
                     if let Some(text) = macroquad::miniquad::window::clipboard_get() {
                         self.context.process_text_input_action(engine::TextInputAction::Paste { text });
@@ -815,6 +947,39 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
 
                 // Escape unfocuses the text input
                 if is_key_pressed(KeyCode::Escape) {
+                    self.text_input_backspace_consumed = false;
+                    if self.context.text_input_preedit_active
+                        || self.context.forced_ime_preedit_value.is_some()
+                    {
+                        let mut to_commit = if self.context.text_input_preedit_active {
+                            self.context.text_input_preedit.clone()
+                        } else if let Some(fv) = self.context.forced_ime_preedit_value.take() {
+                            fv
+                        } else {
+                            self.last_ime_preedit_snapshot.clone()
+                        };
+                        if to_commit.is_empty() {
+                            to_commit = self.last_ime_preedit_snapshot.clone();
+                        }
+                        if !to_commit.is_empty() {
+                            let mut sanitized = to_commit.replace('\'', "");
+                            sanitized = sanitized.replace('\u{2019}', "");
+                            self.context.process_text_input_action(
+                                engine::TextInputAction::ImeCommit { text: sanitized },
+                            );
+                        }
+                        self.context.clear_ime_preedit();
+                        self.last_ime_preedit_snapshot.clear();
+                        self.ime_ignore_preedit_until_change = false;
+                        self.ime_ignored_preedit_value.clear();
+                        if self.context.is_text_input_focused()
+                            && !self.context.is_focused_text_input_password()
+                        {
+                            macroquad::miniquad::window::set_ime_enabled(false);
+                            macroquad::miniquad::window::set_ime_enabled(true);
+                        }
+                        cursor_moved = true;
+                    }
                     self.context.clear_focus();
                 }
 
@@ -832,17 +997,28 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                         _ => false,
                     };
                     if !still_down {
+                        if self.text_input_repeat_key == 3 {
+                            self.text_input_backspace_consumed = false;
+                        }
                         self.text_input_repeat_key = 0;
                     }
                 }
 
                 // Drain character input queue
-                while let Some(ch) = macroquad::prelude::get_char_pressed() {
-                    // Filter out control characters and Ctrl-key combos
-                    if !ch.is_control() && ((ctrl && right_alt) || !ctrl) {
-                        self.context.process_text_input_char(ch);
-                        cursor_moved = true;
+                if preedit_active {
+                    macroquad::prelude::clear_input_queue();
+                } else {
+                    while let Some(ch) = macroquad::prelude::get_char_pressed() {
+                        // Filter out control characters and Ctrl-key combos
+                        if !ch.is_control() && ((ctrl && right_alt) || !ctrl) {
+                            self.context.process_text_input_char(ch);
+                            cursor_moved = true;
+                        }
                     }
+                }
+
+                if preedit_updated {
+                    cursor_moved = true;
                 }
 
                 // Update scroll to keep cursor visible (only when cursor moved, not every frame,
@@ -867,6 +1043,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         // Show/hide virtual keyboard when text input focus changes (mobile)
         {
             let text_input_focused = self.context.is_text_input_focused();
+            let ime_should_be_enabled =
+                text_input_focused && !self.context.is_focused_text_input_password();
             if text_input_focused != self.was_text_input_focused {
                 #[cfg(not(any(target_arch = "wasm32", target_os = "linux")))]
                 {
@@ -876,7 +1054,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 {
                     unsafe { ply_show_virtual_keyboard(text_input_focused); }
                 }
+                if !text_input_focused {
+                    self.context.clear_ime_preedit();
+                }
                 self.was_text_input_focused = text_input_focused;
+            }
+            if ime_should_be_enabled != self.was_ime_enabled {
+                macroquad::miniquad::window::set_ime_enabled(ime_should_be_enabled);
+                self.was_ime_enabled = ime_should_be_enabled;
             }
         }
 
@@ -901,7 +1086,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
             text_input_repeat_focus_id: 0,
+            text_input_backspace_consumed: false,
+            last_ime_preedit_snapshot: String::new(),
             was_text_input_focused: false,
+            was_ime_enabled: false,
+            ime_ignore_preedit_until_change: false,
+            ime_ignored_preedit_value: String::new(),
             #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
@@ -924,7 +1114,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
             text_input_repeat_focus_id: 0,
+            text_input_backspace_consumed: false,
+            last_ime_preedit_snapshot: String::new(),
             was_text_input_focused: false,
+            was_ime_enabled: false,
+            ime_ignore_preedit_until_change: false,
+            ime_ignored_preedit_value: String::new(),
             #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]

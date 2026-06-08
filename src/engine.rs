@@ -83,6 +83,7 @@ pub enum TextInputAction {
     Copy,
     Cut,
     Paste { text: String },
+    ImeCommit { text: String },
     Submit,
     Undo,
     Redo,
@@ -720,8 +721,8 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     text_input_configs: Vec<crate::text_input::TextInputConfig>,
     /// Set of element IDs that are text inputs this frame.
     pub(crate) text_input_element_ids: Vec<u32>,
-    /// Pending click on a text input: (element_id, click_x_relative, click_y_relative, shift_held)
-    pub(crate) pending_text_click: Option<(u32, f32, f32, bool)>,
+    /// Pending click on a text input: (element_id, click_x_relative, click_y_relative, bbox_width, bbox_height, shift_held)
+    pub(crate) pending_text_click: Option<(u32, f32, f32, f32, f32, bool)>,
     /// Text input scrollbar auto-hide counters (frames since last activity) by element id.
     pub(crate) text_input_scrollbar_idle_frames: FxHashMap<u32, u32>,
     /// Text input drag-scroll state (mobile-first: drag scrolls, doesn't select).
@@ -734,6 +735,9 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     pub(crate) text_input_scrollbar_drag_vertical: bool,
     pub(crate) text_input_scrollbar_drag_origin: f32,
     pub(crate) text_input_scrollbar_drag_scroll_origin: f32,
+    pub(crate) text_input_preedit: String,
+    pub(crate) text_input_preedit_active: bool,
+    pub(crate) forced_ime_preedit_value: Option<String>,
     /// Current absolute time in seconds (set by lib.rs each frame).
     pub(crate) current_time: f64,
     /// Delta time for the current frame in seconds (set by lib.rs each frame).
@@ -1066,6 +1070,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             text_input_scrollbar_drag_vertical: false,
             text_input_scrollbar_drag_origin: 0.0,
             text_input_scrollbar_drag_scroll_origin: 0.0,
+            text_input_preedit: String::new(),
+            text_input_preedit_active: false,
+            forced_ime_preedit_value: None,
             current_time: 0.0,
             frame_delta_time: 0.0,
             tree_node_visited: Vec::new(),
@@ -1556,123 +1563,208 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             }
 
             // Process any pending click on this text input
-            if let Some((click_elem, click_x, click_y, click_shift)) = self.pending_text_click.take() {
+            if let Some((click_elem, click_x, click_y, click_w, click_h, click_shift)) = self.pending_text_click.take() {
                 if click_elem == elem_id {
-                    if let Some(ref measure_fn) = self.measure_text_fn {
+                    let preedit_was_active = self.text_input_preedit_active;
+                    let preedit_text = self.text_input_preedit.clone();
+                    let preedit_commit_shift = if preedit_was_active {
+                        if let Some(state_before_commit) = self.text_edit_states.get(&elem_id) {
+                            let committed_text = preedit_text.replace("'", "");
+                            if committed_text.is_empty() {
+                                None
+                            } else {
+                                #[cfg(feature = "text-styling")]
+                                {
+                                    let insert_raw = crate::text_input::styling::cursor_to_raw_for_insertion(
+                                        &state_before_commit.text,
+                                        state_before_commit.cursor_pos,
+                                    );
+                                    let committed_raw_len = crate::text_input::styling::escape_str(
+                                        &committed_text,
+                                    )
+                                    .chars()
+                                    .count();
+                                    Some((insert_raw, committed_raw_len))
+                                }
+                                #[cfg(not(feature = "text-styling"))]
+                                {
+                                    Some((state_before_commit.cursor_pos, committed_text.chars().count()))
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let click_target = if let Some(ref measure_fn) = self.measure_text_fn {
                         let state = self.text_edit_states.get(&elem_id).cloned()
                             .unwrap_or_default();
-                        let disp_text = crate::text_input::display_text(
+                        let has_preedit = !preedit_text.is_empty();
+                        let render_is_password = ti_config.is_password && !ti_config.is_multiline;
+                        let placeholder_text = if has_preedit {
+                            ""
+                        } else {
+                            &ti_config.placeholder
+                        };
+                        let mut render_disp = crate::text_input::display_text(
                             &state.text,
-                            &ti_config.placeholder,
-                            ti_config.is_password,
+                            placeholder_text,
+                            render_is_password,
                         );
-                        // Only position cursor in actual text, not placeholder
-                        if !state.text.is_empty() {
-                            // Double-click detection
-                            let is_double_click = state.last_click_element == elem_id
-                                && (self.current_time - state.last_click_time) < 0.4;
 
-                            if ti_config.is_multiline {
-                                // Multiline: determine which visual line was clicked
-                                let elem_width = self.layout_element_map.get(&elem_id)
-                                    .map(|item| item.bounding_box.width)
-                                    .unwrap_or(200.0);
+                        if has_preedit {
+                            let preedit_display = crate::text_input::display_text(
+                                &preedit_text,
+                                "",
+                                render_is_password,
+                            );
+                            #[cfg(feature = "text-styling")]
+                            {
+                                let preedit_insert =
+                                    crate::text_input::styling::escape_str(&preedit_display);
+                                let insert_pos =
+                                    crate::text_input::styling::cursor_to_raw_for_insertion(
+                                        &render_disp,
+                                        state.cursor_pos,
+                                    );
+                                let byte_pos =
+                                    crate::text_input::char_index_to_byte(&render_disp, insert_pos);
+                                let mut combined =
+                                    String::with_capacity(render_disp.len() + preedit_insert.len());
+                                combined.push_str(&render_disp[..byte_pos]);
+                                combined.push_str(&preedit_insert);
+                                combined.push_str(&render_disp[byte_pos..]);
+                                render_disp = combined;
+                            }
+                            #[cfg(not(feature = "text-styling"))]
+                            {
+                                let insert_pos = state.cursor_pos;
+                                let byte_pos =
+                                    crate::text_input::char_index_to_byte(&render_disp, insert_pos);
+                                let mut combined = String::with_capacity(
+                                    render_disp.len() + preedit_display.len(),
+                                );
+                                combined.push_str(&render_disp[..byte_pos]);
+                                combined.push_str(&preedit_display);
+                                combined.push_str(&render_disp[byte_pos..]);
+                                render_disp = combined;
+                            }
+                        }
+
+                        let is_placeholder = state.text.is_empty() && !has_preedit;
+                        let is_double_click = state.last_click_element == elem_id
+                            && (self.current_time - state.last_click_time) < 0.4;
+
+                        if !is_placeholder {
+                            let raw_click_pos = if ti_config.is_multiline {
+                                let clamped_x = click_x.clamp(0.0, click_w.max(0.0));
+                                let clamped_y = click_y.clamp(0.0, click_h.max(0.0));
+                                let disp_text = crate::text_input::display_text(
+                                    &state.text,
+                                    &ti_config.placeholder,
+                                    ti_config.is_password,
+                                );
                                 let visual_lines = crate::text_input::wrap_lines(
                                     &disp_text,
-                                    elem_width,
+                                    click_w,
                                     ti_config.font_asset,
                                     ti_config.font_size,
                                     measure_fn.as_ref(),
                                 );
-                                let font_height = if ti_config.line_height > 0 {
-                                    ti_config.line_height as f32
-                                } else {
-                                    let config = crate::text::TextConfig {
-                                        font_asset: ti_config.font_asset,
-                                        font_size: ti_config.font_size,
-                                        ..Default::default()
+
+                                if !visual_lines.is_empty() {
+                                    let line_height = if ti_config.line_height > 0 {
+                                        ti_config.line_height as f32
+                                    } else {
+                                        let config = crate::text::TextConfig {
+                                            font_asset: ti_config.font_asset,
+                                            font_size: ti_config.font_size,
+                                            ..Default::default()
+                                        };
+                                        measure_fn("Mg", &config).height
                                     };
-                                    measure_fn(&"Mg", &config).height
-                                };
-                                let adjusted_y = click_y + state.scroll_offset_y;
-                                let clicked_line = (adjusted_y / font_height).floor().max(0.0) as usize;
-                                let clicked_line = clicked_line.min(visual_lines.len().saturating_sub(1));
+                                    let adjusted_y = clamped_y + state.scroll_offset_y;
+                                    let clicked_line = (adjusted_y / line_height).floor().max(0.0) as usize;
+                                    let clicked_line = clicked_line.min(visual_lines.len().saturating_sub(1));
 
-                                let vl = &visual_lines[clicked_line];
-                                let line_char_x_positions = crate::text_input::compute_char_x_positions(
-                                    &vl.text,
-                                    ti_config.font_asset,
-                                    ti_config.font_size,
-                                    measure_fn.as_ref(),
-                                );
-                                let col = crate::text_input::find_nearest_char_boundary(
-                                    click_x, &line_char_x_positions,
-                                );
-                                let global_pos = vl.global_char_start + col;
-
-                                if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
-                                    #[cfg(feature = "text-styling")]
-                                    {
-                                        let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, global_pos);
-                                        if is_double_click {
-                                            state.select_word_at_styled(visual_pos);
-                                        } else {
-                                            state.click_to_cursor_styled(visual_pos, click_shift);
-                                        }
-                                    }
-                                    #[cfg(not(feature = "text-styling"))]
-                                    {
-                                        if is_double_click {
-                                            state.select_word_at(global_pos);
-                                        } else {
-                                            if click_shift {
-                                                if state.selection_anchor.is_none() {
-                                                    state.selection_anchor = Some(state.cursor_pos);
-                                                }
-                                            } else {
-                                                state.selection_anchor = None;
-                                            }
-                                            state.cursor_pos = global_pos;
-                                            state.reset_blink();
-                                        }
-                                    }
-                                    state.last_click_time = self.current_time;
-                                    state.last_click_element = elem_id;
+                                    let vl = &visual_lines[clicked_line];
+                                    let line_char_x_positions = crate::text_input::compute_char_x_positions(
+                                        &vl.text,
+                                        ti_config.font_asset,
+                                        ti_config.font_size,
+                                        measure_fn.as_ref(),
+                                    );
+                                    let col = crate::text_input::find_nearest_char_boundary(
+                                        clamped_x, &line_char_x_positions,
+                                    );
+                                    vl.global_char_start + col
+                                } else {
+                                    0
                                 }
                             } else {
-                                // Single-line: existing behavior
                                 let char_x_positions = crate::text_input::compute_char_x_positions(
-                                    &disp_text,
+                                    &render_disp,
                                     ti_config.font_asset,
                                     ti_config.font_size,
                                     measure_fn.as_ref(),
                                 );
                                 let adjusted_x = click_x + state.scroll_offset;
+                                crate::text_input::find_nearest_char_boundary(
+                                    adjusted_x,
+                                    &char_x_positions,
+                                )
+                            };
+                            Some((Some(raw_click_pos), is_double_click))
+                        } else {
+                            Some((None, is_double_click))
+                        }
+                    } else {
+                        None
+                    };
 
-                                if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
-                                    let raw_click_pos = crate::text_input::find_nearest_char_boundary(
-                                        adjusted_x, &char_x_positions,
-                                    );
-                                    #[cfg(feature = "text-styling")]
-                                    {
-                                        let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_click_pos);
-                                        if is_double_click {
-                                            state.select_word_at_styled(visual_pos);
-                                        } else {
-                                            state.click_to_cursor_styled(visual_pos, click_shift);
-                                        }
+                    if preedit_was_active {
+                        self.commit_ime_preedit_to_text();
+                    }
+
+                    if let Some((raw_click_pos, is_double_click)) = click_target {
+                        if let Some(raw_click_pos) = raw_click_pos {
+                            if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
+                                let mut raw_click_pos = raw_click_pos;
+                                if let Some((insert_raw, committed_raw_len)) = preedit_commit_shift {
+                                    if raw_click_pos > insert_raw {
+                                        raw_click_pos = raw_click_pos.saturating_add(committed_raw_len);
                                     }
-                                    #[cfg(not(feature = "text-styling"))]
-                                    {
-                                        if is_double_click {
-                                            state.select_word_at(raw_click_pos);
-                                        } else {
-                                            state.click_to_cursor(adjusted_x, &char_x_positions, click_shift);
-                                        }
-                                    }
-                                    state.last_click_time = self.current_time;
-                                    state.last_click_element = elem_id;
                                 }
+                                let raw_click_pos = raw_click_pos.min(state.text.chars().count());
+                                #[cfg(feature = "text-styling")]
+                                {
+                                    let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_click_pos);
+                                    if is_double_click {
+                                        state.select_word_at_styled(visual_pos);
+                                    } else {
+                                        state.click_to_cursor_styled(visual_pos, click_shift);
+                                    }
+                                }
+                                #[cfg(not(feature = "text-styling"))]
+                                {
+                                    if is_double_click {
+                                        state.select_word_at(raw_click_pos);
+                                    } else {
+                                        if click_shift {
+                                            if state.selection_anchor.is_none() {
+                                                state.selection_anchor = Some(state.cursor_pos);
+                                            }
+                                        } else {
+                                            state.selection_anchor = None;
+                                        }
+                                        state.cursor_pos = raw_click_pos;
+                                        state.reset_blink();
+                                    }
+                                }
+                                state.last_click_time = self.current_time;
+                                state.last_click_element = elem_id;
                             }
                         } else if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
                             state.cursor_pos = 0;
@@ -1684,7 +1776,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     }
                 } else {
                     // Wasn't for this element, put it back
-                    self.pending_text_click = Some((click_elem, click_x, click_y, click_shift));
+                    self.pending_text_click = Some((click_elem, click_x, click_y, click_w, click_h, click_shift));
                 }
             }
 
@@ -4073,17 +4165,121 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         .or_insert_with(crate::text_input::TextEditState::default)
                                         .clone();
 
-                                    let disp_text = crate::text_input::display_text(
+                                    let has_preedit =
+                                        is_focused && !self.text_input_preedit.is_empty();
+                                    let is_password =
+                                        ti_config.is_password && !ti_config.is_multiline;
+                                    let placeholder_text = if has_preedit {
+                                        ""
+                                    } else {
+                                        &ti_config.placeholder
+                                    };
+                                    let mut render_text = crate::text_input::display_text(
                                         &state.text,
-                                        &ti_config.placeholder,
-                                        ti_config.is_password && !ti_config.is_multiline,
+                                        placeholder_text,
+                                        is_password,
                                     );
+                                    let preedit_display = if has_preedit {
+                                        crate::text_input::display_text(
+                                            &self.text_input_preedit,
+                                            "",
+                                            is_password,
+                                        )
+                                    } else {
+                                        String::new()
+                                    };
+                                    let preedit_visible_len = preedit_display.chars().count();
+                                    let mut preedit_start_raw: Option<usize> = None;
+                                    let mut preedit_end_raw: Option<usize> = None;
+                                    let mut preedit_raw_len = 0usize;
 
-                                    let is_placeholder = state.text.is_empty();
+                                    if has_preedit && preedit_visible_len > 0 {
+                                        #[cfg(feature = "text-styling")]
+                                        {
+                                            let preedit_insert =
+                                                crate::text_input::styling::escape_str(
+                                                    &preedit_display,
+                                                );
+                                            let insert_pos = crate::text_input::styling::cursor_to_raw_for_insertion(
+                                                &render_text,
+                                                state.cursor_pos,
+                                            );
+                                            let byte_pos = crate::text_input::char_index_to_byte(
+                                                &render_text,
+                                                insert_pos,
+                                            );
+                                            let mut combined = String::with_capacity(
+                                                render_text.len() + preedit_insert.len(),
+                                            );
+                                            combined.push_str(&render_text[..byte_pos]);
+                                            combined.push_str(&preedit_insert);
+                                            combined.push_str(&render_text[byte_pos..]);
+                                            render_text = combined;
+                                            preedit_raw_len = preedit_insert.chars().count();
+                                            preedit_start_raw = Some(insert_pos);
+                                            preedit_end_raw = Some(insert_pos + preedit_raw_len);
+                                        }
+                                        #[cfg(not(feature = "text-styling"))]
+                                        {
+                                            let insert_pos = state.cursor_pos;
+                                            let byte_pos = crate::text_input::char_index_to_byte(
+                                                &render_text,
+                                                insert_pos,
+                                            );
+                                            let mut combined = String::with_capacity(
+                                                render_text.len() + preedit_display.len(),
+                                            );
+                                            combined.push_str(&render_text[..byte_pos]);
+                                            combined.push_str(&preedit_display);
+                                            combined.push_str(&render_text[byte_pos..]);
+                                            render_text = combined;
+                                            preedit_raw_len = preedit_visible_len;
+                                            preedit_start_raw = Some(insert_pos);
+                                            preedit_end_raw = Some(insert_pos + preedit_raw_len);
+                                        }
+                                    }
+
+                                    let preedit_active = preedit_start_raw.is_some();
+                                    let is_placeholder = state.text.is_empty() && !has_preedit;
                                     let text_color = if is_placeholder {
                                         ti_config.placeholder_color
                                     } else {
                                         ti_config.text_color
+                                    };
+                                    let selection_ranges = if is_focused && !is_placeholder {
+                                        #[cfg(feature = "text-styling")]
+                                        let selection = state.selection_range_raw();
+                                        #[cfg(not(feature = "text-styling"))]
+                                        let selection = state.selection_range();
+                                        let mut ranges = Vec::new();
+                                        if let Some((sel_start, sel_end)) = selection {
+                                            if preedit_active {
+                                                let insert_pos = preedit_start_raw.unwrap_or(0);
+                                                if sel_end <= insert_pos {
+                                                    ranges.push((sel_start, sel_end));
+                                                } else if sel_start >= insert_pos {
+                                                    ranges.push((
+                                                        sel_start + preedit_raw_len,
+                                                        sel_end + preedit_raw_len,
+                                                    ));
+                                                } else {
+                                                    if sel_start < insert_pos {
+                                                        ranges.push((sel_start, insert_pos));
+                                                    }
+                                                    let shifted_start =
+                                                        insert_pos + preedit_raw_len;
+                                                    let shifted_end = sel_end + preedit_raw_len;
+                                                    if shifted_start < shifted_end {
+                                                        ranges.push((shifted_start, shifted_end));
+                                                    }
+                                                }
+                                            } else {
+                                                ranges.push((sel_start, sel_end));
+                                            }
+                                        }
+                                        ranges
+                                    } else {
+                                        Vec::new()
                                     };
                                     let mut content_width = 0.0_f32;
                                     let mut content_height = 0.0_f32;
@@ -4123,7 +4319,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                                         let visual_lines = if let Some(ref measure_fn) = self.measure_text_fn {
                                             crate::text_input::wrap_lines(
-                                                &disp_text,
+                                                &render_text,
                                                 current_bbox.width,
                                                 ti_config.font_asset,
                                                 ti_config.font_size,
@@ -4131,21 +4327,27 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             )
                                         } else {
                                             vec![crate::text_input::VisualLine {
-                                                text: disp_text.clone(),
+                                                text: render_text.clone(),
                                                 global_char_start: 0,
-                                                char_count: disp_text.chars().count(),
+                                                char_count: render_text.chars().count(),
                                             }]
                                         };
 
-                                        let (cursor_line, cursor_col) = if is_placeholder {
-                                            (0, 0)
+                                        let render_cursor_raw = if is_placeholder {
+                                            0
                                         } else {
                                             #[cfg(feature = "text-styling")]
                                             let raw_cursor = state.cursor_pos_raw();
                                             #[cfg(not(feature = "text-styling"))]
                                             let raw_cursor = state.cursor_pos;
-                                            crate::text_input::cursor_to_visual_pos(&visual_lines, raw_cursor)
+                                            if preedit_active {
+                                                preedit_end_raw.unwrap_or(raw_cursor)
+                                            } else {
+                                                raw_cursor
+                                            }
                                         };
+                                        let (cursor_line, cursor_col) =
+                                            crate::text_input::cursor_to_visual_pos(&visual_lines, render_cursor_raw);
 
                                         // Compute per-line char positions
                                         let line_positions: Vec<Vec<f32>> = if let Some(ref measure_fn) = self.measure_text_fn {
@@ -4168,12 +4370,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         scroll_pos_y = scroll_offset_y;
 
                                         // Selection rendering (multiline)
-                                        if is_focused {
-                                            #[cfg(feature = "text-styling")]
-                                            let sel_range = state.selection_range_raw();
-                                            #[cfg(not(feature = "text-styling"))]
-                                            let sel_range = state.selection_range();
-                                            if let Some((sel_start, sel_end)) = sel_range {
+                                        if !selection_ranges.is_empty() {
+                                            for (sel_start, sel_end) in selection_ranges.iter().copied() {
                                                 let (sel_start_line, sel_start_col) = crate::text_input::cursor_to_visual_pos(&visual_lines, sel_start);
                                                 let (sel_end_line, sel_end_col) = crate::text_input::cursor_to_visual_pos(&visual_lines, sel_end);
                                                 for (line_idx, vl) in visual_lines.iter().enumerate() {
@@ -4192,7 +4390,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                         let sel_y = current_bbox.y + line_idx as f32 * line_step - scroll_offset_y;
                                                         self.add_render_command(InternalRenderCommand {
                                                             bounding_box: BoundingBox::new(
-                                                                current_bbox.x - scroll_offset_x + x_start,
+                                                            current_bbox.x - scroll_offset_x + x_start,
                                                                 sel_y,
                                                                 sel_width,
                                                                 line_step,
@@ -4201,13 +4399,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                             render_data: InternalRenderData::Rectangle {
                                                                 background_color: ti_config.selection_color,
                                                                 corner_radius: CornerRadius::default(),
-                                                            },
-                                                            user_data: 0,
+                                                                    },
+                                                                user_data: 0,
                                                             id: hash_number(1001 + line_idx as u32, elem_id).id,
-                                                            z_index: root.z_index,
-                                                            visual_rotation: None,
-                                                            shape_rotation: None,
-                                                            effects: Vec::new(),
+                                                                z_index: root.z_index,
+                                                                visual_rotation: None,
+                                                                shape_rotation: None,
+                                                                effects: Vec::new(),
                                                         });
                                                     }
                                                 }
@@ -4246,36 +4444,139 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             }
                                         }
 
+                                        if let (Some(preedit_start), Some(preedit_end)) =
+                                            (preedit_start_raw, preedit_end_raw)
+                                        {
+                                            if preedit_end > preedit_start {
+                                                let (start_line, start_col) =
+                                                    crate::text_input::cursor_to_visual_pos(
+                                                        &visual_lines,
+                                                        preedit_start,
+                                                    );
+                                                let (end_line, end_col) =
+                                                    crate::text_input::cursor_to_visual_pos(
+                                                        &visual_lines,
+                                                        preedit_end,
+                                                    );
+                                                for line_idx in start_line
+                                                    ..=end_line.min(visual_lines.len() - 1)
+                                                {
+                                                    let vl = &visual_lines[line_idx];
+                                                    let positions = &line_positions[line_idx];
+                                                    let col_start = if line_idx == start_line {
+                                                        start_col
+                                                    } else {
+                                                        0
+                                                    };
+                                                    let col_end = if line_idx == end_line {
+                                                        end_col
+                                                    } else {
+                                                        vl.char_count
+                                                    };
+                                                    let x_start = positions
+                                                        .get(col_start)
+                                                        .copied()
+                                                        .unwrap_or(0.0);
+                                                    let x_end =
+                                                        positions.get(col_end).copied().unwrap_or(
+                                                            positions
+                                                                .last()
+                                                                .copied()
+                                                                .unwrap_or(0.0),
+                                                        );
+                                                    let underline_width = x_end - x_start;
+                                                    if underline_width > 0.0 {
+                                                        let line_y = current_bbox.y
+                                                            + line_idx as f32 * line_step
+                                                            + line_y_offset
+                                                            - scroll_offset_y;
+                                                        let underline_height = 2.0;
+                                                        let underline_y = line_y
+                                                            + natural_font_height
+                                                            - underline_height;
+                                                        self.add_render_command(
+                                                            InternalRenderCommand {
+                                                                bounding_box: BoundingBox::new(
+                                                                    current_bbox.x
+                                                                        - scroll_offset_x
+                                                                        + x_start,
+                                                                    underline_y,
+                                                                    underline_width,
+                                                                    underline_height,
+                                                                ),
+                                                                command_type:
+                                                                    RenderCommandType::Rectangle,
+                                                                render_data:
+                                                                    InternalRenderData::Rectangle {
+                                                                        background_color: ti_config
+                                                                            .text_color,
+                                                                        corner_radius:
+                                                                            CornerRadius::default(),
+                                                                    },
+                                                                user_data: 0,
+                                                                id: hash_number(
+                                                                    2600 + line_idx as u32,
+                                                                    elem_id,
+                                                                )
+                                                                .id,
+                                                                z_index: root.z_index,
+                                                                visual_rotation: None,
+                                                                shape_rotation: None,
+                                                                effects: Vec::new(),
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+
                                         // Cursor (multiline)
-                                        if is_focused && state.cursor_visible() {
+                                        if is_focused {
                                             let cursor_positions = &line_positions[cursor_line.min(line_positions.len() - 1)];
                                             let cursor_x_pos = cursor_positions.get(cursor_col).copied().unwrap_or(0.0);
                                             let cursor_y = current_bbox.y + cursor_line as f32 * line_step - scroll_offset_y;
-                                            self.add_render_command(InternalRenderCommand {
-                                                bounding_box: BoundingBox::new(
-                                                    current_bbox.x - scroll_offset_x + cursor_x_pos,
-                                                    cursor_y,
-                                                    2.0,
-                                                    line_step,
-                                                ),
-                                                command_type: RenderCommandType::Rectangle,
-                                                render_data: InternalRenderData::Rectangle {
-                                                    background_color: ti_config.cursor_color,
-                                                    corner_radius: CornerRadius::default(),
-                                                },
-                                                user_data: 0,
-                                                id: hash_number(1003, elem_id).id,
-                                                z_index: root.z_index,
-                                                visual_rotation: None,
-                                                shape_rotation: None,
-                                                effects: Vec::new(),
-                                            });
+                                            let dpi_scale =
+                                                macroquad::miniquad::window::dpi_scale();
+                                            let ime_x = ((current_bbox.x - scroll_offset_x
+                                                + cursor_x_pos)
+                                                * dpi_scale)
+                                                .round()
+                                                as i32;
+                                            let ime_y = ((cursor_y + natural_font_height)
+                                                * dpi_scale)
+                                                .round()
+                                                as i32;
+                                            macroquad::miniquad::window::set_ime_position(
+                                                ime_x, ime_y,
+                                            );
+
+                                            if state.cursor_visible() {
+                                                self.add_render_command(InternalRenderCommand {
+                                                    bounding_box: BoundingBox::new(
+                                                        current_bbox.x - scroll_offset_x + cursor_x_pos,
+                                                        cursor_y,
+                                                        2.0,
+                                                        line_step,
+                                                    ),
+                                                    command_type: RenderCommandType::Rectangle,
+                                                    render_data: InternalRenderData::Rectangle {
+                                                        background_color: ti_config.cursor_color,
+                                                        corner_radius: CornerRadius::default(),
+                                                    },
+                                                    user_data: 0,
+                                                    id: hash_number(1003, elem_id).id,
+                                                    z_index: root.z_index,
+                                                    visual_rotation: None,
+                                                    shape_rotation: None,
+                                                    effects: Vec::new(),
+                                                });
+                                            }
                                         }
                                     } else {
                                         // ── Single-line rendering ──
                                         let char_x_positions = if let Some(ref measure_fn) = self.measure_text_fn {
                                             crate::text_input::compute_char_x_positions(
-                                                &disp_text,
+                                                &render_text,
                                                 ti_config.font_asset,
                                                 ti_config.font_size,
                                                 measure_fn.as_ref(),
@@ -4290,9 +4591,21 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                                         // Convert cursor/selection to raw positions for char_x_positions indexing
                                         #[cfg(feature = "text-styling")]
-                                        let render_cursor_pos = if is_placeholder { 0 } else { state.cursor_pos_raw() };
+                                        let render_cursor_pos = if is_placeholder {
+                                            0
+                                        } else if preedit_active {
+                                            preedit_end_raw.unwrap_or(state.cursor_pos_raw())
+                                        } else {
+                                            state.cursor_pos_raw()
+                                        };
                                         #[cfg(not(feature = "text-styling"))]
-                                        let render_cursor_pos = if is_placeholder { 0 } else { state.cursor_pos };
+                                        let render_cursor_pos = if is_placeholder {
+                                            0
+                                        } else if preedit_active {
+                                            preedit_end_raw.unwrap_or(state.cursor_pos)
+                                        } else {
+                                            state.cursor_pos
+                                        };
 
                                         #[cfg(feature = "text-styling")]
                                         let render_selection = if !is_placeholder { state.selection_range_raw() } else { None };
@@ -4331,7 +4644,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         }
 
                                         // Text
-                                        if !disp_text.is_empty() {
+                                        if !render_text.is_empty() {
                                             let text_width = char_x_positions.last().copied().unwrap_or(0.0);
                                             content_width = text_width;
                                             content_height = font_height;
@@ -4347,7 +4660,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 ),
                                                 command_type: RenderCommandType::Text,
                                                 render_data: InternalRenderData::Text {
-                                                    text: disp_text,
+                                                    text: render_text.clone(),
                                                     text_color,
                                                     font_size: ti_config.font_size,
                                                     letter_spacing: 0,
@@ -4363,32 +4676,102 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             });
                                         }
 
+                                        if has_preedit {
+                                            if let (Some(preedit_start), Some(preedit_end)) =
+                                                (preedit_start_raw, preedit_end_raw)
+                                            {
+                                                if preedit_end > preedit_start {
+                                                    let x_start = char_x_positions
+                                                        .get(preedit_start)
+                                                        .copied()
+                                                        .unwrap_or(0.0);
+                                                    let x_end = char_x_positions
+                                                        .get(preedit_end)
+                                                        .copied()
+                                                        .unwrap_or(
+                                                            char_x_positions
+                                                                .last()
+                                                                .copied()
+                                                                .unwrap_or(0.0),
+                                                        );
+                                                    let underline_width = x_end - x_start;
+                                                    if underline_width > 0.0 {
+                                                        let preedit_y = current_bbox.y
+                                                            + (current_bbox.height - font_height)
+                                                                / 2.0;
+                                                        let underline_height = 2.0;
+                                                        let underline_y = preedit_y + font_height
+                                                            - underline_height;
+                                                        self.add_render_command(
+                                                            InternalRenderCommand {
+                                                                bounding_box: BoundingBox::new(
+                                                                    text_x + x_start,
+                                                                    underline_y,
+                                                                    underline_width,
+                                                                    underline_height,
+                                                                ),
+                                                                command_type:
+                                                                    RenderCommandType::Rectangle,
+                                                                render_data:
+                                                                    InternalRenderData::Rectangle {
+                                                                        background_color: ti_config
+                                                                            .text_color,
+                                                                        corner_radius:
+                                                                            CornerRadius::default(),
+                                                                    },
+                                                                user_data: 0,
+                                                                id: hash_number(2600, elem_id).id,
+                                                                z_index: root.z_index,
+                                                                visual_rotation: None,
+                                                                shape_rotation: None,
+                                                                effects: Vec::new(),
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+
                                         // Cursor
-                                        if is_focused && state.cursor_visible() {
+                                        if is_focused {
                                             let cursor_x_pos = char_x_positions
                                                 .get(render_cursor_pos)
                                                 .copied()
                                                 .unwrap_or(0.0);
                                             let cursor_y = current_bbox.y + (current_bbox.height - font_height) / 2.0;
-                                            self.add_render_command(InternalRenderCommand {
-                                                bounding_box: BoundingBox::new(
-                                                    text_x + cursor_x_pos,
-                                                    cursor_y,
-                                                    2.0,
-                                                    font_height,
-                                                ),
-                                                command_type: RenderCommandType::Rectangle,
-                                                render_data: InternalRenderData::Rectangle {
-                                                    background_color: ti_config.cursor_color,
-                                                    corner_radius: CornerRadius::default(),
-                                                },
-                                                user_data: 0,
-                                                id: hash_number(1003, elem_id).id,
-                                                z_index: root.z_index,
-                                                visual_rotation: None,
-                                                shape_rotation: None,
-                                                effects: Vec::new(),
-                                            });
+                                            let dpi_scale =
+                                                macroquad::miniquad::window::dpi_scale();
+                                            let ime_x = ((text_x + cursor_x_pos) * dpi_scale)
+                                                .round()
+                                                as i32;
+                                            let ime_y = ((cursor_y + font_height) * dpi_scale)
+                                                .round()
+                                                as i32;
+                                            macroquad::miniquad::window::set_ime_position(
+                                                ime_x, ime_y,
+                                            );
+
+                                            if state.cursor_visible() {
+                                                self.add_render_command(InternalRenderCommand {
+                                                    bounding_box: BoundingBox::new(
+                                                        text_x + cursor_x_pos,
+                                                        cursor_y,
+                                                        2.0,
+                                                        font_height,
+                                                    ),
+                                                    command_type: RenderCommandType::Rectangle,
+                                                    render_data: InternalRenderData::Rectangle {
+                                                        background_color: ti_config.cursor_color,
+                                                        corner_radius: CornerRadius::default(),
+                                                    },
+                                                    user_data: 0,
+                                                    id: hash_number(1003, elem_id).id,
+                                                    z_index: root.z_index,
+                                                    visual_rotation: None,
+                                                    shape_rotation: None,
+                                                    effects: Vec::new(),
+                                                });
+                                            }
                                         }
                                     }
 
@@ -5347,13 +5730,22 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         if self.focused_element_id != top.id {
                             self.change_focus(top.id);
                         }
-                        // Compute click x,y relative to the element's bounding box
+                        // Compute click x,y relative to the element's bounding box.
+                        // Also capture bbox size from the same frame so click hit-testing
+                        // can reuse the exact geometry basis drag-end uses.
                         if let Some(item) = self.layout_element_map.get(&top.id) {
                             let click_x = self.pointer_info.position.x - item.bounding_box.x;
                             let click_y = self.pointer_info.position.y - item.bounding_box.y;
                             // We can't check shift from here (no keyboard state);
                             // lib.rs will set shift via a dedicated method if needed.
-                            self.pending_text_click = Some((top.id, click_x, click_y, false));
+                            self.pending_text_click = Some((
+                                top.id,
+                                click_x,
+                                click_y,
+                                item.bounding_box.width,
+                                item.bounding_box.height,
+                                false,
+                            ));
                         }
                         self.pressed_element_ids = self.pointer_over_ids.clone();
                     }
@@ -5368,6 +5760,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                     // Clear keyboard focus when the user clicks, unless the element preserves focus
                     if !preserves && self.focused_element_id != 0 {
+                        if self.text_input_preedit_active {
+                            self.commit_ime_preedit_to_text();
+                            self.forced_ime_preedit_value = None;
+                            self.text_input_preedit.clear();
+                            self.text_input_preedit_active = false;
+                        }
                         self.change_focus(0);
                     }
 
@@ -5840,6 +6238,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         if old_id == new_id {
             return;
         }
+
+        if self.text_input_preedit_active {
+            self.commit_ime_preedit_to_text();
+        }
+
         self.focused_element_id = new_id;
         if new_id == 0 {
             self.focus_from_keyboard = false;
@@ -5907,6 +6310,78 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             item.on_text_changed_fn = on_changed;
             item.on_text_submit_fn = on_submit;
         }
+    }
+
+    /// Returns the current IME preedit text
+    pub fn set_ime_preedit(&mut self, text: String) {
+        if !self.text_input_preedit_active {
+            if let Some(state) = self.text_edit_states.get_mut(&self.focused_element_id) {
+                #[cfg(feature = "text-styling")]
+                let had_selection = state.selection_range().is_some();
+                #[cfg(not(feature = "text-styling"))]
+                let had_selection = state.selection_range().is_some();
+
+                if had_selection {
+                    state.push_undo(crate::text_input::UndoActionKind::Other);
+                    #[cfg(feature = "text-styling")]
+                    {
+                        state.delete_selection_styled();
+                    }
+                    #[cfg(not(feature = "text-styling"))]
+                    {
+                        state.delete_selection();
+                    }
+                }
+            }
+        }
+        self.text_input_preedit_active = true;
+        self.text_input_preedit = text;
+    }
+
+    /// Clears the IME preedit text
+    pub fn clear_ime_preedit(&mut self) {
+        self.text_input_preedit.clear();
+        self.text_input_preedit_active = false;
+    }
+
+    /// Removes the last visible character from the IME preedit text.
+    /// Returns true if a character was removed.
+    pub fn backspace_ime_preedit(&mut self) -> bool {
+        if self.text_input_preedit.is_empty() {
+            return false;
+        }
+        self.text_input_preedit.pop();
+        true
+    }
+
+    /// Commits the current IME preedit as plain text into the focused input.
+    pub fn commit_ime_preedit_to_text(&mut self) {
+        if !self.text_input_preedit_active {
+            return;
+        }
+        self.forced_ime_preedit_value = Some(self.text_input_preedit.clone());
+        if !self.text_input_preedit.is_empty() {
+            let text = self.text_input_preedit.clone().replace("\'", "");
+            self.process_text_input_action(TextInputAction::ImeCommit { text });
+        }
+        self.clear_ime_preedit();
+        if self.is_text_input_focused() && !self.is_focused_text_input_password() {
+            // Toggle IME enabled to close composition.
+            macroquad::miniquad::window::set_ime_enabled(false);
+            macroquad::miniquad::window::set_ime_enabled(true);
+        }
+    }
+
+    /// Returns true if the focused text input is a password field.
+    pub fn is_focused_text_input_password(&self) -> bool {
+        if self.focused_element_id == 0 {
+            return false;
+        }
+        self.text_input_element_ids
+            .iter()
+            .position(|&id| id == self.focused_element_id)
+            .and_then(|idx| self.text_input_configs.get(idx))
+            .map_or(false, |cfg| cfg.is_password)
     }
 
     /// Returns true if the currently focused element is a text input.
@@ -6118,6 +6593,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 TextInputAction::BackspaceWord => state.push_undo(crate::text_input::UndoActionKind::DeleteWord),
                 TextInputAction::DeleteWord => state.push_undo(crate::text_input::UndoActionKind::DeleteWord),
                 TextInputAction::Cut => state.push_undo(crate::text_input::UndoActionKind::Cut),
+                TextInputAction::ImeCommit { .. } => state.push_undo(crate::text_input::UndoActionKind::Paste),
                 TextInputAction::Paste { .. } => state.push_undo(crate::text_input::UndoActionKind::Paste),
                 TextInputAction::Submit if is_multiline => state.push_undo(crate::text_input::UndoActionKind::InsertChar),
                 _ => {}
@@ -6284,6 +6760,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         state.insert_text(&text, max_length);
                     }
                 }
+                TextInputAction::ImeCommit { text } => {
+                    #[cfg(feature = "text-styling")]
+                    {
+                        let escaped = crate::text_input::styling::escape_str(&text);
+                        state.insert_text_styled(&escaped, max_length);
+                    }
+                    #[cfg(not(feature = "text-styling"))]
+                    {
+                        state.insert_text(&text, max_length);
+                    }
+                }
                 TextInputAction::Submit => {
                     if is_multiline {
                         #[cfg(feature = "text-styling")]
@@ -6352,12 +6839,56 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             if let Some(idx) = config_idx {
                 if let Some(cfg) = self.text_input_configs.get(idx) {
                     if let Some(ref measure_fn) = self.measure_text_fn {
-                        let disp_text = crate::text_input::display_text(
+                        let mut disp_text = crate::text_input::display_text(
                             &state.text,
                             &cfg.placeholder,
                             cfg.is_password && !cfg.is_multiline,
                         );
-                        if !state.text.is_empty() {
+                        let mut preedit_end_raw: Option<usize> = None;
+                        if focused == self.focused_element_id
+                            && self.text_input_preedit_active
+                            && !self.text_input_preedit.is_empty()
+                        {
+                            let preedit_display = crate::text_input::display_text(
+                                &self.text_input_preedit,
+                                "",
+                                cfg.is_password && !cfg.is_multiline,
+                            );
+                            #[cfg(feature = "text-styling")]
+                            {
+                                let preedit_insert =
+                                    crate::text_input::styling::escape_str(&preedit_display);
+                                let insert_pos =
+                                    crate::text_input::styling::cursor_to_raw_for_insertion(
+                                        &disp_text,
+                                        state.cursor_pos,
+                                    );
+                                let byte_pos =
+                                    crate::text_input::char_index_to_byte(&disp_text, insert_pos);
+                                let mut combined =
+                                    String::with_capacity(disp_text.len() + preedit_insert.len());
+                                combined.push_str(&disp_text[..byte_pos]);
+                                combined.push_str(&preedit_insert);
+                                combined.push_str(&disp_text[byte_pos..]);
+                                disp_text = combined;
+                                preedit_end_raw = Some(insert_pos + preedit_insert.chars().count());
+                            }
+                            #[cfg(not(feature = "text-styling"))]
+                            {
+                                let insert_pos = state.cursor_pos;
+                                let byte_pos =
+                                    crate::text_input::char_index_to_byte(&disp_text, insert_pos);
+                                let mut combined =
+                                    String::with_capacity(disp_text.len() + preedit_display.len());
+                                combined.push_str(&disp_text[..byte_pos]);
+                                combined.push_str(&preedit_display);
+                                combined.push_str(&disp_text[byte_pos..]);
+                                disp_text = combined;
+                                preedit_end_raw =
+                                    Some(insert_pos + preedit_display.chars().count());
+                            }
+                        }
+                        if !disp_text.is_empty() {
                             if cfg.is_multiline {
                                 // Multiline: use visual lines with word wrapping
                                 let visual_lines = crate::text_input::wrap_lines(
@@ -6370,7 +6901,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 #[cfg(feature = "text-styling")]
                                 let raw_cursor = state.cursor_pos_raw();
                                 #[cfg(not(feature = "text-styling"))]
-                                let raw_cursor = state.cursor_pos;
+                                let raw_cursor = preedit_end_raw.unwrap_or(state.cursor_pos);
                                 let (cursor_line, cursor_col) = crate::text_input::cursor_to_visual_pos(&visual_lines, raw_cursor);
                                 let vl_text = visual_lines.get(cursor_line).map(|vl| vl.text.as_str()).unwrap_or("");
                                 let line_positions = crate::text_input::compute_char_x_positions(
@@ -6397,9 +6928,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     measure_fn.as_ref(),
                                 );
                                 #[cfg(feature = "text-styling")]
-                                let raw_cursor = state.cursor_pos_raw();
+                                let raw_cursor = preedit_end_raw.unwrap_or_else(|| state.cursor_pos_raw());
                                 #[cfg(not(feature = "text-styling"))]
-                                let raw_cursor = state.cursor_pos;
+                                let raw_cursor = preedit_end_raw.unwrap_or(state.cursor_pos);
                                 let cursor_x = char_x_positions
                                     .get(raw_cursor)
                                     .copied()
@@ -6509,6 +7040,26 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             return consumed_scroll;
         };
         let is_multiline = ti_cfg.is_multiline;
+
+        if !is_multiline && (scroll_delta.x.abs() > 0.01 || scroll_delta.y.abs() > 0.01) {
+            if self.text_input_preedit_active {
+                if let Some(state) = self.text_edit_states.get_mut(&focused) {
+                    let h_delta = if scroll_delta.x.abs() > scroll_delta.y.abs() {
+                        scroll_delta.x
+                    } else {
+                        scroll_delta.y
+                    };
+                    if h_delta.abs() > 0.01 {
+                        state.scroll_offset -= h_delta;
+                        if state.scroll_offset < 0.0 {
+                            state.scroll_offset = 0.0;
+                        }
+                        consumed_scroll = true;
+                        self.text_input_scrollbar_idle_frames.insert(focused, 0);
+                    }
+                }
+            }
+        }
 
         let pointer_over_focused = self.layout_element_map.get(&focused)
             .map(|item| {
@@ -6663,6 +7214,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     let drag_id = self.text_input_drag_element_id;
                     if ti_cfg.drag_select && !self.text_input_drag_from_touch {
                         consumed_scroll = true;
+
+                        let drag_dx = pointer.x - self.text_input_drag_origin.x;
+                        let drag_dy = pointer.y - self.text_input_drag_origin.y;
+                        let drag_distance_sq = drag_dx * drag_dx + drag_dy * drag_dy;
+                        if drag_distance_sq < 4.0 {
+                            return consumed_scroll;
+                        }
 
                         if let (Some(item), Some(measure_fn)) = (
                             self.layout_element_map.get(&drag_id),
