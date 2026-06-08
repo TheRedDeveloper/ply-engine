@@ -13,7 +13,7 @@ license = "0BSD"
 exclude = ["scripts/*", ".vscode/*", ".github/*", ".cargo/*", "deps/*", "testcrate/*"]
 
 [features]
-default = ["a11y"]
+default = ["a11y", "image-standard"]
 text-styling = []
 tinyvg = ["dep:tinyvg", "dep:kurbo", "dep:lyon"]
 shader-build = ["dep:spirv-cross2"]
@@ -23,6 +23,13 @@ net = ["dep:ureq", "dep:tokio", "dep:tokio-tungstenite", "dep:rustls", "dep:futu
 net-json = ["net", "dep:serde", "dep:serde_json"]
 audio = ["macroquad/audio"]
 storage = ["dep:rfd", "dep:sapp-jsutils"]
+
+png = ["macroquad/png"]
+tga = ["macroquad/tga"]
+jpeg = ["macroquad/jpeg"]
+
+image-standard = ["macroquad/image-standard"]
+image-extended = ["macroquad/image-extended"]
 
 [dependencies]
 macroquad = { git = "https://github.com/TheRedDeveloper/macroquad-fix", package = "macroquad-ply", default-features = false }
