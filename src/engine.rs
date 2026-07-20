@@ -691,6 +691,8 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
 
     // Layout element map: element id -> element data (bounding box, hover callback, etc.)
     layout_element_map: FxHashMap<u32, LayoutElementHashMapItem>,
+    // Snapshot of the previous frame's map for debug rendering.
+    previous_layout_element_map: FxHashMap<u32, LayoutElementHashMapItem>,
 
     // Text measurement cache: content hash -> measured dimensions and words
     measure_text_cache: FxHashMap<u32, MeasureTextCacheItem>,
@@ -1039,6 +1041,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             tree_node_array: Vec::new(),
             layout_element_tree_roots: Vec::new(),
             layout_element_map: FxHashMap::default(),
+            previous_layout_element_map: FxHashMap::default(),
             measure_text_cache: FxHashMap::default(),
             measured_words: Vec::new(),
             measured_words_free_list: Vec::new(),
@@ -2304,6 +2307,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     }
 
     pub fn begin_layout(&mut self) {
+        self.previous_layout_element_map = if self.debug_mode_enabled {
+            std::mem::take(&mut self.layout_element_map)
+        } else {
+            Default::default()
+        };
         self.initialize_ephemeral_memory();
         self.generation += 1;
         if self.pressed_this_frame_generation != self.generation {
@@ -9166,9 +9174,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         };
 
         let selected_id = self.debug_selected_element_id;
-        let selected_item = match self.layout_element_map.get(&selected_id) {
-            Some(item) => item.clone(),
-            None => return,
+        let selected_item = match self.layout_element_map.get(&selected_id).cloned() {
+            Some(mut item) => {
+                if let Some(previous_item) = self.previous_layout_element_map.get(&selected_id) {
+                    item.bounding_box = previous_item.bounding_box;
+                }
+                item
+            }
+            None => match self.previous_layout_element_map.get(&selected_id).cloned() {
+                Some(item) => item,
+                None => return,
+            },
         };
         let layout_elem_idx = selected_item.layout_element_index as usize;
         if layout_elem_idx >= self.layout_elements.len() {
