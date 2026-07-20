@@ -329,7 +329,7 @@ macro_rules! fixed {
 #[macro_export]
 macro_rules! percent {
     ($percent:expr) => {{
-        const _: () = assert!(
+        debug_assert!(
             $percent >= 0.0 && $percent <= 1.0,
             "Percent value must be between 0.0 and 1.0 inclusive!"
         );
