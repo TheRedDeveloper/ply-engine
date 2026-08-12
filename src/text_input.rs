@@ -61,6 +61,10 @@ pub struct TextEditState {
     pub undo_stack: Vec<UndoEntry>,
     /// Redo stack: states undone (newest at end).
     pub redo_stack: Vec<UndoEntry>,
+    /// Start index of current composing range (mobile IME composition).
+    pub composing_start: Option<usize>,
+    /// End index of current composing range (mobile IME composition).
+    pub composing_end: Option<usize>,
 }
 
 impl Default for TextEditState {
@@ -78,6 +82,8 @@ impl Default for TextEditState {
             last_click_element: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            composing_start: None,
+            composing_end: None,
         }
     }
 }
@@ -1113,7 +1119,7 @@ impl TextEditState {
 
     /// Cleanup empty styles after a cursor movement.
     /// Called after any movement that doesn't modify text.
-    fn cleanup_after_move(&mut self) {
+    pub fn cleanup_after_move(&mut self) {
         // Snap first so the cursor moves away from structural positions;
         // this lets cleanup_empty_styles remove tags the cursor isn't inside.
         self.snap_to_content_pos();

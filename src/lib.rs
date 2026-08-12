@@ -53,9 +53,12 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     last_ime_preedit_snapshot: String,
     /// Track virtual keyboard state to avoid redundant show/hide calls
     was_text_input_focused: bool,
+    was_focused_element_id: u32,
     was_ime_enabled: bool,
     ime_ignore_preedit_until_change: bool,
     ime_ignored_preedit_value: String,
+    #[cfg(target_os = "android")]
+    last_android_ime_state: Option<(u64, String, usize, usize)>,
     #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
     web_a11y_state: accessibility_web::WebAccessibilityState,
     #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
@@ -665,6 +668,40 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             let mut preedit_updated = false;
             let mut forced_preedit_commit = false;
 
+            #[cfg(target_os = "android")]
+            {
+                if text_input_focused {
+                    if let Some(state) = macroquad::prelude::get_ime_state() {
+                        if state.element_id == current_focused_id as u64 {
+                            self.context.process_text_input_action(
+                                engine::TextInputAction::ImeStateChanged {
+                                    text: state.text.clone(),
+                                    selection_start: state.selection_start,
+                                    selection_end: state.selection_end,
+                                    composing_start: state.composing_start,
+                                    composing_end: state.composing_end,
+                                    element_id: state.element_id,
+                                }
+                            );
+                            self.last_android_ime_state = Some((
+                                state.element_id,
+                                state.text,
+                                state.selection_start,
+                                state.selection_end,
+                            ));
+                            preedit_updated = true;
+                        }
+                    }
+                    macroquad::prelude::clear_ime_state();
+                } else {
+                    macroquad::prelude::clear_ime_state();
+                    for state in self.context.text_edit_states.values_mut() {
+                        state.composing_start = None;
+                        state.composing_end = None;
+                    }
+                }
+            }
+
             if let Some(forced_preedit) = self.context.forced_ime_preedit_value.take() {
                 self.ime_ignore_preedit_until_change = true;
                 self.ime_ignored_preedit_value = forced_preedit;
@@ -672,73 +709,79 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             }
 
             if text_input_focused {
-                if let Some(preedit) = macroquad::prelude::get_ime_preedit() {
-                    if self.ime_ignore_preedit_until_change
-                        && preedit == self.ime_ignored_preedit_value
-                    {
-                        // Ignore
-                    } else {
-                        self.ime_ignore_preedit_until_change = false;
-                        if !preedit.is_empty() {
-                            self.last_ime_preedit_snapshot = preedit.clone();
-                        }
-                        self.context.set_ime_preedit(preedit);
-                        preedit_updated = true;
-                    }
-                } else {
-                    self.context.clear_ime_preedit();
-                    self.ime_ignore_preedit_until_change = false;
-                    self.ime_ignored_preedit_value.clear();
-                }
-                while let Some(commit) = macroquad::prelude::get_ime_commit() {
-                    match commit {
-                        ImeCommit::Text(text) => {
-                            self.context.process_text_input_action(
-                                engine::TextInputAction::ImeCommit { text },
-                            );
-                            self.context.clear_ime_preedit();
+                #[cfg(not(target_os = "android"))]
+                {
+                    if let Some(preedit) = macroquad::prelude::get_ime_preedit() {
+                        if self.ime_ignore_preedit_until_change
+                            && preedit == self.ime_ignored_preedit_value
+                        {
+                            // Ignore
+                        } else {
                             self.ime_ignore_preedit_until_change = false;
-                            self.ime_ignored_preedit_value.clear();
-                            self.text_input_backspace_consumed = false;
-                            self.last_ime_preedit_snapshot.clear();
-                            ime_commit_applied = true;
-                        }
-                        ImeCommit::Cancel => {
-                            if self.text_input_backspace_consumed {
-                                self.text_input_backspace_consumed = false;
-                            } else {
-                                let cancel_source = if self.context.text_input_preedit_active
-                                    && !self.context.text_input_preedit.is_empty()
-                                {
-                                    self.context.text_input_preedit.clone()
-                                } else {
-                                    self.last_ime_preedit_snapshot.clone()
-                                };
-                                if !cancel_source.is_empty() {
-                                    let mut sanitized = cancel_source.replace('\'', "");
-                                    sanitized = sanitized.replace('\u{2019}', "");
-                                    self.context.process_text_input_action(
-                                        engine::TextInputAction::ImeCommit { text: sanitized },
-                                    );
-                                }
+                            if !preedit.is_empty() {
+                                self.last_ime_preedit_snapshot = preedit.clone();
                             }
-                            self.context.clear_ime_preedit();
-                            self.ime_ignore_preedit_until_change = false;
-                            self.ime_ignored_preedit_value.clear();
-                            self.text_input_backspace_consumed = false;
-                            self.last_ime_preedit_snapshot.clear();
+                            self.context.set_ime_preedit(preedit);
+                            preedit_updated = true;
+                        }
+                    } else {
+                        self.context.clear_ime_preedit();
+                        self.ime_ignore_preedit_until_change = false;
+                        self.ime_ignored_preedit_value.clear();
+                    }
+                    while let Some(commit) = macroquad::prelude::get_ime_commit() {
+                        match commit {
+                            ImeCommit::Text(text) => {
+                                self.context.process_text_input_action(
+                                    engine::TextInputAction::ImeCommit { text },
+                                );
+                                self.context.clear_ime_preedit();
+                                self.ime_ignore_preedit_until_change = false;
+                                self.ime_ignored_preedit_value.clear();
+                                self.text_input_backspace_consumed = false;
+                                self.last_ime_preedit_snapshot.clear();
+                                ime_commit_applied = true;
+                            }
+                            ImeCommit::Cancel => {
+                                if self.text_input_backspace_consumed {
+                                    self.text_input_backspace_consumed = false;
+                                } else {
+                                    let cancel_source = if self.context.text_input_preedit_active
+                                        && !self.context.text_input_preedit.is_empty()
+                                    {
+                                        self.context.text_input_preedit.clone()
+                                    } else {
+                                        self.last_ime_preedit_snapshot.clone()
+                                    };
+                                    if !cancel_source.is_empty() {
+                                        let mut sanitized = cancel_source.replace('\'', "");
+                                        sanitized = sanitized.replace('\u{2019}', "");
+                                        self.context.process_text_input_action(
+                                            engine::TextInputAction::ImeCommit { text: sanitized },
+                                        );
+                                    }
+                                }
+                                self.context.clear_ime_preedit();
+                                self.ime_ignore_preedit_until_change = false;
+                                self.ime_ignored_preedit_value.clear();
+                                self.text_input_backspace_consumed = false;
+                                self.last_ime_preedit_snapshot.clear();
+                            }
                         }
                     }
                 }
             } else {
-                if !self.context.text_input_preedit.is_empty() {
-                    self.ime_ignore_preedit_until_change = true;
-                    self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
-                }
-                self.context.clear_ime_preedit();
-                self.last_ime_preedit_snapshot.clear();
-                while let Some(_) = macroquad::prelude::get_ime_commit() {
-                    // Drop
+                #[cfg(not(target_os = "android"))]
+                {
+                    if !self.context.text_input_preedit.is_empty() {
+                        self.ime_ignore_preedit_until_change = true;
+                        self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
+                    }
+                    self.context.clear_ime_preedit();
+                    self.last_ime_preedit_snapshot.clear();
+                    while let Some(_) = macroquad::prelude::get_ime_commit() {
+                        // Drop
+                    }
                 }
             }
 
@@ -759,274 +802,280 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
                 self.context.cycle_focus(shift);
             } else if text_input_focused {
-                // Route keyboard input to text editing
-                let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-                let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
-                let right_alt = is_key_down(KeyCode::RightAlt);
-                let time = self.context.current_time;
+                {
+                    // Route keyboard input to text editing
+                    let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+                    let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+                    let right_alt = is_key_down(KeyCode::RightAlt);
+                    let time = self.context.current_time;
 
-                // Key repeat constants
-                const INITIAL_DELAY: f64 = 0.5;
-                const REPEAT_INTERVAL: f64 = 0.033;
+                    // Key repeat constants
+                    const INITIAL_DELAY: f64 = 0.5;
+                    const REPEAT_INTERVAL: f64 = 0.033;
 
-                // Helper: check if a key should fire (pressed or repeating)
-                macro_rules! key_fires {
-                    ($key:expr, $id:expr) => {{
-                        if is_key_pressed($key) {
-                            self.text_input_repeat_key = $id;
-                            self.text_input_repeat_first = time;
-                            self.text_input_repeat_last = time;
-                            true
-                        } else if is_key_down($key) && self.text_input_repeat_key == $id {
-                            let since_first = time - self.text_input_repeat_first;
-                            let since_last = time - self.text_input_repeat_last;
-                            if since_first > INITIAL_DELAY && since_last > REPEAT_INTERVAL {
+                    // Helper: check if a key should fire (pressed or repeating)
+                    macro_rules! key_fires {
+                        ($key:expr, $id:expr) => {{
+                            if is_key_pressed($key) {
+                                self.text_input_repeat_key = $id;
+                                self.text_input_repeat_first = time;
                                 self.text_input_repeat_last = time;
                                 true
+                            } else if is_key_down($key) && self.text_input_repeat_key == $id {
+                                let since_first = time - self.text_input_repeat_first;
+                                let since_last = time - self.text_input_repeat_last;
+                                if since_first > INITIAL_DELAY && since_last > REPEAT_INTERVAL {
+                                    self.text_input_repeat_last = time;
+                                    true
+                                } else {
+                                    false
+                                }
                             } else {
                                 false
                             }
-                        } else {
-                            false
-                        }
-                    }};
-                }
+                        }};
+                    }
 
-                let preedit_active = self.context.text_input_preedit_active;
+                    let preedit_active = self.context.text_input_preedit_active;
 
-                // Force-commit preedit first.
-                if preedit_active && ctrl {
-                    self.ime_ignore_preedit_until_change = true;
-                    self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
-                    self.context.commit_ime_preedit_to_text();
-                    // Nudge IME to close suggestion window
-                    if self.context.is_text_input_focused()
-                        && !self.context.is_focused_text_input_password()
-                    {
-                        macroquad::miniquad::window::set_ime_enabled(false);
-                        macroquad::miniquad::window::set_ime_enabled(true);
-                    }
-                    forced_preedit_commit = true;
-                }
-
-                let ime_activity_this_frame =
-                    preedit_active || ime_commit_applied || forced_preedit_commit;
-
-                // Handle special keys with repeat support
-                let mut cursor_moved = false;
-                if ime_commit_applied {
-                    cursor_moved = true;
-                }
-                if !preedit_active && key_fires!(KeyCode::Left, 1) {
-                    if ctrl {
-                        self.context.process_text_input_action(engine::TextInputAction::MoveWordLeft { shift });
-                    } else {
-                        self.context.process_text_input_action(engine::TextInputAction::MoveLeft { shift });
-                    }
-                    cursor_moved = true;
-                }
-                if !preedit_active && key_fires!(KeyCode::Right, 2) {
-                    if ctrl {
-                        self.context.process_text_input_action(engine::TextInputAction::MoveWordRight { shift });
-                    } else {
-                        self.context.process_text_input_action(engine::TextInputAction::MoveRight { shift });
-                    }
-                    cursor_moved = true;
-                }
-                if key_fires!(KeyCode::Backspace, 3) {
-                    if preedit_active {
-                        self.text_input_backspace_consumed = true;
-                        cursor_moved = true;
-                    } else if !self.text_input_backspace_consumed {
-                        if ctrl {
-                            self.context.process_text_input_action(engine::TextInputAction::BackspaceWord);
-                        } else {
-                            self.context.process_text_input_action(engine::TextInputAction::Backspace);
-                        }
-                        cursor_moved = true;
-                    }
-                }
-                if !preedit_active && key_fires!(KeyCode::Delete, 4) {
-                    if ctrl {
-                        self.context.process_text_input_action(engine::TextInputAction::DeleteWord);
-                    } else {
-                        self.context.process_text_input_action(engine::TextInputAction::Delete);
-                    }
-                    cursor_moved = true;
-                }
-                if !preedit_active && key_fires!(KeyCode::Home, 5) {
-                    self.context.process_text_input_action(engine::TextInputAction::MoveHome { shift });
-                    cursor_moved = true;
-                }
-                if !preedit_active && key_fires!(KeyCode::End, 6) {
-                    self.context.process_text_input_action(engine::TextInputAction::MoveEnd { shift });
-                    cursor_moved = true;
-                }
-
-                // Up/Down arrows for multiline
-                if !preedit_active && self.context.is_focused_text_input_multiline() {
-                    if key_fires!(KeyCode::Up, 7) {
-                        self.context.process_text_input_action(engine::TextInputAction::MoveUp { shift });
-                        cursor_moved = true;
-                    }
-                    if key_fires!(KeyCode::Down, 8) {
-                        self.context.process_text_input_action(engine::TextInputAction::MoveDown { shift });
-                        cursor_moved = true;
-                    }
-                }
-
-                // Non-repeating keys
-                if is_key_pressed(KeyCode::Enter) {
-                    if ime_activity_this_frame {
+                    // Force-commit preedit first.
+                    if preedit_active && ctrl {
                         self.ime_ignore_preedit_until_change = true;
                         self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
                         self.context.commit_ime_preedit_to_text();
+                        // Nudge IME to close suggestion window
                         if self.context.is_text_input_focused()
                             && !self.context.is_focused_text_input_password()
                         {
                             macroquad::miniquad::window::set_ime_enabled(false);
                             macroquad::miniquad::window::set_ime_enabled(true);
                         }
-                        cursor_moved = true;
-                    } else {
-                        self.context.process_text_input_action(engine::TextInputAction::Submit);
-                        cursor_moved = true;
+                        forced_preedit_commit = true;
                     }
-                }
-                if !preedit_active && ctrl && is_key_pressed(KeyCode::A) {
-                    self.context
-                        .process_text_input_action(engine::TextInputAction::SelectAll);
-                }
-                if !preedit_active && ctrl && is_key_pressed(KeyCode::Z) {
-                    if shift {
-                        self.context.process_text_input_action(engine::TextInputAction::Redo);
-                    } else {
-                        self.context.process_text_input_action(engine::TextInputAction::Undo);
-                    }
-                    cursor_moved = true;
-                }
-                if !preedit_active && ctrl && is_key_pressed(KeyCode::Y) {
-                    self.context.process_text_input_action(engine::TextInputAction::Redo);
-                    cursor_moved = true;
-                }
-                if !preedit_active && ctrl && is_key_pressed(KeyCode::C) {
-                    // Copy selected text to clipboard
-                    let elem_id = self.context.focused_element_id;
-                    if let Some(state) = self.context.text_edit_states.get(&elem_id) {
-                        #[cfg(feature = "text-styling")]
-                        let selected = state.selected_text_styled();
-                        #[cfg(not(feature = "text-styling"))]
-                        let selected = state.selected_text().to_string();
-                        if !selected.is_empty() {
-                            macroquad::miniquad::window::clipboard_set(&selected);
-                        }
-                    }
-                }
-                if !preedit_active && ctrl && is_key_pressed(KeyCode::X) {
-                    // Cut: copy then delete selection
-                    let elem_id = self.context.focused_element_id;
-                    if let Some(state) = self.context.text_edit_states.get(&elem_id) {
-                        #[cfg(feature = "text-styling")]
-                        let selected = state.selected_text_styled();
-                        #[cfg(not(feature = "text-styling"))]
-                        let selected = state.selected_text().to_string();
-                        if !selected.is_empty() {
-                            macroquad::miniquad::window::clipboard_set(&selected);
-                        }
-                    }
-                    self.context.process_text_input_action(engine::TextInputAction::Cut);
-                    cursor_moved = true;
-                }
-                if !preedit_active && ctrl && is_key_pressed(KeyCode::V) {
-                    // Paste from clipboard
-                    if let Some(text) = macroquad::miniquad::window::clipboard_get() {
-                        self.context.process_text_input_action(engine::TextInputAction::Paste { text });
-                        cursor_moved = true;
-                    }
-                }
 
-                // Escape unfocuses the text input
-                if is_key_pressed(KeyCode::Escape) {
-                    self.text_input_backspace_consumed = false;
-                    if self.context.text_input_preedit_active
-                        || self.context.forced_ime_preedit_value.is_some()
-                    {
-                        let mut to_commit = if self.context.text_input_preedit_active {
-                            self.context.text_input_preedit.clone()
-                        } else if let Some(fv) = self.context.forced_ime_preedit_value.take() {
-                            fv
+                    let ime_activity_this_frame =
+                        preedit_active || ime_commit_applied || forced_preedit_commit;
+
+                    // Handle special keys with repeat support
+                    let mut cursor_moved = false;
+                    if ime_commit_applied {
+                        cursor_moved = true;
+                    }
+                    if !preedit_active && key_fires!(KeyCode::Left, 1) {
+                        if ctrl {
+                            self.context.process_text_input_action(engine::TextInputAction::MoveWordLeft { shift });
                         } else {
-                            self.last_ime_preedit_snapshot.clone()
-                        };
-                        if to_commit.is_empty() {
-                            to_commit = self.last_ime_preedit_snapshot.clone();
-                        }
-                        if !to_commit.is_empty() {
-                            let mut sanitized = to_commit.replace('\'', "");
-                            sanitized = sanitized.replace('\u{2019}', "");
-                            self.context.process_text_input_action(
-                                engine::TextInputAction::ImeCommit { text: sanitized },
-                            );
-                        }
-                        self.context.clear_ime_preedit();
-                        self.last_ime_preedit_snapshot.clear();
-                        self.ime_ignore_preedit_until_change = false;
-                        self.ime_ignored_preedit_value.clear();
-                        if self.context.is_text_input_focused()
-                            && !self.context.is_focused_text_input_password()
-                        {
-                            macroquad::miniquad::window::set_ime_enabled(false);
-                            macroquad::miniquad::window::set_ime_enabled(true);
+                            self.context.process_text_input_action(engine::TextInputAction::MoveLeft { shift });
                         }
                         cursor_moved = true;
                     }
-                    self.context.clear_focus();
-                }
-
-                // Clear repeat state if the tracked key was released
-                if self.text_input_repeat_key != 0 {
-                    let still_down = match self.text_input_repeat_key {
-                        1 => is_key_down(KeyCode::Left),
-                        2 => is_key_down(KeyCode::Right),
-                        3 => is_key_down(KeyCode::Backspace),
-                        4 => is_key_down(KeyCode::Delete),
-                        5 => is_key_down(KeyCode::Home),
-                        6 => is_key_down(KeyCode::End),
-                        7 => is_key_down(KeyCode::Up),
-                        8 => is_key_down(KeyCode::Down),
-                        _ => false,
-                    };
-                    if !still_down {
-                        if self.text_input_repeat_key == 3 {
-                            self.text_input_backspace_consumed = false;
+                    if !preedit_active && key_fires!(KeyCode::Right, 2) {
+                        if ctrl {
+                            self.context.process_text_input_action(engine::TextInputAction::MoveWordRight { shift });
+                        } else {
+                            self.context.process_text_input_action(engine::TextInputAction::MoveRight { shift });
                         }
-                        self.text_input_repeat_key = 0;
+                        cursor_moved = true;
                     }
-                }
-
-                // Drain character input queue
-                if preedit_active {
-                    macroquad::prelude::clear_input_queue();
-                } else {
-                    while let Some(ch) = macroquad::prelude::get_char_pressed() {
-                        // Filter out control characters and Ctrl-key combos
-                        if !ch.is_control() && ((ctrl && right_alt) || !ctrl) {
-                            self.context.process_text_input_char(ch);
+                    if key_fires!(KeyCode::Backspace, 3) {
+                        if preedit_active {
+                            self.text_input_backspace_consumed = true;
+                            cursor_moved = true;
+                        } else if !self.text_input_backspace_consumed {
+                            if ctrl {
+                                self.context.process_text_input_action(engine::TextInputAction::BackspaceWord);
+                            } else {
+                                self.context.process_text_input_action(engine::TextInputAction::Backspace);
+                            }
                             cursor_moved = true;
                         }
                     }
-                }
+                    if !preedit_active && key_fires!(KeyCode::Delete, 4) {
+                        if ctrl {
+                            self.context.process_text_input_action(engine::TextInputAction::DeleteWord);
+                        } else {
+                            self.context.process_text_input_action(engine::TextInputAction::Delete);
+                        }
+                        cursor_moved = true;
+                    }
+                    if !preedit_active && key_fires!(KeyCode::Home, 5) {
+                        self.context.process_text_input_action(engine::TextInputAction::MoveHome { shift });
+                        cursor_moved = true;
+                    }
+                    if !preedit_active && key_fires!(KeyCode::End, 6) {
+                        self.context.process_text_input_action(engine::TextInputAction::MoveEnd { shift });
+                        cursor_moved = true;
+                    }
 
-                if preedit_updated {
-                    cursor_moved = true;
-                }
+                    // Up/Down arrows
+                    if !preedit_active {
+                        if key_fires!(KeyCode::Up, 7) {
+                            #[cfg(target_os = "android")]
+                            macroquad::miniquad::info!("PlyEngineIME: KeyCode::Up fired! shift={}", shift);
+                            self.context.process_text_input_action(engine::TextInputAction::MoveUp { shift });
+                            cursor_moved = true;
+                        }
+                        if key_fires!(KeyCode::Down, 8) {
+                            #[cfg(target_os = "android")]
+                            macroquad::miniquad::info!("PlyEngineIME: KeyCode::Down fired! shift={}", shift);
+                            self.context.process_text_input_action(engine::TextInputAction::MoveDown { shift });
+                            cursor_moved = true;
+                        }
+                    }
 
-                // Update scroll to keep cursor visible (only when cursor moved, not every frame,
-                // so that manual scrolling via scroll wheel / drag isn't immediately undone).
-                if cursor_moved {
-                    self.context.update_text_input_scroll();
+                    // Non-repeating keys
+                    if is_key_pressed(KeyCode::Enter) {
+                        if ime_activity_this_frame {
+                            self.ime_ignore_preedit_until_change = true;
+                            self.ime_ignored_preedit_value = self.context.text_input_preedit.clone();
+                            self.context.commit_ime_preedit_to_text();
+                            if self.context.is_text_input_focused()
+                                && !self.context.is_focused_text_input_password()
+                            {
+                                macroquad::miniquad::window::set_ime_enabled(false);
+                                macroquad::miniquad::window::set_ime_enabled(true);
+                            }
+                            cursor_moved = true;
+                        } else {
+                            self.context.process_text_input_action(engine::TextInputAction::Submit);
+                            cursor_moved = true;
+                        }
+                    }
+                    if !preedit_active && ctrl && is_key_pressed(KeyCode::A) {
+                        self.context
+                            .process_text_input_action(engine::TextInputAction::SelectAll);
+                    }
+                    if !preedit_active && ctrl && is_key_pressed(KeyCode::Z) {
+                        if shift {
+                            self.context.process_text_input_action(engine::TextInputAction::Redo);
+                        } else {
+                            self.context.process_text_input_action(engine::TextInputAction::Undo);
+                        }
+                        cursor_moved = true;
+                    }
+                    if !preedit_active && ctrl && is_key_pressed(KeyCode::Y) {
+                        self.context.process_text_input_action(engine::TextInputAction::Redo);
+                        cursor_moved = true;
+                    }
+                    if !preedit_active && ctrl && is_key_pressed(KeyCode::C) {
+                        // Copy selected text to clipboard
+                        let elem_id = self.context.focused_element_id;
+                        if let Some(state) = self.context.text_edit_states.get(&elem_id) {
+                            #[cfg(feature = "text-styling")]
+                            let selected = state.selected_text_styled();
+                            #[cfg(not(feature = "text-styling"))]
+                            let selected = state.selected_text().to_string();
+                            if !selected.is_empty() {
+                                macroquad::miniquad::window::clipboard_set(&selected);
+                            }
+                        }
+                    }
+                    if !preedit_active && ctrl && is_key_pressed(KeyCode::X) {
+                        // Cut: copy then delete selection
+                        let elem_id = self.context.focused_element_id;
+                        if let Some(state) = self.context.text_edit_states.get(&elem_id) {
+                            #[cfg(feature = "text-styling")]
+                            let selected = state.selected_text_styled();
+                            #[cfg(not(feature = "text-styling"))]
+                            let selected = state.selected_text().to_string();
+                            if !selected.is_empty() {
+                                macroquad::miniquad::window::clipboard_set(&selected);
+                            }
+                        }
+                        self.context.process_text_input_action(engine::TextInputAction::Cut);
+                        cursor_moved = true;
+                    }
+                    if !preedit_active && ctrl && is_key_pressed(KeyCode::V) {
+                        // Paste from clipboard
+                        if let Some(text) = macroquad::miniquad::window::clipboard_get() {
+                            self.context.process_text_input_action(engine::TextInputAction::Paste { text });
+                            cursor_moved = true;
+                        }
+                    }
+
+                    // Escape unfocuses the text input
+                    if is_key_pressed(KeyCode::Escape) {
+                        self.text_input_backspace_consumed = false;
+                        if self.context.text_input_preedit_active
+                            || self.context.forced_ime_preedit_value.is_some()
+                        {
+                            let mut to_commit = if self.context.text_input_preedit_active {
+                                self.context.text_input_preedit.clone()
+                            } else if let Some(fv) = self.context.forced_ime_preedit_value.take() {
+                                fv
+                            } else {
+                                self.last_ime_preedit_snapshot.clone()
+                            };
+                            if to_commit.is_empty() {
+                                to_commit = self.last_ime_preedit_snapshot.clone();
+                            }
+                            if !to_commit.is_empty() {
+                                let mut sanitized = to_commit.replace('\'', "");
+                                sanitized = sanitized.replace('\u{2019}', "");
+                                self.context.process_text_input_action(
+                                    engine::TextInputAction::ImeCommit { text: sanitized },
+                                );
+                            }
+                            self.context.clear_ime_preedit();
+                            self.last_ime_preedit_snapshot.clear();
+                            self.ime_ignore_preedit_until_change = false;
+                            self.ime_ignored_preedit_value.clear();
+                            if self.context.is_text_input_focused()
+                                && !self.context.is_focused_text_input_password()
+                            {
+                                macroquad::miniquad::window::set_ime_enabled(false);
+                                macroquad::miniquad::window::set_ime_enabled(true);
+                            }
+                            cursor_moved = true;
+                        }
+                        self.context.clear_focus();
+                    }
+
+                    // Clear repeat state if the tracked key was released
+                    if self.text_input_repeat_key != 0 {
+                        let still_down = match self.text_input_repeat_key {
+                            1 => is_key_down(KeyCode::Left),
+                            2 => is_key_down(KeyCode::Right),
+                            3 => is_key_down(KeyCode::Backspace),
+                            4 => is_key_down(KeyCode::Delete),
+                            5 => is_key_down(KeyCode::Home),
+                            6 => is_key_down(KeyCode::End),
+                            7 => is_key_down(KeyCode::Up),
+                            8 => is_key_down(KeyCode::Down),
+                            _ => false,
+                        };
+                        if !still_down {
+                            if self.text_input_repeat_key == 3 {
+                                self.text_input_backspace_consumed = false;
+                            }
+                            self.text_input_repeat_key = 0;
+                        }
+                    }
+
+                    // Drain character input queue
+                    if preedit_active {
+                        macroquad::prelude::clear_input_queue();
+                    } else {
+                        while let Some(ch) = macroquad::prelude::get_char_pressed() {
+                            // Filter out control characters and Ctrl-key combos
+                            if !ch.is_control() && ((ctrl && right_alt) || !ctrl) {
+                                self.context.process_text_input_char(ch);
+                                cursor_moved = true;
+                            }
+                        }
+                    }
+
+                    if preedit_updated {
+                        cursor_moved = true;
+                    }
+
+                    // Update scroll to keep cursor visible (only when cursor moved, not every frame,
+                    // so that manual scrolling via scroll wheel / drag isn't immediately undone).
+                    if cursor_moved {
+                        self.context.update_text_input_scroll();
+                    }
+                    self.context.clamp_text_input_scroll();
                 }
-                self.context.clamp_text_input_scroll();
             } else {
                 // Normal keyboard navigation (non-text-input)
                 if is_key_pressed(KeyCode::Right) { self.context.arrow_focus(engine::ArrowDirection::Right); }
@@ -1043,9 +1092,71 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         // Show/hide virtual keyboard when text input focus changes (mobile)
         {
             let text_input_focused = self.context.is_text_input_focused();
+            let current_focused_id = self.context.focused_element_id;
             let ime_should_be_enabled =
                 text_input_focused && !self.context.is_focused_text_input_password();
-            if text_input_focused != self.was_text_input_focused {
+
+            let focus_changed = text_input_focused != self.was_text_input_focused
+                || (text_input_focused && current_focused_id != self.was_focused_element_id);
+
+            if focus_changed {
+                #[cfg(target_os = "android")]
+                if text_input_focused {
+                    let is_password = self.context.is_focused_text_input_password();
+                    let is_multiline = self.context.is_focused_text_input_multiline();
+                    let state = self.context.get_or_create_text_edit_state(current_focused_id);
+                    let display_text = {
+                        #[cfg(feature = "text-styling")]
+                        {
+                            crate::text_input::styling::strip_styling(&state.text)
+                        }
+                        #[cfg(not(feature = "text-styling"))]
+                        {
+                            state.text.clone()
+                        }
+                    };
+
+                    let char_index_to_utf16_index = |s: &str, char_idx: usize| -> usize {
+                        let mut current_char_idx = 0;
+                        let mut utf16_idx = 0;
+                        for c in s.chars() {
+                            if current_char_idx >= char_idx {
+                                break;
+                            }
+                            utf16_idx += c.len_utf16();
+                            current_char_idx += 1;
+                        }
+                        utf16_idx
+                    };
+
+                    let (sel_start_cp, sel_end_cp) = {
+                        #[cfg(feature = "text-styling")]
+                        {
+                            let anchor = state.selection_anchor.unwrap_or(state.cursor_pos);
+                            let start_cp = crate::text_input::styling::cursor_to_content(&state.text, anchor);
+                            let end_cp = crate::text_input::styling::cursor_to_content(&state.text, state.cursor_pos);
+                            (start_cp, end_cp)
+                        }
+                        #[cfg(not(feature = "text-styling"))]
+                        {
+                            (state.selection_anchor.unwrap_or(state.cursor_pos), state.cursor_pos)
+                        }
+                    };
+                    let u16_start = char_index_to_utf16_index(&display_text, sel_start_cp);
+                    let u16_end = char_index_to_utf16_index(&display_text, sel_end_cp);
+                    
+                    let max_len = self.context.get_focused_text_input_max_length().unwrap_or(0);
+                    macroquad::miniquad::window::update_text_input_state(
+                        display_text,
+                        u16_start,
+                        u16_end,
+                        is_password,
+                        is_multiline,
+                        current_focused_id as u64,
+                        max_len,
+                    );
+                }
+
                 #[cfg(not(any(target_arch = "wasm32", target_os = "linux")))]
                 {
                     macroquad::miniquad::window::show_keyboard(text_input_focused);
@@ -1056,8 +1167,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 }
                 if !text_input_focused {
                     self.context.clear_ime_preedit();
+                    #[cfg(target_os = "android")]
+                    macroquad::miniquad::window::update_text_input_state(
+                        String::new(),
+                        0,
+                        0,
+                        false,
+                        false,
+                        0,
+                        0,
+                    );
                 }
                 self.was_text_input_focused = text_input_focused;
+                self.was_focused_element_id = current_focused_id;
             }
             if ime_should_be_enabled != self.was_ime_enabled {
                 macroquad::miniquad::window::set_ime_enabled(ime_should_be_enabled);
@@ -1089,9 +1211,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             text_input_backspace_consumed: false,
             last_ime_preedit_snapshot: String::new(),
             was_text_input_focused: false,
+            was_focused_element_id: 0,
             was_ime_enabled: false,
             ime_ignore_preedit_until_change: false,
             ime_ignored_preedit_value: String::new(),
+            #[cfg(target_os = "android")]
+            last_android_ime_state: None,
             #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
@@ -1117,9 +1242,12 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             text_input_backspace_consumed: false,
             last_ime_preedit_snapshot: String::new(),
             was_text_input_focused: false,
+            was_focused_element_id: 0,
             was_ime_enabled: false,
             ime_ignore_preedit_until_change: false,
             ime_ignored_preedit_value: String::new(),
+            #[cfg(target_os = "android")]
+            last_android_ime_state: None,
             #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
@@ -1342,6 +1470,84 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                         self.context.fire_press(target_id);
                     }
                 }
+            }
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            let active_focused_id = self.context.focused_element_id;
+            if active_focused_id != 0 {
+                if let Some(state) = self.context.text_edit_states.get(&active_focused_id) {
+                    let is_password = self.context.is_focused_text_input_password();
+                    let is_multiline = self.context.is_focused_text_input_multiline();
+                    
+                    let display_text = {
+                        #[cfg(feature = "text-styling")]
+                        {
+                            crate::text_input::styling::strip_styling(&state.text)
+                        }
+                        #[cfg(not(feature = "text-styling"))]
+                        {
+                            state.text.clone()
+                        }
+                    };
+
+                    let char_index_to_utf16_index = |s: &str, char_idx: usize| -> usize {
+                        let mut current_char_idx = 0;
+                        let mut utf16_idx = 0;
+                        for c in s.chars() {
+                            if current_char_idx >= char_idx {
+                                break;
+                            }
+                            utf16_idx += c.len_utf16();
+                            current_char_idx += 1;
+                        }
+                        utf16_idx
+                    };
+
+                    let (sel_start_cp, sel_end_cp) = {
+                        #[cfg(feature = "text-styling")]
+                        {
+                            let anchor = state.selection_anchor.unwrap_or(state.cursor_pos);
+                            let start_cp = crate::text_input::styling::cursor_to_content(&state.text, anchor);
+                            let end_cp = crate::text_input::styling::cursor_to_content(&state.text, state.cursor_pos);
+                            (start_cp, end_cp)
+                        }
+                        #[cfg(not(feature = "text-styling"))]
+                        {
+                            (state.selection_anchor.unwrap_or(state.cursor_pos), state.cursor_pos)
+                        }
+                    };
+                    let u16_start = char_index_to_utf16_index(&display_text, sel_start_cp);
+                    let u16_end = char_index_to_utf16_index(&display_text, sel_end_cp);
+                    
+                    let max_len = self.context.get_focused_text_input_max_length().unwrap_or(0);
+                    
+                    let state_changed = match &self.last_android_ime_state {
+                        Some((old_id, old_text, old_u16_start, old_u16_end)) => {
+                            *old_id != active_focused_id as u64
+                                || *old_text != display_text
+                                || *old_u16_start != u16_start
+                                || *old_u16_end != u16_end
+                        }
+                        None => true,
+                    };
+
+                    if state_changed {
+                        self.last_android_ime_state = Some((active_focused_id as u64, display_text.clone(), u16_start, u16_end));
+                        macroquad::miniquad::window::update_text_input_state(
+                            display_text,
+                            u16_start,
+                            u16_end,
+                            is_password,
+                            is_multiline,
+                            active_focused_id as u64,
+                            max_len,
+                        );
+                    }
+                }
+            } else if self.last_android_ime_state.is_some() {
+                self.last_android_ime_state = None;
             }
         }
 

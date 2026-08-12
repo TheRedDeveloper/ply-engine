@@ -84,6 +84,14 @@ pub enum TextInputAction {
     Cut,
     Paste { text: String },
     ImeCommit { text: String },
+    ImeStateChanged {
+        text: String,
+        selection_start: usize,
+        selection_end: usize,
+        composing_start: Option<usize>,
+        composing_end: Option<usize>,
+        element_id: u64,
+    },
     Submit,
     Undo,
     Redo,
@@ -4184,11 +4192,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         String::new()
                                     };
                                     let preedit_visible_len = preedit_display.chars().count();
-                                    let mut preedit_start_raw: Option<usize> = None;
-                                    let mut preedit_end_raw: Option<usize> = None;
-                                    let mut preedit_raw_len = 0usize;
+                                     let mut preedit_start_raw: Option<usize> = None;
+                                     let mut preedit_end_raw: Option<usize> = None;
+                                     let mut preedit_raw_len = 0usize;
 
-                                    if has_preedit && preedit_visible_len > 0 {
+                                     if state.composing_start.is_some() && state.composing_end.is_some() {
+                                         preedit_start_raw = state.composing_start;
+                                         preedit_end_raw = state.composing_end;
+                                     } else if has_preedit && preedit_visible_len > 0 {
                                         #[cfg(feature = "text-styling")]
                                         {
                                             let preedit_insert =
@@ -6398,12 +6409,30 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             .map_or(false, |cfg| cfg.is_multiline)
     }
 
+    /// Returns max_length for the currently focused text input, if any.
+    pub fn get_focused_text_input_max_length(&self) -> Option<usize> {
+        if self.focused_element_id == 0 {
+            return None;
+        }
+        self.text_input_element_ids.iter()
+            .position(|&id| id == self.focused_element_id)
+            .and_then(|idx| self.text_input_configs.get(idx))
+            .and_then(|cfg| cfg.max_length)
+    }
+
     /// Returns the text value for a text input element, or empty string if not found.
     pub fn get_text_value(&self, element_id: u32) -> &str {
         self.text_edit_states
             .get(&element_id)
             .map(|state| state.text.as_str())
             .unwrap_or("")
+    }
+
+    /// Returns a mutable reference to the TextEditState for an element, creating it if it doesn't exist.
+    pub fn get_or_create_text_edit_state(&mut self, element_id: u32) -> &mut crate::text_input::TextEditState {
+        self.text_edit_states
+            .entry(element_id)
+            .or_insert_with(crate::text_input::TextEditState::default)
     }
 
     /// Sets the text value for a text input element.
@@ -6413,11 +6442,21 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             .or_insert_with(crate::text_input::TextEditState::default);
         state.text = value.to_string();
         #[cfg(feature = "text-styling")]
-        let max_pos = crate::text_input::styling::cursor_len(&state.text);
+        {
+            let max_pos = crate::text_input::styling::cursor_len(&state.text);
+            if state.cursor_pos > max_pos {
+                state.cursor_pos = max_pos;
+            }
+            if state.no_styles_movement {
+                state.cleanup_after_move();
+            }
+        }
         #[cfg(not(feature = "text-styling"))]
-        let max_pos = state.text.chars().count();
-        if state.cursor_pos > max_pos {
-            state.cursor_pos = max_pos;
+        {
+            let max_pos = state.text.chars().count();
+            if state.cursor_pos > max_pos {
+                state.cursor_pos = max_pos;
+            }
         }
         state.selection_anchor = None;
         state.reset_blink();
@@ -6509,10 +6548,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let elem_id = self.focused_element_id;
 
         // Get max_length from current config (if available this frame)
-        let max_length = self.text_input_element_ids.iter()
-            .position(|&id| id == elem_id)
-            .and_then(|idx| self.text_input_configs.get(idx))
-            .and_then(|cfg| cfg.max_length);
+        let max_length = self.get_focused_text_input_max_length();
 
         if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
             let old_text = state.text.clone();
@@ -6765,6 +6801,142 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     {
                         state.insert_text(&text, max_length);
                     }
+                }
+                TextInputAction::ImeStateChanged {
+                    mut text,
+                    selection_start,
+                    selection_end,
+                    composing_start,
+                    composing_end,
+                    element_id,
+                } => {
+                    if element_id != elem_id as u64 {
+                        return false;
+                    }
+                    if let Some(max) = max_length {
+                        if text.chars().count() > max {
+                            text = text.chars().take(max).collect();
+                        }
+                    }
+                    #[cfg(feature = "text-styling")]
+                    {
+                        let old_stripped = crate::text_input::styling::strip_styling(&state.text);
+                        if old_stripped != text {
+                            if text.is_empty() {
+                                state.text = String::new();
+                                state.cursor_pos = 0;
+                                state.selection_anchor = None;
+                            } else {
+                                let prefix_len = old_stripped
+                                    .chars()
+                                    .zip(text.chars())
+                                    .take_while(|(a, b)| a == b)
+                                    .count();
+
+                                let old_remaining: Vec<char> = old_stripped.chars().skip(prefix_len).collect();
+                                let new_remaining: Vec<char> = text.chars().skip(prefix_len).collect();
+
+                                let mut suffix_len = 0;
+                                while suffix_len < old_remaining.len()
+                                    && suffix_len < new_remaining.len()
+                                    && old_remaining[old_remaining.len() - 1 - suffix_len]
+                                        == new_remaining[new_remaining.len() - 1 - suffix_len]
+                                {
+                                    suffix_len += 1;
+                                }
+
+                                let delete_start = prefix_len;
+                                let delete_end = old_stripped.chars().count() - suffix_len;
+                                let insert_text_segment: String = new_remaining
+                                    [..new_remaining.len() - suffix_len]
+                                    .iter()
+                                    .collect();
+
+                                if delete_end > delete_start {
+                                    let start_vis = crate::text_input::styling::content_to_cursor(&state.text, delete_start, state.no_styles_movement);
+                                    let end_vis = crate::text_input::styling::content_to_cursor(&state.text, delete_end, state.no_styles_movement);
+                                    state.selection_anchor = Some(start_vis);
+                                    state.cursor_pos = end_vis;
+                                    state.delete_selection_styled();
+                                } else {
+                                    let start_vis = crate::text_input::styling::content_to_cursor(&state.text, delete_start, state.no_styles_movement);
+                                    state.cursor_pos = start_vis;
+                                    state.selection_anchor = None;
+                                }
+
+                                if !insert_text_segment.is_empty() {
+                                    state.insert_text_styled(&insert_text_segment, max_length);
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "text-styling"))]
+                    {
+                        state.text = text;
+                    }
+
+                    let display_text = {
+                        #[cfg(feature = "text-styling")]
+                        {
+                            crate::text_input::styling::strip_styling(&state.text)
+                        }
+                        #[cfg(not(feature = "text-styling"))]
+                        {
+                            state.text.clone()
+                        }
+                    };
+                    
+                    let utf16_index_to_char_index = |s: &str, utf16_idx: usize| -> usize {
+                        let mut char_idx = 0;
+                        let mut current_utf16_idx = 0;
+                        for c in s.chars() {
+                            if current_utf16_idx >= utf16_idx {
+                                break;
+                            }
+                            current_utf16_idx += c.len_utf16();
+                            char_idx += 1;
+                        }
+                        char_idx
+                    };
+
+                    let char_count = display_text.chars().count();
+                    let char_start = utf16_index_to_char_index(&display_text, selection_start).min(char_count);
+                    let char_end = utf16_index_to_char_index(&display_text, selection_end).min(char_count);
+
+                    #[cfg(feature = "text-styling")]
+                    {
+                        let start_vis = crate::text_input::styling::content_to_cursor(&state.text, char_start, state.no_styles_movement);
+                        let end_vis = crate::text_input::styling::content_to_cursor(&state.text, char_end, state.no_styles_movement);
+                        if char_start == char_end {
+                            state.cursor_pos = start_vis;
+                            state.selection_anchor = None;
+                        } else {
+                            state.selection_anchor = Some(start_vis);
+                            state.cursor_pos = end_vis;
+                        }
+                    }
+                    #[cfg(not(feature = "text-styling"))]
+                    {
+                        if char_start == char_end {
+                            state.cursor_pos = char_start;
+                            state.selection_anchor = None;
+                        } else {
+                            state.selection_anchor = Some(char_start);
+                            state.cursor_pos = char_end;
+                        }
+                    }
+
+                    state.composing_start = composing_start.map(|idx| utf16_index_to_char_index(&display_text, idx).min(char_count));
+                    state.composing_end = composing_end.map(|idx| utf16_index_to_char_index(&display_text, idx).min(char_count));
+                    
+                    #[cfg(feature = "text-styling")]
+                    {
+                        if state.selection_anchor.is_none() {
+                            state.cleanup_after_move();
+                        }
+                    }
+
+                    state.reset_blink();
                 }
                 TextInputAction::Submit => {
                     if is_multiline {
