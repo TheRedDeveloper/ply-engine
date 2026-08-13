@@ -21,6 +21,6 @@ wrap_js storage.js
 wrap_js ply_fixes.js
 wrap_js ply_accessibility.js
 
-npx minify@9.2.0 .build/bundle.js > ply_bundle.js
+npx -y minify@9.2.0 .build/bundle.js > ply_bundle.js
 
 rm -rf .build

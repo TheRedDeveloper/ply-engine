@@ -57,8 +57,8 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     was_ime_enabled: bool,
     ime_ignore_preedit_until_change: bool,
     ime_ignored_preedit_value: String,
-    #[cfg(target_os = "android")]
-    last_android_ime_state: Option<(u64, String, usize, usize)>,
+    #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+    last_ime_state: Option<(u64, String, usize, usize)>,
     #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
     web_a11y_state: accessibility_web::WebAccessibilityState,
     #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
@@ -668,7 +668,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             let mut preedit_updated = false;
             let mut forced_preedit_commit = false;
 
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_arch = "wasm32"))]
             {
                 if text_input_focused {
                     if let Some(state) = macroquad::prelude::get_ime_state() {
@@ -683,7 +683,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                                     element_id: state.element_id,
                                 }
                             );
-                            self.last_android_ime_state = Some((
+                            self.last_ime_state = Some((
                                 state.element_id,
                                 state.text,
                                 state.selection_start,
@@ -709,7 +709,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             }
 
             if text_input_focused {
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
                 {
                     if let Some(preedit) = macroquad::prelude::get_ime_preedit() {
                         if self.ime_ignore_preedit_until_change
@@ -771,7 +771,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     }
                 }
             } else {
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
                 {
                     if !self.context.text_input_preedit.is_empty() {
                         self.ime_ignore_preedit_until_change = true;
@@ -1100,7 +1100,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 || (text_input_focused && current_focused_id != self.was_focused_element_id);
 
             if focus_changed {
-                #[cfg(target_os = "android")]
+                #[cfg(any(target_os = "android", target_arch = "wasm32"))]
                 if text_input_focused {
                     let is_password = self.context.is_focused_text_input_password();
                     let is_multiline = self.context.is_focused_text_input_multiline();
@@ -1157,17 +1157,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     );
                 }
 
-                #[cfg(not(any(target_arch = "wasm32", target_os = "linux")))]
+                #[cfg(not(target_os = "linux"))]
                 {
                     macroquad::miniquad::window::show_keyboard(text_input_focused);
                 }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    unsafe { ply_show_virtual_keyboard(text_input_focused); }
-                }
                 if !text_input_focused {
                     self.context.clear_ime_preedit();
-                    #[cfg(target_os = "android")]
+                    #[cfg(any(target_os = "android", target_arch = "wasm32"))]
                     macroquad::miniquad::window::update_text_input_state(
                         String::new(),
                         0,
@@ -1215,8 +1211,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             was_ime_enabled: false,
             ime_ignore_preedit_until_change: false,
             ime_ignored_preedit_value: String::new(),
-            #[cfg(target_os = "android")]
-            last_android_ime_state: None,
+            #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+            last_ime_state: None,
             #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
@@ -1246,8 +1242,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             was_ime_enabled: false,
             ime_ignore_preedit_until_change: false,
             ime_ignored_preedit_value: String::new(),
-            #[cfg(target_os = "android")]
-            last_android_ime_state: None,
+            #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+            last_ime_state: None,
             #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
@@ -1473,7 +1469,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             }
         }
 
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_arch = "wasm32"))]
         {
             let active_focused_id = self.context.focused_element_id;
             if active_focused_id != 0 {
@@ -1523,7 +1519,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     
                     let max_len = self.context.get_focused_text_input_max_length().unwrap_or(0);
                     
-                    let state_changed = match &self.last_android_ime_state {
+                    let state_changed = match &self.last_ime_state {
                         Some((old_id, old_text, old_u16_start, old_u16_end)) => {
                             *old_id != active_focused_id as u64
                                 || *old_text != display_text
@@ -1534,7 +1530,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     };
 
                     if state_changed {
-                        self.last_android_ime_state = Some((active_focused_id as u64, display_text.clone(), u16_start, u16_end));
+                        self.last_ime_state = Some((active_focused_id as u64, display_text.clone(), u16_start, u16_end));
                         macroquad::miniquad::window::update_text_input_state(
                             display_text,
                             u16_start,
@@ -1546,8 +1542,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                         );
                     }
                 }
-            } else if self.last_android_ime_state.is_some() {
-                self.last_android_ime_state = None;
+            } else if self.last_ime_state.is_some() {
+                self.last_ime_state = None;
             }
         }
 
@@ -1562,11 +1558,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         let commands = self.eval();
         renderer::render(commands, handle_custom_command).await;
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-extern "C" {
-    fn ply_show_virtual_keyboard(show: bool);
 }
 
 #[cfg(test)]

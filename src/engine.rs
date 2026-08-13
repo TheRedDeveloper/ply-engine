@@ -4196,10 +4196,26 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                      let mut preedit_end_raw: Option<usize> = None;
                                      let mut preedit_raw_len = 0usize;
 
-                                     if state.composing_start.is_some() && state.composing_end.is_some() {
-                                         preedit_start_raw = state.composing_start;
-                                         preedit_end_raw = state.composing_end;
-                                     } else if has_preedit && preedit_visible_len > 0 {
+                                      if state.composing_start.is_some() && state.composing_end.is_some() {
+                                          let cs = state.composing_start.unwrap();
+                                          let ce = state.composing_end.unwrap();
+                                          #[cfg(feature = "text-styling")]
+                                          {
+                                              let start_cur = crate::text_input::styling::content_to_cursor(&render_text, cs, state.no_styles_movement);
+                                              let end_cur = crate::text_input::styling::content_to_cursor(&render_text, ce, state.no_styles_movement);
+                                              let raw_start = crate::text_input::styling::cursor_to_raw_for_insertion(&render_text, start_cur);
+                                              let raw_end = crate::text_input::styling::cursor_to_raw_for_insertion(&render_text, end_cur);
+                                              preedit_start_raw = Some(raw_start);
+                                              preedit_end_raw = Some(raw_end);
+                                              preedit_raw_len = raw_end.saturating_sub(raw_start);
+                                          }
+                                          #[cfg(not(feature = "text-styling"))]
+                                          {
+                                              preedit_start_raw = Some(cs);
+                                              preedit_end_raw = Some(ce);
+                                              preedit_raw_len = ce.saturating_sub(cs);
+                                          }
+                                      } else if has_preedit && preedit_visible_len > 0 {
                                         #[cfg(feature = "text-styling")]
                                         {
                                             let preedit_insert =
@@ -4450,9 +4466,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             }
                                         }
 
-                                        if let (Some(preedit_start), Some(preedit_end)) =
+                                        if let (Some(p_s), Some(p_e)) =
                                             (preedit_start_raw, preedit_end_raw)
                                         {
+                                            let preedit_start = p_s.min(p_e);
+                                            let preedit_end = p_s.max(p_e);
                                             if preedit_end > preedit_start {
                                                 let (start_line, start_col) =
                                                     crate::text_input::cursor_to_visual_pos(
@@ -4682,40 +4700,43 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             });
                                         }
 
-                                        if has_preedit {
-                                            if let (Some(preedit_start), Some(preedit_end)) =
-                                                (preedit_start_raw, preedit_end_raw)
-                                            {
-                                                if preedit_end > preedit_start {
-                                                    let x_start = char_x_positions
-                                                        .get(preedit_start)
-                                                        .copied()
-                                                        .unwrap_or(0.0);
-                                                    let x_end = char_x_positions
-                                                        .get(preedit_end)
-                                                        .copied()
-                                                        .unwrap_or(
-                                                            char_x_positions
-                                                                .last()
-                                                                .copied()
-                                                                .unwrap_or(0.0),
-                                                        );
-                                                    let underline_width = x_end - x_start;
-                                                    if underline_width > 0.0 {
-                                                        let preedit_y = current_bbox.y
-                                                            + (current_bbox.height - font_height)
-                                                                / 2.0;
-                                                        let underline_height = 2.0;
-                                                        let underline_y = preedit_y + font_height
-                                                            - underline_height;
-                                                        self.add_render_command(
-                                                            InternalRenderCommand {
-                                                                bounding_box: BoundingBox::new(
-                                                                    text_x + x_start,
-                                                                    underline_y,
-                                                                    underline_width,
-                                                                    underline_height,
-                                                                ),
+                                        if let (Some(p_s), Some(p_e)) =
+                                            (preedit_start_raw, preedit_end_raw)
+                                        {
+                                            let preedit_start = p_s.min(p_e);
+                                            let preedit_end = p_s.max(p_e);
+                                            if preedit_end > preedit_start {
+                                                let x1 = char_x_positions
+                                                    .get(preedit_start)
+                                                    .copied()
+                                                    .unwrap_or(0.0);
+                                                let x2 = char_x_positions
+                                                    .get(preedit_end)
+                                                    .copied()
+                                                    .unwrap_or(
+                                                        char_x_positions
+                                                            .last()
+                                                            .copied()
+                                                            .unwrap_or(0.0),
+                                                    );
+                                                let x_start = x1.min(x2);
+                                                let x_end = x1.max(x2);
+                                                let underline_width = x_end - x_start;
+                                                if underline_width > 0.0 {
+                                                    let preedit_y = current_bbox.y
+                                                        + (current_bbox.height - font_height)
+                                                            / 2.0;
+                                                    let underline_height = 2.0;
+                                                    let underline_y = preedit_y + font_height
+                                                        - underline_height;
+                                                    self.add_render_command(
+                                                        InternalRenderCommand {
+                                                            bounding_box: BoundingBox::new(
+                                                                text_x + x_start,
+                                                                underline_y,
+                                                                underline_width,
+                                                                underline_height,
+                                                            ),
                                                                 command_type:
                                                                     RenderCommandType::Rectangle,
                                                                 render_data:
@@ -4731,9 +4752,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                                 visual_rotation: None,
                                                                 shape_rotation: None,
                                                                 effects: Vec::new(),
-                                                            },
-                                                        );
-                                                    }
+                                                            });
                                                 }
                                             }
                                         }
