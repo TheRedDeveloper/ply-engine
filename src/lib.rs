@@ -805,7 +805,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 {
                     // Route keyboard input to text editing
                     let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-                    let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+                    let ctrl = if cfg!(target_os = "macos") {
+                        is_key_down(KeyCode::LeftControl)
+                            || is_key_down(KeyCode::RightControl)
+                            || is_key_down(KeyCode::LeftSuper)
+                            || is_key_down(KeyCode::RightSuper)
+                    } else {
+                        is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl)
+                    };
+                    let alt = is_key_down(KeyCode::LeftAlt) || is_key_down(KeyCode::RightAlt);
+                    let cmd = is_key_down(KeyCode::LeftSuper) || is_key_down(KeyCode::RightSuper);
+                    let word_mod = if cfg!(target_os = "macos") { alt } else { ctrl };
                     let right_alt = is_key_down(KeyCode::RightAlt);
                     let time = self.context.current_time;
 
@@ -862,7 +872,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                         cursor_moved = true;
                     }
                     if !preedit_active && key_fires!(KeyCode::Left, 1) {
-                        if ctrl {
+                        if cmd {
+                            self.context.process_text_input_action(engine::TextInputAction::MoveHome { shift });
+                        } else if word_mod {
                             self.context.process_text_input_action(engine::TextInputAction::MoveWordLeft { shift });
                         } else {
                             self.context.process_text_input_action(engine::TextInputAction::MoveLeft { shift });
@@ -870,7 +882,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                         cursor_moved = true;
                     }
                     if !preedit_active && key_fires!(KeyCode::Right, 2) {
-                        if ctrl {
+                        if cmd {
+                            self.context.process_text_input_action(engine::TextInputAction::MoveEnd { shift });
+                        } else if word_mod {
                             self.context.process_text_input_action(engine::TextInputAction::MoveWordRight { shift });
                         } else {
                             self.context.process_text_input_action(engine::TextInputAction::MoveRight { shift });
@@ -882,7 +896,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                             self.text_input_backspace_consumed = true;
                             cursor_moved = true;
                         } else if !self.text_input_backspace_consumed {
-                            if ctrl {
+                            if word_mod {
                                 self.context.process_text_input_action(engine::TextInputAction::BackspaceWord);
                             } else {
                                 self.context.process_text_input_action(engine::TextInputAction::Backspace);
@@ -891,7 +905,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                         }
                     }
                     if !preedit_active && key_fires!(KeyCode::Delete, 4) {
-                        if ctrl {
+                        if word_mod {
                             self.context.process_text_input_action(engine::TextInputAction::DeleteWord);
                         } else {
                             self.context.process_text_input_action(engine::TextInputAction::Delete);
