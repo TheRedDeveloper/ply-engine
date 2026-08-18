@@ -273,7 +273,7 @@ impl Storage {
         {
             use macroquad::miniquad::native::apple::apple_util::str_to_nsstring;
             use macroquad::miniquad::native::apple::frameworks::{
-                class, msg_send, nil, NSRect, ObjcId,
+                class, msg_send, nil, sel, sel_impl, NSRect, ObjcId,
             };
 
             let full_path = self.resolve_path(path)?;
@@ -324,16 +324,14 @@ impl Storage {
             Ok(())
         }
 
-        #[cfg(all(
-            not(target_arch = "wasm32"),
-            not(any(
-                target_os = "linux",
-                target_os = "macos",
-                target_os = "windows",
-                target_os = "android",
-                target_os = "ios"
-            ))
-        ))]
+        #[cfg(not(any(
+            target_arch = "wasm32",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "android",
+            target_os = "ios"
+        )))]
         {
             let _ = path;
             Err("Storage::export is not supported on this platform yet".to_owned())

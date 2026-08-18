@@ -57,7 +57,7 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     was_ime_enabled: bool,
     ime_ignore_preedit_until_change: bool,
     ime_ignored_preedit_value: String,
-    #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
     last_ime_state: Option<(u64, String, usize, usize)>,
     #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
     web_a11y_state: accessibility_web::WebAccessibilityState,
@@ -668,7 +668,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             let mut preedit_updated = false;
             let mut forced_preedit_commit = false;
 
-            #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+            #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
             {
                 if text_input_focused {
                     if let Some(state) = macroquad::prelude::get_ime_state() {
@@ -709,7 +709,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             }
 
             if text_input_focused {
-                #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+                #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
                 {
                     if let Some(preedit) = macroquad::prelude::get_ime_preedit() {
                         if self.ime_ignore_preedit_until_change
@@ -771,7 +771,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     }
                 }
             } else {
-                #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+                #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
                 {
                     if !self.context.text_input_preedit.is_empty() {
                         self.ime_ignore_preedit_until_change = true;
@@ -924,14 +924,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     // Up/Down arrows
                     if !preedit_active {
                         if key_fires!(KeyCode::Up, 7) {
-                            #[cfg(target_os = "android")]
-                            macroquad::miniquad::info!("PlyEngineIME: KeyCode::Up fired! shift={}", shift);
                             self.context.process_text_input_action(engine::TextInputAction::MoveUp { shift });
                             cursor_moved = true;
                         }
                         if key_fires!(KeyCode::Down, 8) {
-                            #[cfg(target_os = "android")]
-                            macroquad::miniquad::info!("PlyEngineIME: KeyCode::Down fired! shift={}", shift);
                             self.context.process_text_input_action(engine::TextInputAction::MoveDown { shift });
                             cursor_moved = true;
                         }
@@ -1114,7 +1110,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 || (text_input_focused && current_focused_id != self.was_focused_element_id);
 
             if focus_changed {
-                #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+                #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
                 if text_input_focused {
                     let is_password = self.context.is_focused_text_input_password();
                     let is_multiline = self.context.is_focused_text_input_multiline();
@@ -1177,7 +1173,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 }
                 if !text_input_focused {
                     self.context.clear_ime_preedit();
-                    #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+                    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
                     macroquad::miniquad::window::update_text_input_state(
                         String::new(),
                         0,
@@ -1225,7 +1221,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             was_ime_enabled: false,
             ime_ignore_preedit_until_change: false,
             ime_ignored_preedit_value: String::new(),
-            #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+            #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
             last_ime_state: None,
             #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
@@ -1256,7 +1252,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             was_ime_enabled: false,
             ime_ignore_preedit_until_change: false,
             ime_ignored_preedit_value: String::new(),
-            #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+            #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
             last_ime_state: None,
             #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
@@ -1483,7 +1479,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             }
         }
 
-        #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+        #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         {
             let active_focused_id = self.context.focused_element_id;
             if active_focused_id != 0 {
