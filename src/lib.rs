@@ -67,7 +67,7 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
 pub(crate) struct FrameCallbacks<'ply> {
     pub hover: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
     pub press: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
-    pub release: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
+    pub release: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData, bool) + 'ply>>,
     pub focus: FxHashMap<u32, Box<dyn FnMut(Id) + 'ply>>,
     pub unfocus: FxHashMap<u32, Box<dyn FnMut(Id) + 'ply>>,
     pub text_changed: FxHashMap<u32, Box<dyn FnMut(&str) + 'ply>>,
@@ -89,7 +89,7 @@ pub struct ElementBuilder<'ui, 'ply, CustomElementData: Clone + Default + std::f
     id: Option<Id>,
     on_hover_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
     on_press_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
-    on_release_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
+    on_release_fn: Option<Box<dyn FnMut(Id, engine::PointerData, bool) + 'ply>>,
     on_focus_fn: Option<Box<dyn FnMut(Id) + 'ply>>,
     on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'ply>>,
     text_input_on_changed_fn: Option<Box<dyn FnMut(&str) + 'ply>>,
@@ -379,7 +379,7 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_release<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id, engine::PointerData) + 'ply,
+        F: FnMut(Id, engine::PointerData, bool) + 'ply,
     {
         self.on_release_fn = Some(Box::new(callback));
         self
@@ -580,13 +580,15 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
         if pointer_info.state == engine::PointerDataInteractionState::ReleasedThisFrame {
             for eid in ply.context.released_this_frame_ids.clone() {
                 if let Some(cb) = callbacks.release.get_mut(&eid.id) {
-                    cb(eid, pointer_info);
+                    let hovered = ply.context.pointer_over_ids.iter().any(|p| p.id == eid.id);
+                    cb(eid, pointer_info, hovered);
                 }
             }
         }
         for eid in ply.context.keyboard_release_events.drain(..) {
             if let Some(cb) = callbacks.release.get_mut(&eid.id) {
-                cb(eid, pointer_info);
+                let hovered = ply.context.focused_element_id == eid.id;
+                cb(eid, pointer_info, hovered);
             }
         }
 
@@ -2923,7 +2925,7 @@ mod tests {
                 .width(fixed!(100.0))
                 .height(fixed!(100.0))
                 .on_press(|_, _| { press_count += 1; })
-                .on_release(|_, _| { release_count += 1; })
+                .on_release(|_, _, _| { release_count += 1; })
                 .empty();
             ui.eval();
         }
@@ -2940,13 +2942,160 @@ mod tests {
                 .width(fixed!(100.0))
                 .height(fixed!(100.0))
                 .on_press(|_, _| { press_count += 1; })
-                .on_release(|_, _| { release_count += 1; })
+                .on_release(|_, _, _| { release_count += 1; })
                 .empty();
             ui.eval();
         }
 
         assert_eq!(press_count, 1, "on_press should not fire on release");
         assert_eq!(release_count, 1, "on_release should fire once");
+    }
+
+    #[test]
+    fn test_on_release_hovered_pointer() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut release_hovered = None;
+
+        // Frame 1: layout 100x100 element at origin
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Frame 2: press on element
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Frame 3: release while still hovering over element (50, 50)
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .on_release(|_, _, hovered| {
+                    release_hovered = Some(hovered);
+                })
+                .empty();
+            ui.eval();
+        }
+        assert_eq!(release_hovered, Some(true), "hovered should be true when released over element");
+
+        // Reset
+        release_hovered = None;
+
+        // Frame 4: press on element
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Frame 5: move pointer outside element and release at (500, 500)
+        ply.context.set_pointer_state(Vector2::new(500.0, 500.0), false);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .on_release(|_, _, hovered| {
+                    release_hovered = Some(hovered);
+                })
+                .empty();
+            ui.eval();
+        }
+        assert_eq!(release_hovered, Some(false), "hovered should be false when released outside element");
+    }
+
+    #[test]
+    fn test_on_release_hovered_keyboard() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut release_hovered = None;
+
+        // Frame 1: layout two focusable elements
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn1")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.element()
+                .id("btn2")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Case A: Focused during keyboard release
+        ply.set_focus("btn1");
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn1")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .on_release(|_, _, hovered| {
+                    release_hovered = Some(hovered);
+                })
+                .empty();
+            ui.element()
+                .id("btn2")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.ply.context.handle_keyboard_activation(true, false);
+            ui.ply.context.handle_keyboard_activation(false, true);
+            ui.eval();
+        }
+        assert_eq!(release_hovered, Some(true), "keyboard release on focused element should have hovered=true");
+
+        // Case B: Focus moved to another element before dispatch
+        release_hovered = None;
+        ply.set_focus("btn1");
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn1")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .on_release(|_, _, hovered| {
+                    release_hovered = Some(hovered);
+                })
+                .empty();
+            ui.element()
+                .id("btn2")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.ply.context.handle_keyboard_activation(true, false);
+            ui.ply.context.handle_keyboard_activation(false, true);
+            // Switch focus to btn2 before eval dispatch
+            ui.set_focus("btn2");
+            ui.eval();
+        }
+        assert_eq!(release_hovered, Some(false), "keyboard release when focus shifted should have hovered=false");
     }
 
     #[test]

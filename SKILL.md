@@ -272,7 +272,7 @@ Interactivity:
 
 - `on_hover(|Id, PointerData| ...)`
 - `on_press(|Id, PointerData| ...)`
-- `on_release(|Id, PointerData| ...)`
+- `on_release(|Id, PointerData, bool| ...)`
 - `on_focus(|Id| ...)`
 - `on_unfocus(|Id| ...)`
 - `preserve_focus()`
@@ -455,7 +455,7 @@ Inside the active `.children(|ui| ...)` scope:
 
 - `.on_hover(|id, pointer| ...)`
 - `.on_press(|id, pointer| ...)`
-- `.on_release(|id, pointer| ...)`
+- `.on_release(|id, pointer, hovered| ...)`
 - `.on_focus(|id| ...)`
 - `.on_unfocus(|id| ...)`
 
