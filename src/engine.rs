@@ -636,6 +636,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     pub external_scroll_handling_enabled: bool,
     pub debug_selected_element_id: u32,
     pub generation: u32,
+    headless: bool,
 
     // Warnings
     boolean_warnings: BooleanWarnings,
@@ -1002,6 +1003,21 @@ fn compute_horizontal_scrollbar_geometry(
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElementData> {
     pub fn new(dimensions: Dimensions) -> Self {
+        Self::new_with_headless(dimensions, false)
+    }
+
+    /// Create a new PlyContext in headless mode (without Macroquad runtime dependency).
+    pub fn new_headless(dimensions: Dimensions) -> Self {
+        Self::new_with_headless(dimensions, true)
+    }
+
+    /// Returns true if the context is running in headless mode.
+    #[inline]
+    pub fn is_headless(&self) -> bool {
+        self.headless
+    }
+
+    fn new_with_headless(dimensions: Dimensions, headless: bool) -> Self {
         let max_element_count = DEFAULT_MAX_ELEMENT_COUNT;
         let max_measure_text_cache_word_count = DEFAULT_MAX_MEASURE_TEXT_WORD_CACHE_COUNT;
 
@@ -1014,6 +1030,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             external_scroll_handling_enabled: false,
             debug_selected_element_id: 0,
             generation: 0,
+            headless,
             boolean_warnings: BooleanWarnings::default(),
             pointer_info: PointerData::default(),
             layout_dimensions: dimensions,
@@ -6286,8 +6303,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         // Fire on_focus on new element
         if new_id != 0 {
             // flush pressed chars
-            while let Some(_) = macroquad::prelude::get_char_pressed() {
-                // do nothing
+            if !self.headless {
+                while let Some(_) = macroquad::prelude::get_char_pressed() {
+                    // do nothing
+                }
             }
             if let Some(item) = self.layout_element_map.get_mut(&new_id) {
                 let id_copy = item.element_id.clone();

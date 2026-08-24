@@ -40,8 +40,7 @@ pub use color::Color;
 
 #[allow(dead_code)]
 pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    context: engine::PlyContext<CustomElementData>,
-    headless: bool,
+    pub context: engine::PlyContext<CustomElementData>,
     /// Key repeat tracking for text input control keys
     text_input_repeat_key: u32,
     text_input_repeat_first: f64,
@@ -564,7 +563,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     ) -> Ui<'_, CustomElementData> {
         jobs::poll_completions();
 
-        if !self.headless {
+        if !self.context.is_headless() {
             self.context.set_layout_dimensions(Dimensions::new(
                 macroquad::prelude::screen_width(),
                 macroquad::prelude::screen_height(),
@@ -579,7 +578,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         self.context.update_text_input_blink_timers();
 
         // Auto-update pointer state from macroquad
-        if !self.headless {
+        if !self.context.is_headless() {
             let (mx, my) = macroquad::prelude::mouse_position();
             let pointer_pos = Vector2::new(mx, my);
             let is_down = macroquad::prelude::is_mouse_button_down(
@@ -1209,7 +1208,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         );
         let mut ply = Self {
             context: engine::PlyContext::new(dimensions),
-            headless: false,
             text_input_repeat_key: 0,
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
@@ -1239,8 +1237,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     /// before rendering any text elements.
     pub fn new_headless(dimensions: Dimensions) -> Self {
         Self {
-            context: engine::PlyContext::new(dimensions),
-            headless: true,
+            context: engine::PlyContext::new_headless(dimensions),
             text_input_repeat_key: 0,
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
@@ -1334,7 +1331,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
         scroll_delta: Vector2,
         delta_time: f32,
     ) {
-        let touch_input_active = if self.headless {
+        let touch_input_active = if self.context.is_headless() {
             false
         } else {
             !macroquad::prelude::touches().is_empty()
