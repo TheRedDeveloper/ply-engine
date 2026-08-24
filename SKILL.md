@@ -121,6 +121,9 @@ Everything below is re-exported from `ply_engine::prelude` in this repository.
 
 - `Ply`
 - `Ui`
+- `ElementBuilder`
+- `NoId`
+- `WithId`
 - `Id`
 - `GraphicAsset`
 - `FontAsset`
@@ -265,7 +268,8 @@ Visuals:
 
 Structure and identity:
 
-- `id(id_like)`
+- `id(id_like)` (`NoId` -> `WithId`)
+- `get_id() -> &Id`
 - `floating(|FloatingBuilder| ...)`
 - `custom_element(data)`
 - `children(|ui| ...) -> Id`
@@ -850,11 +854,11 @@ let current: CursorIcon = ui.get_cursor();
 Reusable styling should be plain Rust functions that take and return `ElementBuilder`.
 
 ```rust
-fn rounded(el: ElementBuilder<'_, ()>) -> ElementBuilder<'_, ()> {
+fn rounded<'ui, 'ply, S>(el: ElementBuilder<'ui, 'ply, S>) -> ElementBuilder<'ui, 'ply, S> {
   el.corner_radius(12.0)
 }
 
-fn dark_bg(el: ElementBuilder<'_, ()>) -> ElementBuilder<'_, ()> {
+fn dark_bg<'ui, 'ply, S>(el: ElementBuilder<'ui, 'ply, S>) -> ElementBuilder<'ui, 'ply, S> {
   el.background_color(0x2E2A28)
 }
 
@@ -869,7 +873,7 @@ dark_bg(rounded(ui.element()))
 For parameterized styles:
 
 ```rust
-fn my_style(el: ElementBuilder<'_, ()>, bg: u32, radius: f32) -> ElementBuilder<'_, ()> {
+fn my_style<'ui, 'ply, S>(el: ElementBuilder<'ui, 'ply, S>, bg: u32, radius: f32) -> ElementBuilder<'ui, 'ply, S> {
   el.background_color(bg).corner_radius(radius)
 }
 

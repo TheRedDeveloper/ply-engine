@@ -82,10 +82,18 @@ pub struct Ui<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug = (
     pub(crate) callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
 }
 
+/// Type-state representing an [`ElementBuilder`] that has not yet had an ID assigned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoId;
+
+/// Type-state representing an [`ElementBuilder`] that has had an ID assigned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WithId;
+
 /// Builder for creating elements with closure-based syntax.
 /// Methods return `self` by value for chaining. Finalize with `.children()` or `.empty()`.
 #[must_use]
-pub struct ElementBuilder<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+pub struct ElementBuilder<'ui, 'ply, IdState = NoId, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     ply: &'ui mut Ply<CustomElementData>,
     callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
     inner: engine::ElementDeclaration<CustomElementData>,
@@ -97,10 +105,47 @@ pub struct ElementBuilder<'ui, 'ply, CustomElementData: Clone + Default + std::f
     on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'ply>>,
     text_input_on_changed_fn: Option<Box<dyn FnMut(&str) + 'ply>>,
     text_input_on_submit_fn: Option<Box<dyn FnMut(&str) + 'ply>>,
+    _phantom: std::marker::PhantomData<IdState>,
 }
 
 impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ui, 'ply, CustomElementData>
+    ElementBuilder<'ui, 'ply, NoId, CustomElementData>
+{
+    /// Sets the element's ID.
+    ///
+    /// Accepts an `Id`, a `&'static str` label, or (&str, u32).
+    /// Transitions the builder's type state from `NoId` to `WithId`.
+    #[inline]
+    pub fn id(self, id: impl Into<Id>) -> ElementBuilder<'ui, 'ply, WithId, CustomElementData> {
+        ElementBuilder {
+            ply: self.ply,
+            callbacks: self.callbacks,
+            inner: self.inner,
+            id: Some(id.into()),
+            on_hover_fn: self.on_hover_fn,
+            on_press_fn: self.on_press_fn,
+            on_release_fn: self.on_release_fn,
+            on_focus_fn: self.on_focus_fn,
+            on_unfocus_fn: self.on_unfocus_fn,
+            text_input_on_changed_fn: self.text_input_on_changed_fn,
+            text_input_on_submit_fn: self.text_input_on_submit_fn,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
+    ElementBuilder<'ui, 'ply, WithId, CustomElementData>
+{
+    /// Returns a reference to the established `Id`.
+    #[inline]
+    pub fn get_id(&self) -> &Id {
+        self.id.as_ref().expect("Id is guaranteed in WithId state")
+    }
+}
+
+impl<'ui, 'ply, IdState, CustomElementData: Clone + Default + std::fmt::Debug>
+    ElementBuilder<'ui, 'ply, IdState, CustomElementData>
 {
     /// Sets the width of the element.
     #[inline]
@@ -128,15 +173,6 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn corner_radius(mut self, radius: impl Into<layout::CornerRadius>) -> Self {
         self.inner.corner_radius = radius.into();
-        self
-    }
-
-    /// Sets the element's ID.
-    ///
-    /// Accepts an `Id` or a `&'static str` label.
-    #[inline]
-    pub fn id(mut self, id: impl Into<Id>) -> Self {
-        self.id = Some(id.into());
         self
     }
 
@@ -460,6 +496,7 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
             on_unfocus_fn,
             text_input_on_changed_fn,
             text_input_on_submit_fn,
+            _phantom: _,
         } = self;
         if let Some(ref id) = id {
             ply.context.open_element_with_id(id);
@@ -534,7 +571,7 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::
 impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply, CustomElementData> {
     /// Creates a new element builder for configuring and adding an element.
     /// Finalize with `.children(|ui| {...})` or `.empty()`.
-    pub fn element(&mut self) -> ElementBuilder<'_, 'ply, CustomElementData> {
+    pub fn element(&mut self) -> ElementBuilder<'_, 'ply, NoId, CustomElementData> {
         ElementBuilder {
             ply: self.ply,
             callbacks: self.callbacks.clone(),
@@ -547,6 +584,7 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
             on_unfocus_fn: None,
             text_input_on_changed_fn: None,
             text_input_on_submit_fn: None,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -4080,6 +4118,38 @@ mod tests {
         assert!(p_ids.contains(&"floating_capture".to_string()));
         assert_eq!(bg_pressed, 0, "bg press should not fire");
         assert_eq!(floating_pressed, 1, "floating press should fire");
+    }
+
+    #[test]
+    fn test_element_builder_type_state_and_get_id() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        // 1. Without explicit ID (NoId state)
+        let id1 = ui.element()
+            .width(fixed!(100.0))
+            .height(fixed!(50.0))
+            .empty();
+        assert_eq!(id1.string_id.as_str(), "");
+
+        // 2. With ID (WithId state) - check .get_id()
+        let builder = ui.element()
+            .width(fixed!(200.0))
+            .id("custom_btn")
+            .height(fixed!(60.0));
+        assert_eq!(builder.get_id().string_id.as_str(), "custom_btn");
+        let id2 = builder.empty();
+        assert_eq!(id2.id, Id::new("custom_btn").id);
+
+        // 3. Reusable style function works on both NoId and WithId
+        fn apply_style<'ui, 'ply, S>(el: ElementBuilder<'ui, 'ply, S>) -> ElementBuilder<'ui, 'ply, S> {
+            el.width(fixed!(150.0)).background_color(0xFF0000)
+        }
+
+        let _no_id_styled = apply_style(ui.element()).empty();
+        let with_id_styled = apply_style(ui.element().id("styled_id"));
+        assert_eq!(with_id_styled.get_id().string_id.as_str(), "styled_id");
+        with_id_styled.empty();
     }
 }
 
