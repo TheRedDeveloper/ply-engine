@@ -13,6 +13,7 @@ use crate::elements::{
 };
 use crate::layout::{LayoutDirection, CornerRadius};
 use crate::math::{BoundingBox, Dimensions, Vector2};
+use crate::pointer::{PointerData, PointerState};
 use crate::text::{TextConfig, WrapMode};
 
 const DEFAULT_MAX_ELEMENT_COUNT: i32 = 8192;
@@ -44,16 +45,6 @@ pub enum RenderCommandType {
     Custom,
     GroupBegin,
     GroupEnd,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[repr(u8)]
-pub enum PointerDataInteractionState {
-    PressedThisFrame,
-    Pressed,
-    ReleasedThisFrame,
-    #[default]
-    Released,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,12 +476,6 @@ struct FocusableEntry {
     element_id: u32,
     tab_index: Option<i32>,
     insertion_order: u32,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PointerData {
-    pub position: Vector2,
-    pub state: PointerDataInteractionState,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -5712,21 +5697,21 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         // Update pointer state
         if is_down {
             match self.pointer_info.state {
-                PointerDataInteractionState::PressedThisFrame => {
-                    self.pointer_info.state = PointerDataInteractionState::Pressed;
+                PointerState::PressedThisFrame => {
+                    self.pointer_info.state = PointerState::Pressed;
                 }
-                s if s != PointerDataInteractionState::Pressed => {
-                    self.pointer_info.state = PointerDataInteractionState::PressedThisFrame;
+                s if s != PointerState::Pressed => {
+                    self.pointer_info.state = PointerState::PressedThisFrame;
                 }
                 _ => {}
             }
         } else {
             match self.pointer_info.state {
-                PointerDataInteractionState::ReleasedThisFrame => {
-                    self.pointer_info.state = PointerDataInteractionState::Released;
+                PointerState::ReleasedThisFrame => {
+                    self.pointer_info.state = PointerState::Idle;
                 }
-                s if s != PointerDataInteractionState::Released => {
-                    self.pointer_info.state = PointerDataInteractionState::ReleasedThisFrame;
+                s if s != PointerState::Idle => {
+                    self.pointer_info.state = PointerState::ReleasedThisFrame;
                 }
                 _ => {}
             }
@@ -5734,7 +5719,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
         // Fire on_press / on_release callbacks and track pressed element
         match self.pointer_info.state {
-            PointerDataInteractionState::PressedThisFrame => {
+            PointerState::PressedThisFrame => {
                 // Check if clicked element is a text input
                 let clicked_text_input = self.pointer_over_ids.last()
                     .and_then(|top| self.layout_element_map.get(&top.id))
@@ -5794,7 +5779,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 let pressed_now = self.pressed_element_ids.clone();
                 self.track_just_pressed_ids(&pressed_now);
             }
-            PointerDataInteractionState::ReleasedThisFrame => {
+            PointerState::ReleasedThisFrame => {
                 let pressed = std::mem::take(&mut self.pressed_element_ids);
                 self.track_just_released_ids(&pressed);
             }
@@ -5837,7 +5822,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             let pointer_state = self.pointer_info.state;
 
             match pointer_state {
-                PointerDataInteractionState::PressedThisFrame => {
+                PointerState::PressedThisFrame => {
                     // Find the deepest scroll container under the pointer and start drag
                     let mut best: Option<usize> = None;
                     for si in 0..self.scroll_container_datas.len() {
@@ -5906,7 +5891,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                     }
                 }
-                PointerDataInteractionState::Pressed => {
+                PointerState::Pressed => {
                     // Update drag: move scroll position to follow pointer
                     for si in 0..self.scroll_container_datas.len() {
                         let scd = &mut self.scroll_container_datas[si];
@@ -5993,8 +5978,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         scd.previous_delta = drag_delta;
                     }
                 }
-                PointerDataInteractionState::ReleasedThisFrame
-                | PointerDataInteractionState::Released => {
+                PointerState::ReleasedThisFrame
+                | PointerState::Idle => {
                     for si in 0..self.scroll_container_datas.len() {
                         let scd = &mut self.scroll_container_datas[si];
                         if scd.scrollbar_thumb_drag_active_x
@@ -6170,7 +6155,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
 
         self.pressed_element_ids.iter().any(|eid| eid.id == elem_id)
-            && (self.pointer_info.state == PointerDataInteractionState::PressedThisFrame
+            && (self.pointer_info.state == PointerState::PressedThisFrame
                 || self.keyboard_press_this_frame_generation == self.generation)
     }
 
@@ -6450,7 +6435,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
 
         self.pressed_element_ids.iter().any(|eid| eid.id == element_id)
-            && (self.pointer_info.state == PointerDataInteractionState::PressedThisFrame
+            && (self.pointer_info.state == PointerState::PressedThisFrame
                 || self.keyboard_press_this_frame_generation == self.generation)
     }
 
@@ -7098,7 +7083,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         if focused == 0 {
             if self.text_input_drag_active {
                 let pointer_state = self.pointer_info.state;
-                if matches!(pointer_state, PointerDataInteractionState::ReleasedThisFrame | PointerDataInteractionState::Released) {
+                if matches!(pointer_state, PointerState::ReleasedThisFrame | PointerState::Idle) {
                     self.text_input_drag_active = false;
                     self.text_input_drag_from_touch = false;
                 }
@@ -7114,7 +7099,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let Some(ti_index) = ti_index else {
             if self.text_input_drag_active {
                 let pointer_state = self.pointer_info.state;
-                if matches!(pointer_state, PointerDataInteractionState::ReleasedThisFrame | PointerDataInteractionState::Released) {
+                if matches!(pointer_state, PointerState::ReleasedThisFrame | PointerState::Idle) {
                     self.text_input_drag_active = false;
                     self.text_input_drag_from_touch = false;
                 }
@@ -7161,7 +7146,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         let pointer_state = self.pointer_info.state;
 
         match pointer_state {
-            PointerDataInteractionState::PressedThisFrame => {
+            PointerState::PressedThisFrame => {
                 if pointer_over_focused {
                     let mut started_scrollbar_drag = false;
 
@@ -7248,7 +7233,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     self.text_input_scrollbar_drag_active = false;
                 }
             }
-            PointerDataInteractionState::Pressed => {
+            PointerState::Pressed => {
                 if self.text_input_scrollbar_drag_active {
                     if let Some(item) = self.layout_element_map.get(&self.text_input_drag_element_id)
                     {
@@ -7465,8 +7450,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     }
                 }
             }
-            PointerDataInteractionState::ReleasedThisFrame
-            | PointerDataInteractionState::Released => {
+            PointerState::ReleasedThisFrame
+            | PointerState::Idle => {
                 self.text_input_drag_active = false;
                 self.text_input_drag_from_touch = false;
                 self.text_input_scrollbar_drag_active = false;
@@ -8407,7 +8392,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                 // Check if this row is highlighted
                 if highlighted_row == row_count {
-                    if self.pointer_info.state == PointerDataInteractionState::PressedThisFrame {
+                    if self.pointer_info.state == PointerState::PressedThisFrame {
                         let elem_id = self.layout_elements[current_element_index].id;
                         if self.debug_selected_element_id == elem_id {
                             self.debug_selected_element_id = 0; // Deselect on re-click
@@ -8960,7 +8945,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
 
         // Handle collapse button clicks
-        if self.pointer_info.state == PointerDataInteractionState::PressedThisFrame {
+        if self.pointer_info.state == PointerState::PressedThisFrame {
             let collapse_base_id = hash_string("Ply__DebugView_CollapseElement", 0).base_id;
             for i in (0..self.pointer_over_ids.len()).rev() {
                 let element_id = self.pointer_over_ids[i].clone();
@@ -9261,7 +9246,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.close_element(); // Ply__DebugView
 
         // Handle close button click
-        if self.pointer_info.state == PointerDataInteractionState::PressedThisFrame {
+        if self.pointer_info.state == PointerState::PressedThisFrame {
             let close_base_id = hash_string("Ply__DebugView_CloseButton", 0).id;
             let header_base_id = hash_string("Ply__DebugView_LayoutConfigHeader", 0).id;
             for i in (0..self.pointer_over_ids.len()).rev() {

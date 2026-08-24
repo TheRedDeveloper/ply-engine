@@ -28,9 +28,11 @@ pub mod net;
 pub mod storage;
 pub mod jobs;
 pub mod prelude;
+pub mod pointer;
 
 use id::Id;
 use math::{Dimensions, Vector2};
+use pointer::{PointerData, PointerState};
 use render_commands::RenderCommand;
 use rustc_hash::FxHashMap;
 use text::TextConfig;
@@ -66,9 +68,9 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
 
 #[derive(Default)]
 pub(crate) struct FrameCallbacks<'ply> {
-    pub hover: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
-    pub press: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
-    pub release: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData, bool) + 'ply>>,
+    pub hover: FxHashMap<u32, Box<dyn FnMut(Id, PointerData) + 'ply>>,
+    pub press: FxHashMap<u32, Box<dyn FnMut(Id, PointerData) + 'ply>>,
+    pub release: FxHashMap<u32, Box<dyn FnMut(Id, PointerData, bool) + 'ply>>,
     pub focus: FxHashMap<u32, Box<dyn FnMut(Id) + 'ply>>,
     pub unfocus: FxHashMap<u32, Box<dyn FnMut(Id) + 'ply>>,
     pub text_changed: FxHashMap<u32, Box<dyn FnMut(&str) + 'ply>>,
@@ -88,9 +90,9 @@ pub struct ElementBuilder<'ui, 'ply, CustomElementData: Clone + Default + std::f
     callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
     inner: engine::ElementDeclaration<CustomElementData>,
     id: Option<Id>,
-    on_hover_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
-    on_press_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
-    on_release_fn: Option<Box<dyn FnMut(Id, engine::PointerData, bool) + 'ply>>,
+    on_hover_fn: Option<Box<dyn FnMut(Id, PointerData) + 'ply>>,
+    on_press_fn: Option<Box<dyn FnMut(Id, PointerData) + 'ply>>,
+    on_release_fn: Option<Box<dyn FnMut(Id, PointerData, bool) + 'ply>>,
     on_focus_fn: Option<Box<dyn FnMut(Id) + 'ply>>,
     on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'ply>>,
     text_input_on_changed_fn: Option<Box<dyn FnMut(&str) + 'ply>>,
@@ -358,7 +360,7 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_hover<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id, engine::PointerData) + 'ply,
+        F: FnMut(Id, PointerData) + 'ply,
     {
         self.on_hover_fn = Some(Box::new(callback));
         self
@@ -369,7 +371,7 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_press<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id, engine::PointerData) + 'ply,
+        F: FnMut(Id, PointerData) + 'ply,
     {
         self.on_press_fn = Some(Box::new(callback));
         self
@@ -380,7 +382,7 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_release<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id, engine::PointerData, bool) + 'ply,
+        F: FnMut(Id, PointerData, bool) + 'ply,
     {
         self.on_release_fn = Some(Box::new(callback));
         self
@@ -564,7 +566,7 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
             }
         }
 
-        if pointer_info.state == engine::PointerDataInteractionState::PressedThisFrame {
+        if pointer_info.state == PointerState::PressedThisFrame {
             for eid in ply.context.pressed_element_ids.clone() {
                 if let Some(cb) = callbacks.press.get_mut(&eid.id) {
                     cb(eid, pointer_info);
@@ -577,7 +579,7 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
             }
         }
 
-        if pointer_info.state == engine::PointerDataInteractionState::ReleasedThisFrame {
+        if pointer_info.state == PointerState::ReleasedThisFrame {
             for eid in ply.context.released_this_frame_ids.clone() {
                 if let Some(cb) = callbacks.release.get_mut(&eid.id) {
                     let hovered = ply.context.pointer_over_ids.iter().any(|p| p.id == eid.id);

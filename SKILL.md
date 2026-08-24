@@ -126,6 +126,8 @@ Everything below is re-exported from `ply_engine::prelude` in this repository.
 - `FontAsset`
 - `ShaderAsset`
 - `Lerp`
+- `PointerData`
+- `PointerState`
 - all easing functions from `crate::easing::*`
 
 ### 4.2 Utilities
@@ -459,6 +461,14 @@ Inside the active `.children(|ui| ...)` scope:
 - `.on_release(|id, pointer, hovered| ...)`
 - `.on_focus(|id| ...)`
 - `.on_unfocus(|id| ...)`
+
+`PointerData`:
+- `pointer.position`: `Vector2`
+- `pointer.state`: `PointerState` (`Idle`, `PressedThisFrame`, `Pressed`, `ReleasedThisFrame`)
+- `pointer.pressed() -> bool`: checks if pointer is currently pressed (`Pressed` or `PressedThisFrame`)
+- `pointer.released() -> bool`: checks if pointer is currently released (`Idle` or `ReleasedThisFrame`)
+- `pointer.just_pressed() -> bool`: checks if pointer was just pressed this frame (`PressedThisFrame`)
+- `pointer.just_released() -> bool`: checks if pointer was just released this frame (`ReleasedThisFrame`)
 
 Use `.preserve_focus()` on toolbar-like controls that should not steal text-input focus.
 
