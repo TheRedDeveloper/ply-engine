@@ -67,7 +67,6 @@ pub use macroquad::prelude::Color as MacroquadColor;
 // Re-export macroquad itself so users don't need it in their Cargo.toml
 pub use macroquad;
 
-pub use macroquad::miniquad::window::set_mouse_cursor;
 pub use macroquad::miniquad::CursorIcon;
 
 // Audio — feature-gated

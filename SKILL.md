@@ -167,7 +167,6 @@ Everything below is re-exported from `ply_engine::prelude` in this repository.
 - Ply `Color`
 - `MacroquadColor` alias for macroquad color
 - `macroquad` crate
-- `set_mouse_cursor`
 - `CursorIcon`
 
 Important: because full `macroquad::prelude::*` is re-exported, any macroquad-prelude function/type is also in scope when using Ply prelude.
@@ -184,7 +183,7 @@ Construction and lifecycle:
 - `eval() -> Vec<RenderCommand<_>>`
 - `show(handle_custom_command).await`
 
-Pointer and focus:
+Pointer, focus, and cursor:
 
 - `pointer_over(id) -> bool`
 - `pointer_over_ids() -> Vec<Id>`
@@ -194,6 +193,8 @@ Pointer and focus:
 - `is_pressed(id) -> bool`
 - `is_just_pressed(id) -> bool`
 - `is_just_released(id) -> bool`
+- `set_cursor(CursorIcon)`
+- `get_cursor() -> CursorIcon`
 
 Text input state by ID:
 
@@ -821,28 +822,16 @@ This section shows some common patterns that emerge when building with Ply. Thes
 
 ### 16.1 Cursor
 
-When working with the cursor it's generally recommended to add something like this:
+Ply provides engine-managed cursor handling via `ui.set_cursor(CursorIcon)` and `ui.get_cursor() -> CursorIcon`:
 
 ```rust
-use std::cell::RefCell;
-
-thread_local! {
-  static CURSOR: RefCell<CursorIcon> = RefCell::new(CursorIcon::Default);
-}
-
-fn set_cursor(icon: CursorIcon) {
-  CURSOR.with(|c| *c.borrow_mut() = icon);
-}
-
-fn apply_cursor() {
-  CURSOR.with(|c| {
-    set_mouse_cursor(*c.borrow());
-    *c.borrow_mut() = CursorIcon::Default;
-  });
-}
+ui.set_cursor(CursorIcon::Pointer);
+let current: CursorIcon = ui.get_cursor();
 ```
 
-Then call `set_cursor(...)` in event handlers and `apply_cursor()` at the end of the frame. This ensures the cursor isn't changed around mid frame and also enables custom logic.
+- The default cursor is `CursorIcon::Pointer`.
+- `ui.set_cursor(...)` persists across frames until explicitly changed, and overwrites `ui.get_cursor()` immediately.
+- The cursor is automatically applied to the window during `ui.eval()` / `ui.show()` (when not headless).
 
 ### 16.2 Styling Function Pattern
 

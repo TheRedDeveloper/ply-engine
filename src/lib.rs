@@ -61,6 +61,7 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     web_a11y_state: accessibility_web::WebAccessibilityState,
     #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
     native_a11y_state: accessibility_native::NativeAccessibilityState,
+    cursor: macroquad::miniquad::CursorIcon,
 }
 
 #[derive(Default)]
@@ -1232,6 +1233,10 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
 
         self.dispatch_frame_callbacks();
 
+        if !self.context.is_headless() {
+            macroquad::miniquad::window::set_mouse_cursor(self.ply.cursor);
+        }
+
         // Sync the hidden DOM accessibility tree (web/WASM only)
         #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
         {
@@ -1475,6 +1480,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
             native_a11y_state: accessibility_native::NativeAccessibilityState::default(),
+            cursor: macroquad::miniquad::CursorIcon::Pointer,
         };
         ply.context.default_font_key = default_font.id;
         ply.set_measure_text_function(renderer::create_measure_text_function());
@@ -1505,6 +1511,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             web_a11y_state: accessibility_web::WebAccessibilityState::default(),
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
             native_a11y_state: accessibility_native::NativeAccessibilityState::default(),
+            cursor: macroquad::miniquad::CursorIcon::Pointer,
         }
     }
 
@@ -1673,6 +1680,16 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     pub fn set_scroll_position(&mut self, id: impl Into<Id>, position: impl Into<Vector2>) {
         self.context.set_scroll_position(id.into(), position.into());
     }
+
+    /// Sets the cursor icon to display. Persists between frames and is applied automatically during [`eval`](Ui::eval).
+    pub fn set_cursor(&mut self, cursor: macroquad::miniquad::CursorIcon) {
+        self.cursor = cursor;
+    }
+
+    /// Returns the current cursor icon.
+    pub fn get_cursor(&self) -> macroquad::miniquad::CursorIcon {
+        self.cursor
+    }
 }
 
 #[cfg(test)]
@@ -1680,6 +1697,29 @@ mod tests {
     use super::*;
     use color::Color;
     use layout::{Padding, Sizing};
+
+    #[test]
+    fn test_cursor_default_and_persistence() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        assert_eq!(ply.get_cursor(), macroquad::miniquad::CursorIcon::Pointer);
+
+        {
+            let mut ui = ply.begin();
+            assert_eq!(ui.get_cursor(), macroquad::miniquad::CursorIcon::Pointer);
+            ui.set_cursor(macroquad::miniquad::CursorIcon::Crosshair);
+            assert_eq!(ui.get_cursor(), macroquad::miniquad::CursorIcon::Crosshair);
+            let _ = ui.eval();
+        }
+
+        // Persists across frames
+        assert_eq!(ply.get_cursor(), macroquad::miniquad::CursorIcon::Crosshair);
+        {
+            let mut ui = ply.begin();
+            assert_eq!(ui.get_cursor(), macroquad::miniquad::CursorIcon::Crosshair);
+            let _ = ui.eval();
+        }
+        assert_eq!(ply.get_cursor(), macroquad::miniquad::CursorIcon::Crosshair);
+    }
 
     #[rustfmt::skip]
     #[test]
