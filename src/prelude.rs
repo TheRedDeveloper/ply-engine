@@ -19,7 +19,7 @@ pub use crate::renderer::render_to_texture;
 pub use crate::renderer::set_shader_source;
 
 // Macros
-pub use crate::{grow, fit, fixed, percent};
+pub use crate::{grow, fit, fixed, percent, graphic, font, shader};
 
 // Alignment — globbed
 pub use crate::align::AlignX::{self, *};

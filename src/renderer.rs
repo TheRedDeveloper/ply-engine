@@ -11,39 +11,54 @@ use rustc_hash::FxHashMap;
 
 const PIXELS_PER_POINT: f32 = 2.0;
 
-/// On Android, the APK asset root is the `assets/` directory,
-/// so paths like `"assets/fonts/x.ttf"` need the prefix stripped.
-fn resolve_asset_path(path: &str) -> &str {
-    #[cfg(target_os = "android")]
-    if let Some(stripped) = path.strip_prefix("assets/") {
-        return stripped;
-    }
-    path
-}
-
 #[cfg(feature = "text-styling")]
 static ANIMATION_TRACKER: std::sync::LazyLock<std::sync::Mutex<FxHashMap<String, (usize, f64)>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(FxHashMap::default()));
 
-/// Represents an asset that can be loaded as a texture. This can be either a file path or embedded bytes.
-#[derive(Debug)]
-pub enum GraphicAsset {
-    Path(&'static str), // For external assets
-    Bytes{file_name: &'static str, data: &'static [u8]}, // For embedded assets
-}
-impl GraphicAsset {
-    pub fn get_name(&self) -> &str {
-        match self {
-            GraphicAsset::Path(path) => path,
-            GraphicAsset::Bytes { file_name, .. } => file_name,
+/// Creates a [`GraphicAsset`] embedded from a file path relative to the crate's `Cargo.toml`.
+#[macro_export]
+macro_rules! graphic {
+    ($path:literal) => {
+        $crate::renderer::GraphicAsset {
+            id: $path,
+            data: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/", $path)),
         }
-    }
+    };
+}
+
+/// Creates a [`FontAsset`] embedded from a file path relative to the crate's `Cargo.toml`.
+#[macro_export]
+macro_rules! font {
+    ($path:literal) => {
+        $crate::renderer::FontAsset {
+            id: $path,
+            data: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/", $path)),
+        }
+    };
+}
+
+/// Creates a [`ShaderAsset::Source`](crate::shaders::ShaderAsset::Source) embedded from a file path relative to the crate's `Cargo.toml`.
+#[macro_export]
+macro_rules! shader {
+    ($path:literal) => {
+        $crate::shaders::ShaderAsset::Source {
+            id: $path,
+            fragment: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/", $path)),
+        }
+    };
+}
+
+/// Represents an asset that can be loaded as a texture from embedded bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct GraphicAsset {
+    pub id: &'static str,
+    pub data: &'static [u8],
 }
 
 /// Represents the source of image data for an element. Accepts static assets,
 /// runtime GPU textures, or procedural TinyVG scene graphs.
 #[derive(Debug, Clone)]
 pub enum ImageSource {
-    /// Static asset: file path or embedded bytes (existing behavior).
+    /// Static asset: embedded bytes.
     Asset(&'static GraphicAsset),
     /// Pre-existing GPU texture handle (lightweight, Copy).
     Texture(Texture2D),
@@ -56,7 +71,7 @@ impl ImageSource {
     /// Returns a human-readable name for debug/logging purposes.
     pub fn get_name(&self) -> &str {
         match self {
-            ImageSource::Asset(ga) => ga.get_name(),
+            ImageSource::Asset(ga) => ga.id,
             ImageSource::Texture(_) => "[Texture2D]",
             #[cfg(feature = "tinyvg")]
             ImageSource::TinyVg(_) => "[TinyVG procedural]",
@@ -83,26 +98,11 @@ impl From<tinyvg::format::Image> for ImageSource {
     }
 }
 
-/// Represents a font asset that can be loaded. This can be either a file path or embedded bytes.
-#[derive(Debug)]
-pub enum FontAsset {
-    /// A file path to a `.ttf` font file (e.g. `"assets/fonts/lexend.ttf"`).
-    Path(&'static str),
-    /// Embedded font bytes, typically via `include_bytes!`.
-    Bytes {
-        file_name: &'static str,
-        data: &'static [u8],
-    },
-}
-
-impl FontAsset {
-    /// Returns a unique key string for this asset (the path or file name).
-    pub fn key(&self) -> &'static str {
-        match self {
-            FontAsset::Path(path) => path,
-            FontAsset::Bytes { file_name, .. } => file_name,
-        }
-    }
+/// Represents a font asset that can be loaded from embedded bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct FontAsset {
+    pub id: &'static str,
+    pub data: &'static [u8],
 }
 
 /// Global FontManager. Manages font loading, caching, and eviction.
@@ -141,7 +141,7 @@ impl FontManager {
 
     /// Get a cached font by its asset key.
     pub fn get(&mut self, asset: &'static FontAsset) -> Option<&Font> {
-        let key = asset.key();
+        let key = asset.id;
         if let Some(data) = self.fonts.get_mut(key) {
             return Some(&data.font);
         }
@@ -164,7 +164,7 @@ impl FontManager {
             return m;
         }
         let (font, found) = if let Some(a) = font_asset {
-            let k = a.key();
+            let k = a.id;
             if let Some(data) = self.fonts.get(k) {
                 (Some(&data.font), true)
             } else if self.default_font.as_ref().map(|d| d.key) == Some(k) {
@@ -188,19 +188,10 @@ impl FontManager {
 
     /// Load the default font. Stored outside the cache and never evicted.
     pub async fn load_default(asset: &'static FontAsset) {
-        let font = match asset {
-            FontAsset::Bytes { data, .. } => {
-                macroquad::text::load_ttf_font_from_bytes(data)
-                    .expect("Failed to load font from bytes")
-            }
-            FontAsset::Path(path) => {
-                let resolved = resolve_asset_path(path);
-                macroquad::text::load_ttf_font(resolved).await
-                    .unwrap_or_else(|e| panic!("Failed to load font '{}': {:?}", path, e))
-            }
-        };
+        let font = macroquad::text::load_ttf_font_from_bytes(asset.data)
+            .expect("Failed to load font from bytes");
         let mut fm = FONT_MANAGER.lock().unwrap();
-        fm.default_font = Some(DefaultFont { key: asset.key(), font });
+        fm.default_font = Some(DefaultFont { key: asset.id, font });
     }
 
     /// Ensure a font is loaded (no-op if already cached).
@@ -209,32 +200,23 @@ impl FontManager {
         {
             let mut fm = FONT_MANAGER.lock().unwrap();
             // Already the default font?
-            if fm.default_font.as_ref().map(|d| d.key) == Some(asset.key()) {
+            if fm.default_font.as_ref().map(|d| d.key) == Some(asset.id) {
                 return;
             }
             // Already in cache?
-            if let Some(data) = fm.fonts.get_mut(asset.key()) {
+            if let Some(data) = fm.fonts.get_mut(asset.id) {
                 data.frames_not_used = 0;
                 return;
             }
         }
 
         // Load outside the lock
-        let font = match asset {
-            FontAsset::Bytes { data, .. } => {
-                macroquad::text::load_ttf_font_from_bytes(data)
-                    .expect("Failed to load font from bytes")
-            }
-            FontAsset::Path(path) => {
-                let resolved = resolve_asset_path(path);
-                macroquad::text::load_ttf_font(resolved).await
-                    .unwrap_or_else(|e| panic!("Failed to load font '{}': {:?}", path, e))
-            }
-        };
+        let font = macroquad::text::load_ttf_font_from_bytes(asset.data)
+            .expect("Failed to load font from bytes");
 
         // Insert with lock
         let mut fm = FONT_MANAGER.lock().unwrap();
-        let key = asset.key();
+        let key = asset.id;
         fm.fonts.entry(key).or_insert(FontData { frames_not_used: 0, font });
     }
 
@@ -247,7 +229,7 @@ impl FontManager {
 
     pub fn is_loaded(asset: &'static FontAsset) -> bool {
         let fm = FONT_MANAGER.lock().unwrap();
-        let key = asset.key();
+        let key = asset.id;
         if fm.default_font.as_ref().map(|d| d.key) == Some(key) {
             return true;
         }
@@ -318,16 +300,6 @@ impl TextureManager {
         }
     }
 
-    /// Get the cached texture by its key, or load from a file path and cache it.
-    pub async fn get_or_load(&mut self, path: &'static str) -> &Texture2D {
-        if !self.textures.contains_key(path) {
-            let texture = load_texture(resolve_asset_path(path)).await.unwrap();
-            self.textures.insert(path.to_owned(), CacheEntry { frames_not_used: 0, owner: texture.into() });
-        }
-        let entry = self.textures.get_mut(path).unwrap();
-        entry.frames_not_used = 0;
-        entry.owner.texture()
-    }
 
     /// Get the cached texture by its key, or create it using the provided function and cache it.
     pub fn get_or_create<F>(&mut self, key: String, create_fn: F) -> &Texture2D
@@ -1677,7 +1649,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                         let mut manager = TEXTURE_MANAGER.lock().unwrap();
 
                         #[cfg(feature = "tinyvg")]
-                        let is_tvg = ga.get_name().to_lowercase().ends_with(".tvg");
+                        let is_tvg = ga.id.to_lowercase().ends_with(".tvg");
                         #[cfg(not(feature = "tinyvg"))]
                         let is_tvg = false;
 
@@ -1685,7 +1657,7 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                         if is_tvg {
                             let key = format!(
                                 "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                                ga.get_name(),
+                                ga.id,
                                 bb.width, bb.height,
                                 cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right,
                                 current_clip
@@ -1696,37 +1668,17 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 if let Some(cached) = manager.get(&key) {
                                     cached
                                 } else {
-                                    match ga {
-                                        GraphicAsset::Path(path) => {
-                                            match load_file(resolve_asset_path(path)).await {
-                                                Ok(tvg_bytes) => {
-                                                    if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &current_clip) {
-                                                        manager.cache(key.clone(), tvg_rt)
-                                                    } else {
-                                                        warn!("Failed to load TinyVG image: {}", path);
-                                                        manager.cache(key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
-                                                    }
-                                                }
-                                                Err(error) => {
-                                                    warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
-                                                    manager.cache(key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
-                                                }
-                                            }
-                                        }
-                                        GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
-                                            if let Some(tvg_rt) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &current_clip) {
-                                                manager.cache(key.clone(), tvg_rt)
-                                            } else {
-                                                warn!("Failed to load TinyVG image: {}", file_name);
-                                                manager.cache(key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
-                                            }
-                                        }
+                                    if let Some(tvg_rt) = render_tinyvg_texture(ga.data, bb.width, bb.height, &current_clip) {
+                                        manager.cache(key.clone(), tvg_rt)
+                                    } else {
+                                        warn!("Failed to load TinyVG image: {}", ga.id);
+                                        manager.cache(key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
                                     }
                                 }
                             } else {
                                 let zerocr_key = format!(
                                     "tvg:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                                    ga.get_name(),
+                                    ga.id,
                                     bb.width, bb.height,
                                     0.0, 0.0, 0.0, 0.0,
                                     current_clip
@@ -1734,31 +1686,11 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 let base_texture = if let Some(cached) = manager.get(&zerocr_key) {
                                     cached
                                 } else {
-                                    match ga {
-                                        GraphicAsset::Path(path) => {
-                                            match load_file(resolve_asset_path(path)).await {
-                                                Ok(tvg_bytes) => {
-                                                    if let Some(tvg_rt) = render_tinyvg_texture(&tvg_bytes, bb.width, bb.height, &current_clip) {
-                                                        manager.cache(zerocr_key.clone(), tvg_rt)
-                                                    } else {
-                                                        warn!("Failed to load TinyVG image: {}", path);
-                                                        manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
-                                                    }
-                                                }
-                                                Err(error) => {
-                                                    warn!("Failed to load TinyVG file: {}. Error: {}", path, error);
-                                                    manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
-                                                }
-                                            }
-                                        }
-                                        GraphicAsset::Bytes { file_name, data: tvg_bytes } => {
-                                            if let Some(tvg_rt) = render_tinyvg_texture(tvg_bytes, bb.width, bb.height, &current_clip) {
-                                                manager.cache(zerocr_key.clone(), tvg_rt)
-                                            } else {
-                                                warn!("Failed to load TinyVG image: {}", file_name);
-                                                manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
-                                            }
-                                        }
+                                    if let Some(tvg_rt) = render_tinyvg_texture(ga.data, bb.width, bb.height, &current_clip) {
+                                        manager.cache(zerocr_key.clone(), tvg_rt)
+                                    } else {
+                                        warn!("Failed to load TinyVG image: {}", ga.id);
+                                        manager.cache(zerocr_key.clone(), Texture2D::from_rgba8(1, 1, &[0, 0, 0, 0]))
                                     }
                                 }.clone();
                                 manager.get_or_create(key, || {
@@ -1787,14 +1719,9 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                         }
 
                         if !is_tvg && cr.top_left == 0.0 && cr.top_right == 0.0 && cr.bottom_left == 0.0 && cr.bottom_right == 0.0 {
-                            let texture = match ga {
-                                GraphicAsset::Path(path) => manager.get_or_load(path).await,
-                                GraphicAsset::Bytes { file_name, data } => {
-                                    manager.get_or_create(file_name.to_string(), || {
-                                        Texture2D::from_file_with_format(data, None)
-                                    })
-                                }
-                            };
+                            let texture = manager.get_or_create(ga.id.to_string(), || {
+                                Texture2D::from_file_with_format(ga.data, None)
+                            });
                             draw_texture_ex(
                                 texture,
                                 bb.x,
@@ -1806,17 +1733,12 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                                 },
                             );
                         } else {
-                            let source_texture = match ga {
-                                GraphicAsset::Path(path) => manager.get_or_load(path).await.clone(),
-                                GraphicAsset::Bytes { file_name, data } => {
-                                    manager.get_or_create(file_name.to_string(), || {
-                                        Texture2D::from_file_with_format(data, None)
-                                    }).clone()
-                                }
-                            };
+                            let source_texture = manager.get_or_create(ga.id.to_string(), || {
+                                Texture2D::from_file_with_format(ga.data, None)
+                            }).clone();
                             let key = format!(
                                 "image:{}:{}:{}:{}:{}:{}:{}:{:?}",
-                                ga.get_name(),
+                                ga.id,
                                 bb.width, bb.height,
                                 cr.top_left, cr.top_right, cr.bottom_left, cr.bottom_right,
                                 current_clip

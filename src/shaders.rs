@@ -1,19 +1,16 @@
 use std::borrow::Cow;
 
-/// Represents a shader asset that can be loaded from a file path, embedded as source,
+/// Represents a shader asset that can be embedded as source,
 /// or looked up from the runtime shader storage in [`MaterialManager`].
 ///
-/// `Path` is loaded from the filesystem at runtime (useful for development/hot-reloading).
-/// `Source` embeds the shader in the binary (via `include_str!`).
+/// `Source` embeds the shader in the binary (via `include_str!` or the `shader!` macro).
 /// `Stored` references a named entry in the shader storage, enabling runtime-updateable shader code.
 #[derive(Debug, Clone)]
 pub enum ShaderAsset {
-    /// Path to a compiled .glsl file, loaded at runtime
-    Path(&'static str),
     /// Embedded GLSL ES 3.00 fragment shader source
     Source {
         /// Cache key for MaterialManager
-        file_name: &'static str,
+        id: &'static str,
         /// GLSL ES 3.00 fragment shader source
         fragment: &'static str,
     },
@@ -23,15 +20,10 @@ pub enum ShaderAsset {
 
 impl ShaderAsset {
     /// Returns the fragment shader source.
-    /// For `Path` variant, reads the file synchronously.
     /// For `Source` variant, returns a borrowed reference (zero-copy).
     /// For `Stored` variant, looks up the source from the global shader storage.
     pub fn fragment_source(&self) -> Cow<'static, str> {
         match self {
-            ShaderAsset::Path(path) => {
-                Cow::Owned(std::fs::read_to_string(path)
-                    .unwrap_or_else(|e| panic!("Failed to read shader file '{}': {}", path, e)))
-            }
             ShaderAsset::Source { fragment, .. } => Cow::Borrowed(fragment),
             ShaderAsset::Stored(name) => {
                 let mgr = crate::renderer::MATERIAL_MANAGER.lock().unwrap();
@@ -49,8 +41,7 @@ impl ShaderAsset {
     /// Returns the cache key used by MaterialManager.
     pub fn cache_key(&self) -> &str {
         match self {
-            ShaderAsset::Path(path) => path,
-            ShaderAsset::Source { file_name, .. } => file_name,
+            ShaderAsset::Source { id, .. } => id,
             ShaderAsset::Stored(name) => name,
         }
     }

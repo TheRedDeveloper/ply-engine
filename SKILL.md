@@ -89,7 +89,7 @@ fn window_conf() -> macroquad::conf::Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-  static DEFAULT_FONT: FontAsset = FontAsset::Path("assets/fonts/MyFont.ttf");
+  static DEFAULT_FONT: FontAsset = font!("assets/fonts/MyFont.ttf");
   let mut ply = Ply::<()>::new(&DEFAULT_FONT).await;
 
   loop {
@@ -477,13 +477,13 @@ Use `.preserve_focus()` on toolbar-like controls that should not steal text-inpu
 
 `GraphicAsset`:
 
-- `GraphicAsset::Path("...")` (can cause frame skip on web)
-- `GraphicAsset::Bytes { file_name, data }` (recommended)
+- `graphic!("assets/images/logo.png")` (macro embeds bytes relative to crate manifest)
+- `GraphicAsset { id, data }`
 
 `FontAsset`:
 
-- `FontAsset::Path("...")` (might cause frame skip on web)
-- `FontAsset::Bytes { file_name, data }` (recommended)
+- `font!("assets/fonts/lexend.ttf")` (macro embeds bytes relative to crate manifest)
+- `FontAsset { id, data }`
 
 Image inputs accepted by `.image(...)`:
 
@@ -495,8 +495,8 @@ Image inputs accepted by `.image(...)`:
 
 `ShaderAsset` variants:
 
-- `Path(&'static str)` (might cause frame skip on web)
-- `Source { file_name, fragment }` (recommended)
+- `shader!("assets/shaders/custom.frag.glsl")` (macro embeds shader source)
+- `Source { id, fragment }`
 - `Stored(&'static str)`
 
 `ShaderBuilder`:
@@ -968,7 +968,7 @@ Use a static shader asset for normal rendering flows.
 
 ```rust
 static TINT_SHADER: ShaderAsset = ShaderAsset::Source {
-  file_name: "tint.frag.glsl",
+  id: "tint.frag.glsl",
   fragment: r#"#version 100
 precision mediump float;
 varying vec2 uv;
@@ -1111,20 +1111,12 @@ ui.element().width(grow!()).height(grow!())
 
 ### 16.11 GraphicAsset and FontAsset Pattern
 
-Declare graphic and font assets as `static`.
+Declare graphic and font assets as `static` using `graphic!` and `font!` macros.
 
 ```rust
-static LOGO: GraphicAsset = GraphicAsset::Path("assets/images/logo.png");
-static ICON_TVG: GraphicAsset = GraphicAsset::Bytes {
-  file_name: "icon.tvg",
-  data: include_bytes!("../assets/images/icon.tvg"),
-};
-
-static BODY_FONT: FontAsset = FontAsset::Path("assets/fonts/lexend.ttf");
-static MONO_FONT: FontAsset = FontAsset::Bytes {
-  file_name: "jetbrains_mono.ttf",
-  data: include_bytes!("../assets/fonts/jetbrains_mono.ttf"),
-};
+static LOGO: GraphicAsset = graphic!("assets/images/logo.png");
+static ICON_TVG: GraphicAsset = graphic!("assets/images/icon.tvg");
+static BODY_FONT: FontAsset = font!("assets/fonts/lexend.ttf");
 
 // ...
 
@@ -1132,7 +1124,6 @@ ui.element().width(fixed!(96.0)).height(fixed!(96.0)).image(&LOGO).empty();
 ui.element().width(fixed!(96.0)).height(fixed!(96.0)).image(&ICON_TVG).empty();
 
 ui.text("Body", |t| t.font(&BODY_FONT).font_size(24).color(0xFFFFFF));
-ui.text("Code", |t| t.font(&MONO_FONT).font_size(24).color(0xFFFFFF));
 ```
 
 # UI/UX Playbook

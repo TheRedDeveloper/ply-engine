@@ -824,7 +824,7 @@ fn hash_string_contents_with_config(
 ) -> u32 {
     let mut hash: u32 = (hash_data_scalar(text.as_bytes()) % u32::MAX as u64) as u32;
     // Fold in font key bytes
-    for &b in config.font_asset.map(|a| a.key()).unwrap_or("").as_bytes() {
+    for &b in config.font_asset.map(|a| a.id).unwrap_or("").as_bytes() {
         hash = hash.wrapping_add(b as u32);
         hash = hash.wrapping_add(hash << 10);
         hash ^= hash >> 6;
@@ -2123,7 +2123,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     /// Returns the cached font height for the given (font_asset, font_size) pair.
     /// Measures `"Mg"` on the first call for each pair and caches the result.
     fn font_height(&mut self, font_asset: Option<&'static crate::renderer::FontAsset>, font_size: u16) -> f32 {
-        let font_key = font_asset.map(|a| a.key()).unwrap_or("");
+        let font_key = font_asset.map(|a| a.id).unwrap_or("");
         let key = (font_key, font_size);
         if let Some(&h) = self.font_height_cache.get(&key) {
             return h;
@@ -9521,7 +9521,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.debug_text("Font", info_title_config);
                             {
                                 let label = if let Some(asset) = text_config.font_asset {
-                                    asset.key().to_string()
+                                    asset.id.to_string()
                                 } else {
                                     format!("default ({})", self.default_font_key)
                                 };
@@ -9871,7 +9871,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.debug_open(&ElementDeclaration::default());
                             {
                                 let label = if let Some(asset) = ti_cfg.font_asset {
-                                    asset.key().to_string()
+                                    asset.id.to_string()
                                 } else {
                                     format!("default ({})", self.default_font_key)
                                 };

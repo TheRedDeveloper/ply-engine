@@ -210,7 +210,7 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     /// Sets the image data for this element.
     ///
     /// Accepts anything that implements `Into<ImageSource>`:
-    /// - `&'static GraphicAsset`: static file path or embedded bytes
+    /// - `&'static GraphicAsset`: embedded bytes
     /// - `Texture2D`: pre-existing GPU texture handle
     /// - `tinyvg::format::Image`: procedural TinyVG scene graph (requires `tinyvg` feature)
     #[inline]
@@ -1477,7 +1477,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
             #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
             native_a11y_state: accessibility_native::NativeAccessibilityState::default(),
         };
-        ply.context.default_font_key = default_font.key();
+        ply.context.default_font_key = default_font.id;
         ply.set_measure_text_function(renderer::create_measure_text_function());
         ply
     }
@@ -2232,7 +2232,7 @@ mod tests {
         use shaders::ShaderAsset;
 
         let test_shader = ShaderAsset::Source {
-            file_name: "test_effect.glsl",
+            id: "test_effect.glsl",
             fragment: "#version 100\nprecision lowp float;\nvarying vec2 uv;\nuniform sampler2D Texture;\nvoid main() { gl_FragColor = texture2D(Texture, uv); }",
         };
 
@@ -2312,11 +2312,11 @@ mod tests {
         use shaders::ShaderAsset;
 
         let shader_a = ShaderAsset::Source {
-            file_name: "shader_a.glsl",
+            id: "shader_a.glsl",
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
         };
         let shader_b = ShaderAsset::Source {
-            file_name: "shader_b.glsl",
+            id: "shader_b.glsl",
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(0.5); }",
         };
 
@@ -2393,7 +2393,7 @@ mod tests {
         use shaders::ShaderAsset;
 
         let effect_shader = ShaderAsset::Source {
-            file_name: "gradient.glsl",
+            id: "gradient.glsl",
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
         };
 
@@ -2466,7 +2466,7 @@ mod tests {
         use shaders::ShaderAsset;
 
         let test_shader = ShaderAsset::Source {
-            file_name: "merge_test.glsl",
+            id: "merge_test.glsl",
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
         };
 
@@ -2504,11 +2504,11 @@ mod tests {
         use shaders::ShaderAsset;
 
         let shader_a = ShaderAsset::Source {
-            file_name: "vr_a.glsl",
+            id: "vr_a.glsl",
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
         };
         let shader_b = ShaderAsset::Source {
-            file_name: "vr_b.glsl",
+            id: "vr_b.glsl",
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(0.5); }",
         };
 
