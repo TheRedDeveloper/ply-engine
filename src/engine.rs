@@ -407,45 +407,16 @@ struct LayoutElement {
     floating_children_count: u16,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct LayoutElementHashMapItem {
     bounding_box: BoundingBox,
     element_id: Id,
     layout_element_index: i32,
-    on_hover_fn: Option<Box<dyn FnMut(Id, PointerData)>>,
-    on_press_fn: Option<Box<dyn FnMut(Id, PointerData)>>,
-    on_release_fn: Option<Box<dyn FnMut(Id, PointerData)>>,
-    on_focus_fn: Option<Box<dyn FnMut(Id)>>,
-    on_unfocus_fn: Option<Box<dyn FnMut(Id)>>,
-    on_text_changed_fn: Option<Box<dyn FnMut(&str)>>,
-    on_text_submit_fn: Option<Box<dyn FnMut(&str)>>,
     is_text_input: bool,
     preserve_focus: bool,
     generation: u32,
     collision: bool,
     collapsed: bool,
-}
-
-impl Clone for LayoutElementHashMapItem {
-    fn clone(&self) -> Self {
-        Self {
-            bounding_box: self.bounding_box,
-            element_id: self.element_id.clone(),
-            layout_element_index: self.layout_element_index,
-            on_hover_fn: None, // Callbacks are not cloneable
-            on_press_fn: None,
-            on_release_fn: None,
-            on_focus_fn: None,
-            on_unfocus_fn: None,
-            on_text_changed_fn: None,
-            on_text_submit_fn: None,
-            is_text_input: self.is_text_input,
-            preserve_focus: self.preserve_focus,
-            generation: self.generation,
-            collision: self.collision,
-            collapsed: self.collapsed,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -642,8 +613,15 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     boolean_warnings: BooleanWarnings,
 
     // Pointer info
-    pointer_info: PointerData,
+    pub pointer_info: PointerData,
     pub layout_dimensions: Dimensions,
+
+    // Event queues for frame callback dispatch
+    pub focus_events: Vec<(u32, u32)>,
+    pub text_changed_events: Vec<(u32, String)>,
+    pub text_submit_events: Vec<(u32, String)>,
+    pub keyboard_press_events: Vec<Id>,
+    pub keyboard_release_events: Vec<Id>,
 
     // Dynamic element tracking
     dynamic_element_index: u32,
@@ -710,11 +688,11 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
 
     // Clip/scroll
     open_clip_element_stack: Vec<i32>,
-    pointer_over_ids: Vec<Id>,
-    pressed_element_ids: Vec<Id>,
+    pub(crate) pointer_over_ids: Vec<Id>,
+    pub(crate) pressed_element_ids: Vec<Id>,
     pressed_this_frame_ids: Vec<Id>,
     pressed_this_frame_generation: u32,
-    released_this_frame_ids: Vec<Id>,
+    pub(crate) released_this_frame_ids: Vec<Id>,
     released_this_frame_generation: u32,
     keyboard_press_this_frame_generation: u32,
     scroll_container_datas: Vec<ScrollContainerDataInternal>,
@@ -1034,6 +1012,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             boolean_warnings: BooleanWarnings::default(),
             pointer_info: PointerData::default(),
             layout_dimensions: dimensions,
+            focus_events: Vec::new(),
+            text_changed_events: Vec::new(),
+            text_submit_events: Vec::new(),
+            keyboard_press_events: Vec::new(),
+            keyboard_release_events: Vec::new(),
             dynamic_element_index: 0,
             measure_text_fn: None,
             layout_elements: Vec::new(),
@@ -1142,13 +1125,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     item.generation = gen + 1;
                     item.layout_element_index = layout_element_index;
                     item.collision = false;
-                    item.on_hover_fn = None;
-                    item.on_press_fn = None;
-                    item.on_release_fn = None;
-                    item.on_focus_fn = None;
-                    item.on_unfocus_fn = None;
-                    item.on_text_changed_fn = None;
-                    item.on_text_submit_fn = None;
                     item.is_text_input = false;
                     item.preserve_focus = false;
                 } else {
@@ -1162,13 +1138,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     layout_element_index,
                     generation: gen + 1,
                     bounding_box: BoundingBox::default(),
-                    on_hover_fn: None,
-                    on_press_fn: None,
-                    on_release_fn: None,
-                    on_focus_fn: None,
-                    on_unfocus_fn: None,
-                    on_text_changed_fn: None,
-                    on_text_submit_fn: None,
                     is_text_input: false,
                     preserve_focus: false,
                     collision: false,
@@ -2468,6 +2437,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.accessibility_element_order.clear();
         self.text_input_configs.clear();
         self.text_input_element_ids.clear();
+        self.focus_events.clear();
+        self.text_changed_events.clear();
+        self.text_submit_events.clear();
+        self.keyboard_press_events.clear();
+        self.keyboard_release_events.clear();
     }
 
     fn child_size_on_axis(&self, child_index: usize, x_axis: bool) -> f32 {
@@ -5663,9 +5637,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                 // Copy data from map to avoid borrow issues with mutable access later
                 let map_data = self.layout_element_map.get(&elem_id).map(|item| {
-                    (item.bounding_box, item.element_id.clone(), item.on_hover_fn.is_some())
+                    (item.bounding_box, item.element_id.clone())
                 });
-                if let Some((raw_box, elem_id_copy, has_hover)) = map_data {
+                if let Some((raw_box, elem_id_copy)) = map_data {
                     let mut elem_box = raw_box;
                     elem_box.x -= root.pointer_offset.x;
                     elem_box.y -= root.pointer_offset.y;
@@ -5685,15 +5659,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             .unwrap_or(false);
 
                     if point_is_inside_rect(position, elem_box) && clip_ok {
-                        // Call hover callbacks
-                        if has_hover {
-                            let pointer_data = self.pointer_info;
-                            if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-                                if let Some(ref mut callback) = item.on_hover_fn {
-                                    callback(elem_id_copy.clone(), pointer_data);
-                                }
-                            }
-                        }
                         self.pointer_over_ids.push(elem_id_copy);
                         found = true;
                     }
@@ -5707,9 +5672,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     let children_length =
                         self.layout_elements[current_idx].children_length as usize;
                     for ci in (0..children_length).rev() {
-                        let child = self.layout_element_children[children_start + ci];
-                        dfs.push(child);
-                        vis.push(false);
+                        if children_start + ci < self.layout_element_children.len() {
+                            let child = self.layout_element_children[children_start + ci];
+                            dfs.push(child);
+                            vis.push(false);
+                        }
                     }
                 } else {
                     dfs.pop();
@@ -5811,31 +5778,16 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         self.change_focus(0);
                     }
 
-                    // Mark all hovered elements as pressed and fire on_press callbacks
+                    // Mark all hovered elements as pressed
                     self.pressed_element_ids = self.pointer_over_ids.clone();
-                    for eid in self.pointer_over_ids.clone().iter() {
-                        if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
-                            if let Some(ref mut callback) = item.on_press_fn {
-                                callback(eid.clone(), self.pointer_info);
-                            }
-                        }
-                    }
                 }
 
                 let pressed_now = self.pressed_element_ids.clone();
                 self.track_just_pressed_ids(&pressed_now);
             }
             PointerDataInteractionState::ReleasedThisFrame => {
-                // Fire on_release for all elements that were in the pressed chain
                 let pressed = std::mem::take(&mut self.pressed_element_ids);
                 self.track_just_released_ids(&pressed);
-                for eid in pressed.iter() {
-                    if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
-                        if let Some(ref mut callback) = item.on_release_fn {
-                            callback(eid.clone(), self.pointer_info);
-                        }
-                    }
-                }
             }
             _ => {}
         }
@@ -6190,14 +6142,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    pub fn on_hover(&mut self, callback: Box<dyn FnMut(Id, PointerData)>) {
-        let open_idx = self.get_open_layout_element();
-        let elem_id = self.layout_elements[open_idx].id;
-        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-            item.on_hover_fn = Some(callback);
-        }
-    }
-
     pub fn pressed(&self) -> bool {
         let open_idx = self.get_open_layout_element();
         let elem_id = self.layout_elements[open_idx].id;
@@ -6231,19 +6175,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.released_this_frame_ids
             .iter()
             .any(|eid| eid.id == elem_id)
-    }
-
-    pub fn set_press_callbacks(
-        &mut self,
-        on_press: Option<Box<dyn FnMut(Id, PointerData)>>,
-        on_release: Option<Box<dyn FnMut(Id, PointerData)>>,
-    ) {
-        let open_idx = self.get_open_layout_element();
-        let elem_id = self.layout_elements[open_idx].id;
-        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-            item.on_press_fn = on_press;
-            item.on_release_fn = on_release;
-        }
     }
 
     /// Returns true if the currently open element has focus.
@@ -6290,17 +6221,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             self.focus_from_keyboard = false;
         }
 
-        // Fire on_unfocus on old element
-        if old_id != 0 {
-            if let Some(item) = self.layout_element_map.get_mut(&old_id) {
-                let id_copy = item.element_id.clone();
-                if let Some(ref mut callback) = item.on_unfocus_fn {
-                    callback(id_copy);
-                }
-            }
-        }
+        self.focus_events.push((old_id, new_id));
 
-        // Fire on_focus on new element
         if new_id != 0 {
             // flush pressed chars
             if !self.headless {
@@ -6308,51 +6230,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     // do nothing
                 }
             }
-            if let Some(item) = self.layout_element_map.get_mut(&new_id) {
-                let id_copy = item.element_id.clone();
-                if let Some(ref mut callback) = item.on_focus_fn {
-                    callback(id_copy);
-                }
-            }
-        }
-    }
-
-    /// Fire the on_press callback for the element with the given u32 ID.
-    /// Used by screen reader action handling.
-    #[allow(dead_code)]
-    pub(crate) fn fire_press(&mut self, element_id: u32) {
-        if let Some(item) = self.layout_element_map.get_mut(&element_id) {
-            let id_copy = item.element_id.clone();
-            if let Some(ref mut callback) = item.on_press_fn {
-                callback(id_copy, PointerData::default());
-            }
-        }
-    }
-
-    pub fn set_focus_callbacks(
-        &mut self,
-        on_focus: Option<Box<dyn FnMut(Id)>>,
-        on_unfocus: Option<Box<dyn FnMut(Id)>>,
-    ) {
-        let open_idx = self.get_open_layout_element();
-        let elem_id = self.layout_elements[open_idx].id;
-        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-            item.on_focus_fn = on_focus;
-            item.on_unfocus_fn = on_unfocus;
-        }
-    }
-
-    /// Sets text input callbacks for the currently open element.
-    pub fn set_text_input_callbacks(
-        &mut self,
-        on_changed: Option<Box<dyn FnMut(&str)>>,
-        on_submit: Option<Box<dyn FnMut(&str)>>,
-    ) {
-        let open_idx = self.get_open_layout_element();
-        let elem_id = self.layout_elements[open_idx].id;
-        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-            item.on_text_changed_fn = on_changed;
-            item.on_text_submit_fn = on_submit;
         }
     }
 
@@ -6600,13 +6477,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 state.insert_text(&ch.to_string(), max_length);
             }
             if state.text != old_text {
-                let new_text = state.text.clone();
-                // Fire on_changed callback
-                if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-                    if let Some(ref mut callback) = item.on_text_changed_fn {
-                        callback(&new_text);
-                    }
-                }
+                self.text_changed_events.push((elem_id, state.text.clone()));
             }
             true
         } else {
@@ -6983,13 +6854,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         #[cfg(not(feature = "text-styling"))]
                         { state.insert_text("\n", max_length); }
                     } else {
-                        let text = state.text.clone();
-                        // Fire on_submit callback
-                        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-                            if let Some(ref mut callback) = item.on_text_submit_fn {
-                                callback(&text);
-                            }
-                        }
+                        self.text_submit_events.push((elem_id, state.text.clone()));
                         return true;
                     }
                 }
@@ -7001,12 +6866,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 }
             }
             if state.text != old_text {
-                let new_text = state.text.clone();
-                if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-                    if let Some(ref mut callback) = item.on_text_changed_fn {
-                        callback(&new_text);
-                    }
-                }
+                self.text_changed_events.push((elem_id, state.text.clone()));
             }
             true
         } else {
@@ -7720,23 +7580,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 let pressed_now = self.pressed_element_ids.clone();
                 self.track_just_pressed_ids(&pressed_now);
                 self.keyboard_press_this_frame_generation = self.release_query_generation();
-                if let Some(item) = self.layout_element_map.get_mut(&self.focused_element_id) {
-                    if let Some(ref mut callback) = item.on_press_fn {
-                        callback(id, PointerData::default());
-                    }
-                }
+                self.keyboard_press_events.push(id);
             }
         }
         if released {
             let pressed = std::mem::take(&mut self.pressed_element_ids);
             self.track_just_released_ids(&pressed);
-            for eid in pressed.iter() {
-                if let Some(item) = self.layout_element_map.get_mut(&eid.id) {
-                    if let Some(ref mut callback) = item.on_release_fn {
-                        callback(eid.clone(), PointerData::default());
-                    }
-                }
-            }
+            self.keyboard_release_events.extend(pressed);
         }
     }
 

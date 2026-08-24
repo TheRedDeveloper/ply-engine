@@ -1211,13 +1211,13 @@ impl Default for TextInputConfig {
 }
 
 /// Builder for configuring a text input element via closure.
-pub struct TextInputBuilder {
+pub struct TextInputBuilder<'a> {
     pub(crate) config: TextInputConfig,
-    pub(crate) on_changed_fn: Option<Box<dyn FnMut(&str) + 'static>>,
-    pub(crate) on_submit_fn: Option<Box<dyn FnMut(&str) + 'static>>,
+    pub(crate) on_changed_fn: Option<Box<dyn FnMut(&str) + 'a>>,
+    pub(crate) on_submit_fn: Option<Box<dyn FnMut(&str) + 'a>>,
 }
 
-impl TextInputBuilder {
+impl<'a> TextInputBuilder<'a> {
     pub(crate) fn new() -> Self {
         Self {
             config: TextInputConfig::default(),
@@ -1320,7 +1320,7 @@ impl TextInputBuilder {
     #[inline]
     pub fn scrollbar(
         &mut self,
-        f: impl for<'a> FnOnce(&'a mut elements::ScrollbarBuilder) -> &'a mut elements::ScrollbarBuilder,
+        f: impl for<'b> FnOnce(&'b mut elements::ScrollbarBuilder) -> &'b mut elements::ScrollbarBuilder,
     ) -> &mut Self {
         let mut builder = elements::ScrollbarBuilder {
             config: self.config.scrollbar.unwrap_or_default(),
@@ -1345,7 +1345,7 @@ impl TextInputBuilder {
     #[inline]
     pub fn on_changed<F>(&mut self, callback: F) -> &mut Self
     where
-        F: FnMut(&str) + 'static,
+        F: FnMut(&str) + 'a,
     {
         self.on_changed_fn = Some(Box::new(callback));
         self
@@ -1355,7 +1355,7 @@ impl TextInputBuilder {
     #[inline]
     pub fn on_submit<F>(&mut self, callback: F) -> &mut Self
     where
-        F: FnMut(&str) + 'static,
+        F: FnMut(&str) + 'a,
     {
         self.on_submit_fn = Some(Box::new(callback));
         self

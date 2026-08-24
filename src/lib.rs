@@ -32,7 +32,6 @@ pub mod prelude;
 use id::Id;
 use math::{Dimensions, Vector2};
 use render_commands::RenderCommand;
-#[cfg(feature = "a11y")]
 use rustc_hash::FxHashMap;
 use text::TextConfig;
 
@@ -64,28 +63,41 @@ pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
     native_a11y_state: accessibility_native::NativeAccessibilityState,
 }
 
-pub struct Ui<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    ply: &'ply mut Ply<CustomElementData>,
+#[derive(Default)]
+pub(crate) struct FrameCallbacks<'ply> {
+    pub hover: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
+    pub press: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
+    pub release: FxHashMap<u32, Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
+    pub focus: FxHashMap<u32, Box<dyn FnMut(Id) + 'ply>>,
+    pub unfocus: FxHashMap<u32, Box<dyn FnMut(Id) + 'ply>>,
+    pub text_changed: FxHashMap<u32, Box<dyn FnMut(&str) + 'ply>>,
+    pub text_submit: FxHashMap<u32, Box<dyn FnMut(&str) + 'ply>>,
+}
+
+pub struct Ui<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+    pub ply: &'a mut Ply<CustomElementData>,
+    pub(crate) callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
 }
 
 /// Builder for creating elements with closure-based syntax.
 /// Methods return `self` by value for chaining. Finalize with `.children()` or `.empty()`.
 #[must_use]
-pub struct ElementBuilder<'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    ply: &'ply mut Ply<CustomElementData>,
+pub struct ElementBuilder<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+    ply: &'ui mut Ply<CustomElementData>,
+    callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
     inner: engine::ElementDeclaration<CustomElementData>,
     id: Option<Id>,
-    on_hover_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'static>>,
-    on_press_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'static>>,
-    on_release_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'static>>,
-    on_focus_fn: Option<Box<dyn FnMut(Id) + 'static>>,
-    on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'static>>,
-    text_input_on_changed_fn: Option<Box<dyn FnMut(&str) + 'static>>,
-    text_input_on_submit_fn: Option<Box<dyn FnMut(&str) + 'static>>,
+    on_hover_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
+    on_press_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
+    on_release_fn: Option<Box<dyn FnMut(Id, engine::PointerData) + 'ply>>,
+    on_focus_fn: Option<Box<dyn FnMut(Id) + 'ply>>,
+    on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'ply>>,
+    text_input_on_changed_fn: Option<Box<dyn FnMut(&str) + 'ply>>,
+    text_input_on_submit_fn: Option<Box<dyn FnMut(&str) + 'ply>>,
 }
 
-impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ply, CustomElementData>
+impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
+    ElementBuilder<'ui, 'ply, CustomElementData>
 {
     /// Sets the width of the element.
     #[inline]
@@ -345,7 +357,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_hover<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id, engine::PointerData) + 'static,
+        F: FnMut(Id, engine::PointerData) + 'ply,
     {
         self.on_hover_fn = Some(Box::new(callback));
         self
@@ -356,7 +368,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_press<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id, engine::PointerData) + 'static,
+        F: FnMut(Id, engine::PointerData) + 'ply,
     {
         self.on_press_fn = Some(Box::new(callback));
         self
@@ -367,7 +379,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_release<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id, engine::PointerData) + 'static,
+        F: FnMut(Id, engine::PointerData) + 'ply,
     {
         self.on_release_fn = Some(Box::new(callback));
         self
@@ -378,7 +390,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_focus<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id) + 'static,
+        F: FnMut(Id) + 'ply,
     {
         self.on_focus_fn = Some(Box::new(callback));
         self
@@ -388,7 +400,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn on_unfocus<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(Id) + 'static,
+        F: FnMut(Id) + 'ply,
     {
         self.on_unfocus_fn = Some(Box::new(callback));
         self
@@ -415,7 +427,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     #[inline]
     pub fn text_input(
         mut self,
-        f: impl for<'a> FnOnce(&'a mut text_input::TextInputBuilder) -> &'a mut text_input::TextInputBuilder,
+        f: impl for<'b> FnOnce(&'b mut text_input::TextInputBuilder<'ply>) -> &'b mut text_input::TextInputBuilder<'ply>,
     ) -> Self {
         let mut builder = text_input::TextInputBuilder::new();
         f(&mut builder);
@@ -426,11 +438,19 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 
     /// Finalizes the element with children defined in a closure.
-    pub fn children(self, f: impl FnOnce(&mut Ui<'_, CustomElementData>)) -> Id {
+    pub fn children(self, f: impl FnOnce(&mut Ui<'_, 'ply, CustomElementData>)) -> Id {
         let ElementBuilder {
-            ply, inner, id,
-            on_hover_fn, on_press_fn, on_release_fn, on_focus_fn, on_unfocus_fn,
-            text_input_on_changed_fn, text_input_on_submit_fn,
+            ply,
+            callbacks,
+            inner,
+            id,
+            on_hover_fn,
+            on_press_fn,
+            on_release_fn,
+            on_focus_fn,
+            on_unfocus_fn,
+            text_input_on_changed_fn,
+            text_input_on_submit_fn,
         } = self;
         if let Some(ref id) = id {
             ply.context.open_element_with_id(id);
@@ -440,24 +460,42 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         ply.context.configure_open_element(&inner);
         let element_id = ply.context.get_open_element_id();
 
-        if let Some(hover_fn) = on_hover_fn {
-            ply.context.on_hover(hover_fn);
-        }
-        if on_press_fn.is_some() || on_release_fn.is_some() {
-            ply.context.set_press_callbacks(on_press_fn, on_release_fn);
-        }
-        if on_focus_fn.is_some() || on_unfocus_fn.is_some() {
-            ply.context.set_focus_callbacks(on_focus_fn, on_unfocus_fn);
-        }
-        if text_input_on_changed_fn.is_some() || text_input_on_submit_fn.is_some() {
-            ply.context.set_text_input_callbacks(text_input_on_changed_fn, text_input_on_submit_fn);
+        {
+            let mut cb = callbacks.borrow_mut();
+            if let Some(hover_fn) = on_hover_fn {
+                cb.hover.insert(element_id, hover_fn);
+            }
+            if let Some(press_fn) = on_press_fn {
+                cb.press.insert(element_id, press_fn);
+            }
+            if let Some(release_fn) = on_release_fn {
+                cb.release.insert(element_id, release_fn);
+            }
+            if let Some(focus_fn) = on_focus_fn {
+                cb.focus.insert(element_id, focus_fn);
+            }
+            if let Some(unfocus_fn) = on_unfocus_fn {
+                cb.unfocus.insert(element_id, unfocus_fn);
+            }
+            if let Some(changed_fn) = text_input_on_changed_fn {
+                cb.text_changed.insert(element_id, changed_fn);
+            }
+            if let Some(submit_fn) = text_input_on_submit_fn {
+                cb.text_submit.insert(element_id, submit_fn);
+            }
         }
 
-        let mut ui = Ui { ply };
-        f(&mut ui);
-        ui.ply.context.close_element();
+        let mut child_ui = Ui {
+            ply,
+            callbacks,
+        };
+        f(&mut child_ui);
+        child_ui.ply.context.close_element();
 
-        Id { id: element_id, ..Default::default() }
+        Id {
+            id: element_id,
+            ..Default::default()
+        }
     }
 
     /// Finalizes the element with no children.
@@ -466,8 +504,8 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 }
 
-impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::Deref
-    for Ui<'ply, CustomElementData>
+impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::Deref
+    for Ui<'a, 'ply, CustomElementData>
 {
     type Target = Ply<CustomElementData>;
 
@@ -476,20 +514,21 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::Dere
     }
 }
 
-impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::DerefMut
-    for Ui<'ply, CustomElementData>
+impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::DerefMut
+    for Ui<'a, 'ply, CustomElementData>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.ply
     }
 }
 
-impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, CustomElementData> {
+impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply, CustomElementData> {
     /// Creates a new element builder for configuring and adding an element.
     /// Finalize with `.children(|ui| {...})` or `.empty()`.
-    pub fn element(&mut self) -> ElementBuilder<'_, CustomElementData> {
+    pub fn element(&mut self) -> ElementBuilder<'_, 'ply, CustomElementData> {
         ElementBuilder {
-            ply: &mut *self.ply,
+            ply: self.ply,
+            callbacks: self.callbacks.clone(),
             inner: engine::ElementDeclaration::default(),
             id: None,
             on_hover_fn: None,
@@ -502,82 +541,80 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'ply, Custom
         }
     }
 
-    /// Adds a text element to the current open element or to the root layout.
-    pub fn text(&mut self, text: &str, config_fn: impl FnOnce(&mut TextConfig) -> &mut TextConfig) {
-        let mut config = TextConfig::new();
-        config_fn(&mut config);
-        let text_config_index = self.ply.context.store_text_element_config(config);
-        self.ply.context.open_text_element(text, text_config_index);
-    }
-
-    /// Returns the current scroll offset of the open scroll container.
-    pub fn scroll_offset(&self) -> Vector2 {
-        self.ply.context.get_scroll_offset()
-    }
-
-    /// Returns if the current element you are creating is hovered
-    pub fn hovered(&self) -> bool {
-        self.ply.context.hovered()
-    }
-
-    /// Returns if the current element you are creating is pressed
-    /// (pointer held down on it, or Enter/Space held on focused element)
-    pub fn pressed(&self) -> bool {
-        self.ply.context.pressed()
-    }
-
-    /// Returns if the current element was pressed this frame.
-    pub fn just_pressed(&self) -> bool {
-        self.ply.context.just_pressed()
-    }
-
-    /// Returns if the current element was released this frame.
-    pub fn just_released(&self) -> bool {
-        self.ply.context.just_released()
-    }
-
-    /// Returns if the current element you are creating has focus.
-    pub fn focused(&self) -> bool {
-        self.ply.context.focused()
-    }
-}
-
-impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData> {
-    #[cfg(feature = "a11y")]
-    fn accessibility_bounds(&self) -> FxHashMap<u32, math::BoundingBox> {
-        let mut accessibility_bounds = FxHashMap::default();
-        for &elem_id in &self.context.accessibility_element_order {
-            if let Some(bounds) = self.context.get_element_data(Id {
-                id: elem_id,
-                ..Default::default()
-            }) {
-                accessibility_bounds.insert(elem_id, bounds);
+    fn dispatch_frame_callbacks(&mut self) {
+        let ply = &mut *self.ply;
+        let mut callbacks = self.callbacks.borrow_mut();
+        for (old_id, new_id) in ply.context.focus_events.drain(..) {
+            if old_id != 0 {
+                if let Some(cb) = callbacks.unfocus.get_mut(&old_id) {
+                    cb(Id { id: old_id, ..Default::default() });
+                }
+            }
+            if new_id != 0 {
+                if let Some(cb) = callbacks.focus.get_mut(&new_id) {
+                    cb(Id { id: new_id, ..Default::default() });
+                }
             }
         }
-        accessibility_bounds
-    }
 
-    /// Starts a new frame, returning a [`Ui`] handle for building the element tree.
-    pub fn begin(
-        &mut self,
-    ) -> Ui<'_, CustomElementData> {
-        jobs::poll_completions();
-
-        if !self.context.is_headless() {
-            self.context.set_layout_dimensions(Dimensions::new(
-                macroquad::prelude::screen_width(),
-                macroquad::prelude::screen_height(),
-            ));
-
-            // Update timing
-            self.context.current_time = macroquad::prelude::get_time();
-            self.context.frame_delta_time = macroquad::prelude::get_frame_time();
+        let pointer_info = ply.context.pointer_info;
+        for eid in ply.context.pointer_over_ids.clone() {
+            if let Some(cb) = callbacks.hover.get_mut(&eid.id) {
+                cb(eid, pointer_info);
+            }
         }
 
-        // Update blink timers for text inputs
-        self.context.update_text_input_blink_timers();
+        if pointer_info.state == engine::PointerDataInteractionState::PressedThisFrame {
+            for eid in ply.context.pressed_element_ids.clone() {
+                if let Some(cb) = callbacks.press.get_mut(&eid.id) {
+                    cb(eid, pointer_info);
+                }
+            }
+        }
+        for eid in ply.context.keyboard_press_events.drain(..) {
+            if let Some(cb) = callbacks.press.get_mut(&eid.id) {
+                cb(eid, pointer_info);
+            }
+        }
 
-        // Auto-update pointer state from macroquad
+        if pointer_info.state == engine::PointerDataInteractionState::ReleasedThisFrame {
+            for eid in ply.context.released_this_frame_ids.clone() {
+                if let Some(cb) = callbacks.release.get_mut(&eid.id) {
+                    cb(eid, pointer_info);
+                }
+            }
+        }
+        for eid in ply.context.keyboard_release_events.drain(..) {
+            if let Some(cb) = callbacks.release.get_mut(&eid.id) {
+                cb(eid, pointer_info);
+            }
+        }
+
+        for (elem_id, text) in ply.context.text_changed_events.drain(..) {
+            if let Some(cb) = callbacks.text_changed.get_mut(&elem_id) {
+                cb(&text);
+            }
+        }
+        for (elem_id, text) in ply.context.text_submit_events.drain(..) {
+            if let Some(cb) = callbacks.text_submit.get_mut(&elem_id) {
+                cb(&text);
+            }
+        }
+    }
+
+    /// Evaluates the layout and dispatches all frame callbacks, returning all render commands.
+    pub fn eval(&mut self) -> Vec<RenderCommand<CustomElementData>> {
+        // Clean up stale networking entries (feature-gated)
+        #[cfg(feature = "net")]
+        net::NET_MANAGER.lock().unwrap().clean();
+
+        let commands = self.context.end_layout();
+        let mut result = Vec::new();
+        for cmd in commands {
+            result.push(RenderCommand::from_engine_render_command(cmd));
+        }
+
+        // Auto-update pointer state and input from macroquad (evaluated against fresh layout)
         if !self.context.is_headless() {
             let (mx, my) = macroquad::prelude::mouse_position();
             let pointer_pos = Vector2::new(mx, my);
@@ -1096,24 +1133,156 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                 let activate_released = is_key_released(KeyCode::Enter) || is_key_released(KeyCode::Space);
                 self.context.handle_keyboard_activation(activate_pressed, activate_released);
             }
+
+            // Show/hide virtual keyboard when text input focus changes (mobile)
+            {
+                let text_input_focused = self.context.is_text_input_focused();
+                let current_focused_id = self.context.focused_element_id;
+                let ime_should_be_enabled =
+                    text_input_focused && !self.context.is_focused_text_input_password();
+
+                let focus_changed = text_input_focused != self.was_text_input_focused
+                    || (text_input_focused && current_focused_id != self.was_focused_element_id);
+
+                if focus_changed {
+                    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+                    if text_input_focused {
+                        let is_password = self.context.is_focused_text_input_password();
+                        let is_multiline = self.context.is_focused_text_input_multiline();
+                        let state = self.context.get_or_create_text_edit_state(current_focused_id);
+                        let display_text = {
+                            #[cfg(feature = "text-styling")]
+                            {
+                                crate::text_input::styling::strip_styling(&state.text)
+                            }
+                            #[cfg(not(feature = "text-styling"))]
+                            {
+                                state.text.clone()
+                            }
+                        };
+
+                        let char_index_to_utf16_index = |s: &str, char_idx: usize| -> usize {
+                            let mut current_char_idx = 0;
+                            let mut utf16_idx = 0;
+                            for c in s.chars() {
+                                if current_char_idx >= char_idx {
+                                    break;
+                                }
+                                utf16_idx += c.len_utf16();
+                                current_char_idx += 1;
+                            }
+                            utf16_idx
+                        };
+
+                        let (sel_start_cp, sel_end_cp) = {
+                            #[cfg(feature = "text-styling")]
+                            {
+                                let anchor = state.selection_anchor.unwrap_or(state.cursor_pos);
+                                let start_cp = crate::text_input::styling::cursor_to_content(&state.text, anchor);
+                                let end_cp = crate::text_input::styling::cursor_to_content(&state.text, state.cursor_pos);
+                                (start_cp, end_cp)
+                            }
+                            #[cfg(not(feature = "text-styling"))]
+                            {
+                                (state.selection_anchor.unwrap_or(state.cursor_pos), state.cursor_pos)
+                            }
+                        };
+                        let u16_start = char_index_to_utf16_index(&display_text, sel_start_cp);
+                        let u16_end = char_index_to_utf16_index(&display_text, sel_end_cp);
+                        
+                        let max_len = self.context.get_focused_text_input_max_length().unwrap_or(0);
+                        macroquad::miniquad::window::update_text_input_state(
+                            display_text,
+                            u16_start,
+                            u16_end,
+                            is_password,
+                            is_multiline,
+                            current_focused_id as u64,
+                            max_len,
+                        );
+                    }
+
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        macroquad::miniquad::window::show_keyboard(text_input_focused);
+                    }
+                    if !text_input_focused {
+                        self.context.clear_ime_preedit();
+                        #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+                        macroquad::miniquad::window::update_text_input_state(
+                            String::new(),
+                            0,
+                            0,
+                            false,
+                            false,
+                            0,
+                            0,
+                        );
+                    }
+                    self.was_text_input_focused = text_input_focused;
+                    self.was_focused_element_id = current_focused_id;
+                }
+                if ime_should_be_enabled != self.was_ime_enabled {
+                    macroquad::miniquad::window::set_ime_enabled(ime_should_be_enabled);
+                    self.was_ime_enabled = ime_should_be_enabled;
+                }
+            }
         }
 
-        // Show/hide virtual keyboard when text input focus changes (mobile)
+        self.dispatch_frame_callbacks();
+
+        // Sync the hidden DOM accessibility tree (web/WASM only)
+        #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
         {
-            let text_input_focused = self.context.is_text_input_focused();
-            let current_focused_id = self.context.focused_element_id;
-            let ime_should_be_enabled =
-                text_input_focused && !self.context.is_focused_text_input_password();
+            let accessibility_bounds = self.accessibility_bounds();
+            let ply = &mut *self.ply;
 
-            let focus_changed = text_input_focused != self.was_text_input_focused
-                || (text_input_focused && current_focused_id != self.was_focused_element_id);
+            accessibility_web::sync_accessibility_tree(
+                &mut ply.web_a11y_state,
+                &ply.context.accessibility_configs,
+                &accessibility_bounds,
+                &ply.context.accessibility_element_order,
+                ply.context.focused_element_id,
+                ply.context.layout_dimensions,
+            );
+        }
 
-            if focus_changed {
-                #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
-                if text_input_focused {
+        // Sync accessibility tree via AccessKit (native platforms)
+        #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
+        {
+            let accessibility_bounds = self.accessibility_bounds();
+            let ply = &mut *self.ply;
+
+            let a11y_actions = accessibility_native::sync_accessibility_tree(
+                &mut ply.native_a11y_state,
+                &ply.context.accessibility_configs,
+                &accessibility_bounds,
+                &ply.context.accessibility_element_order,
+                ply.context.focused_element_id,
+                ply.context.layout_dimensions,
+            );
+            for action in a11y_actions {
+                match action {
+                    accessibility_native::PendingA11yAction::Focus(target_id) => {
+                        self.context.change_focus(target_id);
+                    }
+                    accessibility_native::PendingA11yAction::Click(target_id) => {
+                        let id = Id { id: target_id, ..Default::default() };
+                        self.context.keyboard_press_events.push(id.clone());
+                        self.context.keyboard_release_events.push(id);
+                    }
+                }
+            }
+        }
+
+        #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+        {
+            let active_focused_id = self.context.focused_element_id;
+            if active_focused_id != 0 {
+                if let Some(state) = self.context.text_edit_states.get(&active_focused_id) {
                     let is_password = self.context.is_focused_text_input_password();
                     let is_multiline = self.context.is_focused_text_input_multiline();
-                    let state = self.context.get_or_create_text_edit_state(current_focused_id);
+                    
                     let display_text = {
                         #[cfg(feature = "text-styling")]
                         {
@@ -1155,46 +1324,126 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
                     let u16_end = char_index_to_utf16_index(&display_text, sel_end_cp);
                     
                     let max_len = self.context.get_focused_text_input_max_length().unwrap_or(0);
-                    macroquad::miniquad::window::update_text_input_state(
-                        display_text,
-                        u16_start,
-                        u16_end,
-                        is_password,
-                        is_multiline,
-                        current_focused_id as u64,
-                        max_len,
-                    );
-                }
+                    
+                    let state_changed = match &self.last_ime_state {
+                        Some((old_id, old_text, old_u16_start, old_u16_end)) => {
+                            *old_id != active_focused_id as u64
+                                || *old_text != display_text
+                                || *old_u16_start != u16_start
+                                || *old_u16_end != u16_end
+                        }
+                        None => true,
+                    };
 
-                #[cfg(not(target_os = "linux"))]
-                {
-                    macroquad::miniquad::window::show_keyboard(text_input_focused);
+                    if state_changed {
+                        self.last_ime_state = Some((active_focused_id as u64, display_text.clone(), u16_start, u16_end));
+                        macroquad::miniquad::window::update_text_input_state(
+                            display_text,
+                            u16_start,
+                            u16_end,
+                            is_password,
+                            is_multiline,
+                            active_focused_id as u64,
+                            max_len,
+                        );
+                    }
                 }
-                if !text_input_focused {
-                    self.context.clear_ime_preedit();
-                    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
-                    macroquad::miniquad::window::update_text_input_state(
-                        String::new(),
-                        0,
-                        0,
-                        false,
-                        false,
-                        0,
-                        0,
-                    );
-                }
-                self.was_text_input_focused = text_input_focused;
-                self.was_focused_element_id = current_focused_id;
-            }
-            if ime_should_be_enabled != self.was_ime_enabled {
-                macroquad::miniquad::window::set_ime_enabled(ime_should_be_enabled);
-                self.was_ime_enabled = ime_should_be_enabled;
+            } else if self.last_ime_state.is_some() {
+                self.last_ime_state = None;
             }
         }
+
+        result
+    }
+
+    /// Evaluate the layout and render all commands.
+    pub async fn show(
+        &mut self,
+        handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
+    ) {
+        let commands = self.eval();
+        renderer::render(commands, handle_custom_command).await;
+    }
+
+    /// Adds a text element to the current open element or to the root layout.
+    pub fn text(&mut self, text: &str, config_fn: impl FnOnce(&mut TextConfig) -> &mut TextConfig) {
+        let mut config = TextConfig::new();
+        config_fn(&mut config);
+        let text_config_index = self.ply.context.store_text_element_config(config);
+        self.ply.context.open_text_element(text, text_config_index);
+    }
+
+    /// Returns the current scroll offset of the open scroll container.
+    pub fn scroll_offset(&self) -> Vector2 {
+        self.ply.context.get_scroll_offset()
+    }
+
+    /// Returns if the current element you are creating is hovered
+    pub fn hovered(&self) -> bool {
+        self.ply.context.hovered()
+    }
+
+    /// Returns if the current element you are creating is pressed
+    /// (pointer held down on it, or Enter/Space held on focused element)
+    pub fn pressed(&self) -> bool {
+        self.ply.context.pressed()
+    }
+
+    /// Returns if the current element was pressed this frame.
+    pub fn just_pressed(&self) -> bool {
+        self.ply.context.just_pressed()
+    }
+
+    /// Returns if the current element was released this frame.
+    pub fn just_released(&self) -> bool {
+        self.ply.context.just_released()
+    }
+
+    /// Returns if the current element you are creating has focus.
+    pub fn focused(&self) -> bool {
+        self.ply.context.focused()
+    }
+}
+
+impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData> {
+    #[cfg(feature = "a11y")]
+    fn accessibility_bounds(&self) -> FxHashMap<u32, math::BoundingBox> {
+        let mut accessibility_bounds = FxHashMap::default();
+        for &elem_id in &self.context.accessibility_element_order {
+            if let Some(bounds) = self.context.get_element_data(Id {
+                id: elem_id,
+                ..Default::default()
+            }) {
+                accessibility_bounds.insert(elem_id, bounds);
+            }
+        }
+        accessibility_bounds
+    }
+
+    /// Starts a new frame, returning a [`Ui`] handle for building the element tree.
+    pub fn begin(
+        &mut self,
+    ) -> Ui<'_, '_, CustomElementData> {
+        jobs::poll_completions();
+
+        if !self.context.is_headless() {
+            self.context.set_layout_dimensions(Dimensions::new(
+                macroquad::prelude::screen_width(),
+                macroquad::prelude::screen_height(),
+            ));
+
+            // Update timing
+            self.context.current_time = macroquad::prelude::get_time();
+            self.context.frame_delta_time = macroquad::prelude::get_frame_time();
+        }
+
+        // Update blink timers for text inputs
+        self.context.update_text_input_blink_timers();
 
         self.context.begin_layout();
         Ui {
             ply: self,
+            callbacks: std::rc::Rc::new(std::cell::RefCell::new(FrameCallbacks::default())),
         }
     }
 
@@ -1422,148 +1671,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     /// Sets the scroll position for a scroll container or text input with the given ID.
     pub fn set_scroll_position(&mut self, id: impl Into<Id>, position: impl Into<Vector2>) {
         self.context.set_scroll_position(id.into(), position.into());
-    }
-
-    /// Evaluate the layout and return all render commands.
-    pub fn eval(&mut self) -> Vec<RenderCommand<CustomElementData>> {
-        // Clean up stale networking entries (feature-gated)
-        #[cfg(feature = "net")]
-        net::NET_MANAGER.lock().unwrap().clean();
-
-        let commands = self.context.end_layout();
-        let mut result = Vec::new();
-        for cmd in commands {
-            result.push(RenderCommand::from_engine_render_command(cmd));
-        }
-
-        // Sync the hidden DOM accessibility tree (web/WASM only)
-        #[cfg(all(feature = "a11y", target_arch = "wasm32"))]
-        {
-            let accessibility_bounds = self.accessibility_bounds();
-
-            accessibility_web::sync_accessibility_tree(
-                &mut self.web_a11y_state,
-                &self.context.accessibility_configs,
-                &accessibility_bounds,
-                &self.context.accessibility_element_order,
-                self.context.focused_element_id,
-                self.context.layout_dimensions,
-            );
-        }
-
-        // Sync accessibility tree via AccessKit (native platforms)
-        #[cfg(all(feature = "a11y", not(target_arch = "wasm32")))]
-        {
-            let accessibility_bounds = self.accessibility_bounds();
-
-            let a11y_actions = accessibility_native::sync_accessibility_tree(
-                &mut self.native_a11y_state,
-                &self.context.accessibility_configs,
-                &accessibility_bounds,
-                &self.context.accessibility_element_order,
-                self.context.focused_element_id,
-                self.context.layout_dimensions,
-            );
-            for action in a11y_actions {
-                match action {
-                    accessibility_native::PendingA11yAction::Focus(target_id) => {
-                        self.context.change_focus(target_id);
-                    }
-                    accessibility_native::PendingA11yAction::Click(target_id) => {
-                        self.context.fire_press(target_id);
-                    }
-                }
-            }
-        }
-
-        #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
-        {
-            let active_focused_id = self.context.focused_element_id;
-            if active_focused_id != 0 {
-                if let Some(state) = self.context.text_edit_states.get(&active_focused_id) {
-                    let is_password = self.context.is_focused_text_input_password();
-                    let is_multiline = self.context.is_focused_text_input_multiline();
-                    
-                    let display_text = {
-                        #[cfg(feature = "text-styling")]
-                        {
-                            crate::text_input::styling::strip_styling(&state.text)
-                        }
-                        #[cfg(not(feature = "text-styling"))]
-                        {
-                            state.text.clone()
-                        }
-                    };
-
-                    let char_index_to_utf16_index = |s: &str, char_idx: usize| -> usize {
-                        let mut current_char_idx = 0;
-                        let mut utf16_idx = 0;
-                        for c in s.chars() {
-                            if current_char_idx >= char_idx {
-                                break;
-                            }
-                            utf16_idx += c.len_utf16();
-                            current_char_idx += 1;
-                        }
-                        utf16_idx
-                    };
-
-                    let (sel_start_cp, sel_end_cp) = {
-                        #[cfg(feature = "text-styling")]
-                        {
-                            let anchor = state.selection_anchor.unwrap_or(state.cursor_pos);
-                            let start_cp = crate::text_input::styling::cursor_to_content(&state.text, anchor);
-                            let end_cp = crate::text_input::styling::cursor_to_content(&state.text, state.cursor_pos);
-                            (start_cp, end_cp)
-                        }
-                        #[cfg(not(feature = "text-styling"))]
-                        {
-                            (state.selection_anchor.unwrap_or(state.cursor_pos), state.cursor_pos)
-                        }
-                    };
-                    let u16_start = char_index_to_utf16_index(&display_text, sel_start_cp);
-                    let u16_end = char_index_to_utf16_index(&display_text, sel_end_cp);
-                    
-                    let max_len = self.context.get_focused_text_input_max_length().unwrap_or(0);
-                    
-                    let state_changed = match &self.last_ime_state {
-                        Some((old_id, old_text, old_u16_start, old_u16_end)) => {
-                            *old_id != active_focused_id as u64
-                                || *old_text != display_text
-                                || *old_u16_start != u16_start
-                                || *old_u16_end != u16_end
-                        }
-                        None => true,
-                    };
-
-                    if state_changed {
-                        self.last_ime_state = Some((active_focused_id as u64, display_text.clone(), u16_start, u16_end));
-                        macroquad::miniquad::window::update_text_input_state(
-                            display_text,
-                            u16_start,
-                            u16_end,
-                            is_password,
-                            is_multiline,
-                            active_focused_id as u64,
-                            max_len,
-                        );
-                    }
-                }
-            } else if self.last_ime_state.is_some() {
-                self.last_ime_state = None;
-            }
-        }
-
-        result
-    }
-
-    /// Evaluate the layout and render all commands.
-    pub async fn show(
-        &mut self,
-        handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
-    ) {
-        let commands = self.eval();
-        renderer::render(commands, handle_custom_command).await;
     }
 }
 
@@ -2792,12 +2899,9 @@ mod tests {
 
     #[test]
     fn test_on_press_callback_fires() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
         let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
-        let press_count = Rc::new(RefCell::new(0u32));
-        let release_count = Rc::new(RefCell::new(0u32));
+        let mut press_count = 0u32;
+        let mut release_count = 0u32;
 
         // Frame 1: lay out a 100x100 element and eval to establish bounding boxes
         {
@@ -2810,29 +2914,39 @@ mod tests {
             ui.eval();
         }
 
-        // Frame 2: add press callbacks
+        // Frame 2: add press callbacks and simulate pointer press
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
         {
-            let pc = press_count.clone();
-            let rc = release_count.clone();
             let mut ui = ply.begin();
             ui.element()
                 .id("btn")
                 .width(fixed!(100.0))
                 .height(fixed!(100.0))
-                .on_press(move |_, _| { *pc.borrow_mut() += 1; })
-                .on_release(move |_, _| { *rc.borrow_mut() += 1; })
+                .on_press(|_, _| { press_count += 1; })
+                .on_release(|_, _| { release_count += 1; })
                 .empty();
             ui.eval();
         }
 
-        // Simulate pointer press at (50, 50) — inside the element
-        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
-        assert_eq!(*press_count.borrow(), 1, "on_press should fire once");
-        assert_eq!(*release_count.borrow(), 0, "on_release should not fire yet");
+        assert_eq!(press_count, 1, "on_press should fire once");
+        assert_eq!(release_count, 0, "on_release should not fire yet");
 
-        // Simulate pointer release
+        // Frame 3: add callbacks and simulate pointer release
         ply.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
-        assert_eq!(*release_count.borrow(), 1, "on_release should fire once");
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .on_press(|_, _| { press_count += 1; })
+                .on_release(|_, _| { release_count += 1; })
+                .empty();
+            ui.eval();
+        }
+
+        assert_eq!(press_count, 1, "on_press should not fire on release");
+        assert_eq!(release_count, 1, "on_release should fire once");
     }
 
     #[test]
@@ -3292,83 +3406,103 @@ mod tests {
 
     #[test]
     fn test_on_focus_callback_fires_on_tab() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
         let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
-        let focus_a = Rc::new(RefCell::new(0u32));
-        let unfocus_a = Rc::new(RefCell::new(0u32));
-        let focus_b = Rc::new(RefCell::new(0u32));
+        let mut focus_a = 0u32;
+        let mut unfocus_a = 0u32;
+        let mut focus_b = 0u32;
 
-        // Frame 1: create focusable elements with on_focus/on_unfocus
+        // Frame 1: create focusable elements with on_focus/on_unfocus and cycle focus to A
         {
-            let fa = focus_a.clone();
-            let ua = unfocus_a.clone();
-            let fb = focus_b.clone();
             let mut ui = ply.begin();
             ui.element()
                 .id("a")
                 .width(fixed!(100.0))
                 .height(fixed!(50.0))
                 .accessibility(|a| a.button("A"))
-                .on_focus(move |_| { *fa.borrow_mut() += 1; })
-                .on_unfocus(move |_| { *ua.borrow_mut() += 1; })
+                .on_focus(|_| { focus_a += 1; })
+                .on_unfocus(|_| { unfocus_a += 1; })
                 .empty();
             ui.element()
                 .id("b")
                 .width(fixed!(100.0))
                 .height(fixed!(50.0))
                 .accessibility(|a| a.button("B"))
-                .on_focus(move |_| { *fb.borrow_mut() += 1; })
+                .on_focus(|_| { focus_b += 1; })
                 .empty();
+            ui.ply.context.cycle_focus(false);
             ui.eval();
         }
 
-        // Tab → focus A
-        ply.context.cycle_focus(false);
-        assert_eq!(*focus_a.borrow(), 1, "on_focus should fire for A");
-        assert_eq!(*unfocus_a.borrow(), 0, "on_unfocus should not fire yet");
+        assert_eq!(focus_a, 1, "on_focus should fire for A");
+        assert_eq!(unfocus_a, 0, "on_unfocus should not fire yet");
 
-        // Tab → focus B (unfocus A)
-        ply.context.cycle_focus(false);
-        assert_eq!(*unfocus_a.borrow(), 1, "on_unfocus should fire for A");
-        assert_eq!(*focus_b.borrow(), 1, "on_focus should fire for B");
-    }
-
-    #[test]
-    fn test_on_focus_callback_fires_on_set_focus() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
-        let focus_count = Rc::new(RefCell::new(0u32));
-        let unfocus_count = Rc::new(RefCell::new(0u32));
-
-        let id_a = Id::from("a").id;
-
-        // Frame 1
+        // Frame 2: Tab → focus B (unfocus A)
         {
-            let fc = focus_count.clone();
-            let uc = unfocus_count.clone();
             let mut ui = ply.begin();
             ui.element()
                 .id("a")
                 .width(fixed!(100.0))
                 .height(fixed!(50.0))
                 .accessibility(|a| a.button("A"))
-                .on_focus(move |_| { *fc.borrow_mut() += 1; })
-                .on_unfocus(move |_| { *uc.borrow_mut() += 1; })
+                .on_focus(|_| { focus_a += 1; })
+                .on_unfocus(|_| { unfocus_a += 1; })
                 .empty();
+            ui.element()
+                .id("b")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("B"))
+                .on_focus(|_| { focus_b += 1; })
+                .empty();
+            ui.ply.context.cycle_focus(false);
             ui.eval();
         }
 
-        // Programmatic set_focus
-        ply.context.set_focus(id_a);
-        assert_eq!(*focus_count.borrow(), 1, "on_focus should fire on set_focus");
+        assert_eq!(unfocus_a, 1, "on_unfocus should fire for A");
+        assert_eq!(focus_b, 1, "on_focus should fire for B");
+    }
 
-        // clear_focus
-        ply.context.clear_focus();
-        assert_eq!(*unfocus_count.borrow(), 1, "on_unfocus should fire on clear_focus");
+    #[test]
+    fn test_on_focus_callback_fires_on_set_focus() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut focus_count = 0u32;
+        let mut unfocus_count = 0u32;
+
+        let id_a = Id::from("a").id;
+
+        // Frame 1: programmatic set_focus during frame
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("A"))
+                .on_focus(|_| { focus_count += 1; })
+                .on_unfocus(|_| { unfocus_count += 1; })
+                .empty();
+            ui.ply.context.set_focus(id_a);
+            ui.eval();
+        }
+
+        assert_eq!(focus_count, 1, "on_focus should fire on set_focus");
+
+        // Frame 2: clear_focus during frame
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("a")
+                .width(fixed!(100.0))
+                .height(fixed!(50.0))
+                .accessibility(|a| a.button("A"))
+                .on_focus(|_| { focus_count += 1; })
+                .on_unfocus(|_| { unfocus_count += 1; })
+                .empty();
+            ui.ply.context.clear_focus();
+            ui.eval();
+        }
+
+        assert_eq!(unfocus_count, 1, "on_unfocus should fire on clear_focus");
     }
 
     #[test]
