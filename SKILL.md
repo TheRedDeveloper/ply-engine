@@ -1025,20 +1025,16 @@ ui.element().id("second").width(fit!()).height(fit!())
 ### 16.8 Text Input + Text Styling Cursor Helpers
 
 ```rust
-ui.element().width(fit!()).height(fit!())
+ui.element().id("editor").width(fixed!(400.0)).height(fixed!(120.0))
   .layout(|l| l.padding(BACKGROUND_PADDING))
   .background_color(BACKGROUND_COLOR)
-  .children(|ui| {  
-    ui.element().id("editor").width(fixed!(400.0)).height(fixed!(120.0))
-      .text_input(|t| t
-        .multiline()
-        .font_size(24)
-        .drag_select()
-        .no_styles_movement()
-        .on_changed(|text| println!("changed: {text}"))
-      )
-      .empty();
-  });
+  .text_input(|t| t
+    .multiline()
+    .font_size(24)
+    .drag_select()
+    .no_styles_movement()
+    .on_changed(|text| println!("changed: {text}"))
+  );
 
 let raw = ui.get_text_value("editor").to_string();
 let plain = styling::strip_styling(&raw);
@@ -1053,7 +1049,7 @@ if raw != highlighted {
 }
 ```
 
-The wrapping lets us add a padding for the background. Since the text input has no inbuilt padding, without the padding it would look too tight with the text. Also note how the .text_input closure is styled with the letter `t` on the first line and then the `.arguments()` on the following lines. This is how you should style builder that stretch across multiple lines.
+`.text_input()` is a terminal method on `ElementBuilder` (returning `Id`), allowing developers to configure layout modifiers like `.padding()` directly on the housing element itself. The scrollable area includes the padding and scrollbars extend to include the padded perimeter. Also note how the `.text_input` closure is styled with the letter `t` on the first line and then the `.arguments()` on the following lines. This is how you should style builders that stretch across multiple lines.
 
 ### 16.9 Floating Tooltip
 

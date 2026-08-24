@@ -1655,9 +1655,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             && (self.current_time - state.last_click_time) < 0.4;
 
                         if !is_placeholder {
+                            let layout_idx = self.layout_elements[open_idx].layout_config_index;
+                            let pad = self.layout_configs[layout_idx].padding;
+                            let pad_left = pad.left as f32;
+                            let pad_top = pad.top as f32;
+                            let pad_right = pad.right as f32;
+                            let inner_w = (click_w - pad_left - pad_right).max(0.0);
+
                             let raw_click_pos = if ti_config.is_multiline {
-                                let clamped_x = click_x.clamp(0.0, click_w.max(0.0));
-                                let clamped_y = click_y.clamp(0.0, click_h.max(0.0));
+                                let clamped_x = (click_x - pad_left).clamp(0.0, inner_w);
                                 let disp_text = crate::text_input::display_text(
                                     &state.text,
                                     &ti_config.placeholder,
@@ -1665,7 +1671,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                 );
                                 let visual_lines = crate::text_input::wrap_lines(
                                     &disp_text,
-                                    click_w,
+                                    inner_w,
                                     ti_config.font_asset,
                                     ti_config.font_size,
                                     measure_fn.as_ref(),
@@ -1682,7 +1688,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         };
                                         measure_fn("Mg", &config).height
                                     };
-                                    let adjusted_y = clamped_y + state.scroll_offset_y;
+                                    let adjusted_y = (click_y - pad_top).max(0.0) + state.scroll_offset_y;
                                     let clicked_line = (adjusted_y / line_height).floor().max(0.0) as usize;
                                     let clicked_line = clicked_line.min(visual_lines.len().saturating_sub(1));
 
@@ -1707,7 +1713,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     ti_config.font_size,
                                     measure_fn.as_ref(),
                                 );
-                                let adjusted_x = click_x + state.scroll_offset;
+                                let adjusted_x = click_x - pad_left + state.scroll_offset;
                                 crate::text_input::find_nearest_char_boundary(
                                     adjusted_x,
                                     &char_x_positions,
@@ -4325,6 +4331,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         effects: Vec::new(),
                                     });
 
+                                    let layout_idx = self.layout_elements[current_elem_idx].layout_config_index;
+                                    let pad = self.layout_configs[layout_idx].padding;
+                                    let pad_left = pad.left as f32;
+                                    let pad_top = pad.top as f32;
+                                    let pad_right = pad.right as f32;
+                                    let pad_bottom = pad.bottom as f32;
+                                    let inner_width = (current_bbox.width - pad_left - pad_right).max(0.0);
+                                    let inner_height = (current_bbox.height - pad_top - pad_bottom).max(0.0);
+
                                     if ti_config.is_multiline {
                                         // ── Multiline rendering (with word wrapping) ──
                                         let scroll_offset_x = state.scroll_offset;
@@ -4333,7 +4348,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         let visual_lines = if let Some(ref measure_fn) = self.measure_text_fn {
                                             crate::text_input::wrap_lines(
                                                 &render_text,
-                                                current_bbox.width,
+                                                inner_width,
                                                 ti_config.font_asset,
                                                 ti_config.font_size,
                                                 measure_fn.as_ref(),
@@ -4400,10 +4415,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     );
                                                     let sel_width = x_end - x_start;
                                                     if sel_width > 0.0 {
-                                                        let sel_y = current_bbox.y + line_idx as f32 * line_step - scroll_offset_y;
+                                                        let sel_y = current_bbox.y + pad_top + line_idx as f32 * line_step - scroll_offset_y;
                                                         self.add_render_command(InternalRenderCommand {
                                                             bounding_box: BoundingBox::new(
-                                                            current_bbox.x - scroll_offset_x + x_start,
+                                                                current_bbox.x + pad_left - scroll_offset_x + x_start,
                                                                 sel_y,
                                                                 sel_width,
                                                                 line_step,
@@ -4412,13 +4427,13 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                             render_data: InternalRenderData::Rectangle {
                                                                 background_color: ti_config.selection_color,
                                                                 corner_radius: CornerRadius::default(),
-                                                                    },
-                                                                user_data: 0,
+                                                            },
+                                                            user_data: 0,
                                                             id: hash_number(1001 + line_idx as u32, elem_id).id,
-                                                                z_index: root.z_index,
-                                                                visual_rotation: None,
-                                                                shape_rotation: None,
-                                                                effects: Vec::new(),
+                                                            z_index: root.z_index,
+                                                            visual_rotation: None,
+                                                            shape_rotation: None,
+                                                            effects: Vec::new(),
                                                         });
                                                     }
                                                 }
@@ -4430,10 +4445,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             if !vl.text.is_empty() {
                                                 let positions = &line_positions[line_idx];
                                                 let text_width = positions.last().copied().unwrap_or(0.0);
-                                                let line_y = current_bbox.y + line_idx as f32 * line_step + line_y_offset - scroll_offset_y;
+                                                let line_y = current_bbox.y + pad_top + line_idx as f32 * line_step + line_y_offset - scroll_offset_y;
                                                 self.add_render_command(InternalRenderCommand {
                                                     bounding_box: BoundingBox::new(
-                                                        current_bbox.x - scroll_offset_x,
+                                                        current_bbox.x + pad_left - scroll_offset_x,
                                                         line_y,
                                                         text_width,
                                                         natural_font_height,
@@ -4502,6 +4517,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                     let underline_width = x_end - x_start;
                                                     if underline_width > 0.0 {
                                                         let line_y = current_bbox.y
+                                                            + pad_top
                                                             + line_idx as f32 * line_step
                                                             + line_y_offset
                                                             - scroll_offset_y;
@@ -4513,6 +4529,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                             InternalRenderCommand {
                                                                 bounding_box: BoundingBox::new(
                                                                     current_bbox.x
+                                                                        + pad_left
                                                                         - scroll_offset_x
                                                                         + x_start,
                                                                     underline_y,
@@ -4549,14 +4566,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         if is_focused {
                                             let cursor_positions = &line_positions[cursor_line.min(line_positions.len() - 1)];
                                             let cursor_x_pos = cursor_positions.get(cursor_col).copied().unwrap_or(0.0);
-                                            let cursor_y = current_bbox.y + cursor_line as f32 * line_step - scroll_offset_y;
+                                            let cursor_y = current_bbox.y + pad_top + cursor_line as f32 * line_step - scroll_offset_y;
+                                            let cursor_x = current_bbox.x + pad_left - scroll_offset_x + cursor_x_pos;
                                             let dpi_scale =
                                                 macroquad::miniquad::window::dpi_scale();
-                                            let ime_x = ((current_bbox.x - scroll_offset_x
-                                                + cursor_x_pos)
-                                                * dpi_scale)
-                                                .round()
-                                                as i32;
+                                            let ime_x = (cursor_x * dpi_scale).round() as i32;
                                             let ime_y = ((cursor_y + natural_font_height)
                                                 * dpi_scale)
                                                 .round()
@@ -4568,7 +4582,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             if state.cursor_visible() {
                                                 self.add_render_command(InternalRenderCommand {
                                                     bounding_box: BoundingBox::new(
-                                                        current_bbox.x - scroll_offset_x + cursor_x_pos,
+                                                        cursor_x,
                                                         cursor_y,
                                                         2.0,
                                                         line_step,
@@ -4601,8 +4615,9 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         };
 
                                         let scroll_offset = state.scroll_offset;
-                                        let text_x = current_bbox.x - scroll_offset;
+                                        let text_x = current_bbox.x + pad_left - scroll_offset;
                                         let font_height = natural_font_height;
+                                        let text_y = current_bbox.y + pad_top + (inner_height - font_height) / 2.0;
 
                                         // Convert cursor/selection to raw positions for char_x_positions indexing
                                         #[cfg(feature = "text-styling")]
@@ -4634,11 +4649,10 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 let sel_end_x = char_x_positions.get(sel_end).copied().unwrap_or(0.0);
                                                 let sel_width = sel_end_x - sel_start_x;
                                                 if sel_width > 0.0 {
-                                                    let sel_y = current_bbox.y + (current_bbox.height - font_height) / 2.0;
                                                     self.add_render_command(InternalRenderCommand {
                                                         bounding_box: BoundingBox::new(
                                                             text_x + sel_start_x,
-                                                            sel_y,
+                                                            text_y,
                                                             sel_width,
                                                             font_height,
                                                         ),
@@ -4665,7 +4679,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             content_height = font_height;
                                             scroll_pos_x = scroll_offset;
                                             scroll_pos_y = 0.0;
-                                            let text_y = current_bbox.y + (current_bbox.height - font_height) / 2.0;
                                             self.add_render_command(InternalRenderCommand {
                                                 bounding_box: BoundingBox::new(
                                                     text_x,
@@ -4714,9 +4727,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 let x_end = x1.max(x2);
                                                 let underline_width = x_end - x_start;
                                                 if underline_width > 0.0 {
-                                                    let preedit_y = current_bbox.y
-                                                        + (current_bbox.height - font_height)
-                                                            / 2.0;
+                                                    let preedit_y = text_y;
                                                     let underline_height = 2.0;
                                                     let underline_y = preedit_y + font_height
                                                         - underline_height;
@@ -4754,13 +4765,11 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 .get(render_cursor_pos)
                                                 .copied()
                                                 .unwrap_or(0.0);
-                                            let cursor_y = current_bbox.y + (current_bbox.height - font_height) / 2.0;
+                                            let cursor_x = text_x + cursor_x_pos;
                                             let dpi_scale =
                                                 macroquad::miniquad::window::dpi_scale();
-                                            let ime_x = ((text_x + cursor_x_pos) * dpi_scale)
-                                                .round()
-                                                as i32;
-                                            let ime_y = ((cursor_y + font_height) * dpi_scale)
+                                            let ime_x = (cursor_x * dpi_scale).round() as i32;
+                                            let ime_y = ((text_y + font_height) * dpi_scale)
                                                 .round()
                                                 as i32;
                                             macroquad::miniquad::window::set_ime_position(
@@ -4771,7 +4780,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 self.add_render_command(InternalRenderCommand {
                                                     bounding_box: BoundingBox::new(
                                                         text_x + cursor_x_pos,
-                                                        cursor_y,
+                                                        text_y,
                                                         2.0,
                                                         font_height,
                                                     ),
@@ -4802,7 +4811,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             let vertical = if ti_config.is_multiline {
                                                 compute_vertical_scrollbar_geometry(
                                                     current_bbox,
-                                                    content_height,
+                                                    content_height + pad_top + pad_bottom,
                                                     scroll_pos_y,
                                                     scrollbar_cfg,
                                                 )
@@ -4812,7 +4821,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
 
                                             let horizontal = compute_horizontal_scrollbar_geometry(
                                                 current_bbox,
-                                                content_width,
+                                                content_width + pad_left + pad_right,
                                                 scroll_pos_x,
                                                 scrollbar_cfg,
                                             );
@@ -6888,11 +6897,24 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         if focused == 0 {
             return;
         }
-        // Get bounding box for the focused text input
-        let (visible_width, visible_height) = self.layout_element_map
+        // Get bounding box and padding for the focused text input
+        let (pad_left, pad_top, pad_right, pad_bottom) = if let Some(item) = self.layout_element_map.get(&focused) {
+            if item.layout_element_index >= 0 {
+                let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                let pad = self.layout_configs[layout_idx].padding;
+                (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            }
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+        let (raw_w, raw_h) = self.layout_element_map
             .get(&focused)
             .map(|item| (item.bounding_box.width, item.bounding_box.height))
             .unwrap_or((0.0, 0.0));
+        let visible_width = (raw_w - pad_left - pad_right).max(0.0);
+        let visible_height = (raw_h - pad_top - pad_bottom).max(0.0);
         if visible_width <= 0.0 {
             return;
         }
@@ -7147,8 +7169,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         if let Some(item) = self.layout_element_map.get(&focused) {
                             if let Some(state) = self.text_edit_states.get(&focused).cloned() {
                                 let bbox = item.bounding_box;
+                                let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
+                                    let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                                    let pad = self.layout_configs[layout_idx].padding;
+                                    (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+                                } else {
+                                    (0.0, 0.0, 0.0, 0.0)
+                                };
                                 let (content_width, content_height) =
-                                    self.text_input_content_size(&state, &ti_cfg, bbox.width);
+                                    self.text_input_content_size(&state, &ti_cfg, (bbox.width - pad_left - pad_right).max(0.0));
 
                                 let idle_frames = self
                                     .text_input_scrollbar_idle_frames
@@ -7161,7 +7190,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     if ti_cfg.is_multiline {
                                         if let Some(geo) = compute_vertical_scrollbar_geometry(
                                             bbox,
-                                            content_height,
+                                            content_height + pad_top + pad_bottom,
                                             state.scroll_offset_y,
                                             scrollbar_cfg,
                                         ) {
@@ -7179,7 +7208,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     if !started_scrollbar_drag {
                                         if let Some(geo) = compute_horizontal_scrollbar_geometry(
                                             bbox,
-                                            content_width,
+                                            content_width + pad_left + pad_right,
                                             state.scroll_offset,
                                             scrollbar_cfg,
                                         ) {
@@ -7230,8 +7259,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         {
                             if let Some(scrollbar_cfg) = ti_cfg.scrollbar {
                                 let bbox = item.bounding_box;
+                                let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
+                                    let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                                    let pad = self.layout_configs[layout_idx].padding;
+                                    (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+                                } else {
+                                    (0.0, 0.0, 0.0, 0.0)
+                                };
                                 let (content_width, content_height) = self
-                                    .text_input_content_size(&state_snapshot, &ti_cfg, bbox.width);
+                                    .text_input_content_size(&state_snapshot, &ti_cfg, (bbox.width - pad_left - pad_right).max(0.0));
 
                                 if let Some(state) =
                                     self.text_edit_states.get_mut(&self.text_input_drag_element_id)
@@ -7239,7 +7275,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     if self.text_input_scrollbar_drag_vertical {
                                         if let Some(geo) = compute_vertical_scrollbar_geometry(
                                             bbox,
-                                            content_height,
+                                            content_height + pad_top + pad_bottom,
                                             self.text_input_scrollbar_drag_scroll_origin,
                                             scrollbar_cfg,
                                         ) {
@@ -7254,7 +7290,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                         }
                                     } else if let Some(geo) = compute_horizontal_scrollbar_geometry(
                                         bbox,
-                                        content_width,
+                                        content_width + pad_left + pad_right,
                                         self.text_input_scrollbar_drag_scroll_origin,
                                         scrollbar_cfg,
                                     ) {
@@ -7292,6 +7328,15 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             self.measure_text_fn.as_ref(),
                         ) {
                             let bbox = item.bounding_box;
+                            let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
+                                let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                                let pad = self.layout_configs[layout_idx].padding;
+                                (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+                            } else {
+                                (0.0, 0.0, 0.0, 0.0)
+                            };
+                            let inner_w = (bbox.width - pad_left - pad_right).max(0.0);
+                            let inner_h = (bbox.height - pad_top - pad_bottom).max(0.0);
                             let click_x = pointer.x - bbox.x;
                             let click_y = pointer.y - bbox.y;
 
@@ -7312,8 +7357,8 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                             }
 
                             if let Some(state_snapshot) = self.text_edit_states.get(&drag_id).cloned() {
-                                let clamped_x = click_x.clamp(0.0, bbox.width.max(0.0));
-                                let clamped_y = click_y.clamp(0.0, bbox.height.max(0.0));
+                                let clamped_x = (click_x - pad_left).clamp(0.0, inner_w);
+                                let _clamped_y = (click_y - pad_top).clamp(0.0, inner_h);
                                 let disp_text = crate::text_input::display_text(
                                     &state_snapshot.text,
                                     &ti_cfg.placeholder,
@@ -7324,7 +7369,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     if ti_cfg.is_multiline {
                                         let visual_lines = crate::text_input::wrap_lines(
                                             &disp_text,
-                                            bbox.width,
+                                            inner_w,
                                             ti_cfg.font_asset,
                                             ti_cfg.font_size,
                                             measure_fn.as_ref(),
@@ -7341,7 +7386,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                                 measure_fn("Mg", &config).height
                                             };
 
-                                            let adjusted_y = clamped_y + state_snapshot.scroll_offset_y;
+                                            let adjusted_y = (click_y - pad_top).max(0.0) + state_snapshot.scroll_offset_y;
                                             let clicked_line = (adjusted_y / line_height).floor().max(0.0) as usize;
                                             let clicked_line = clicked_line.min(visual_lines.len().saturating_sub(1));
 
@@ -7384,7 +7429,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                             ti_cfg.font_size,
                                             measure_fn.as_ref(),
                                         );
-                                        let adjusted_x = clamped_x + state_snapshot.scroll_offset;
+                                        let adjusted_x = (click_x - pad_left).max(0.0) + state_snapshot.scroll_offset;
 
                                         if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
                                             #[cfg(feature = "text-styling")]
@@ -7447,9 +7492,23 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             let is_multiline = cfg.is_multiline;
             let is_password = cfg.is_password;
 
-            let (visible_width, visible_height) = self.layout_element_map.get(&elem_id)
+            let (pad_left, pad_top, pad_right, pad_bottom) = if let Some(item) = self.layout_element_map.get(&elem_id) {
+                if item.layout_element_index >= 0 {
+                    let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                    let pad = self.layout_configs[layout_idx].padding;
+                    (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+                } else {
+                    (0.0, 0.0, 0.0, 0.0)
+                }
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
+
+            let (raw_w, raw_h) = self.layout_element_map.get(&elem_id)
                 .map(|item| (item.bounding_box.width, item.bounding_box.height))
                 .unwrap_or((200.0, 0.0));
+            let visible_width = (raw_w - pad_left - pad_right).max(0.0);
+            let visible_height = (raw_h - pad_top - pad_bottom).max(0.0);
 
             let text_empty = self.text_edit_states.get(&elem_id)
                 .map(|s| s.text.is_empty())
@@ -7660,11 +7719,25 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 return;
             };
 
-            let (visible_width, visible_height) = self
+            let (pad_left, pad_top, pad_right, pad_bottom) = if let Some(item) = self.layout_element_map.get(&id.id) {
+                if item.layout_element_index >= 0 {
+                    let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                    let pad = self.layout_configs[layout_idx].padding;
+                    (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+                } else {
+                    (0.0, 0.0, 0.0, 0.0)
+                }
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
+
+            let (raw_w, raw_h) = self
                 .layout_element_map
                 .get(&id.id)
                 .map(|item| (item.bounding_box.width, item.bounding_box.height))
                 .unwrap_or((0.0, 0.0));
+            let visible_width = (raw_w - pad_left - pad_right).max(0.0);
+            let visible_height = (raw_h - pad_top - pad_bottom).max(0.0);
 
             let (content_width, content_height) =
                 self.text_input_content_size(&state_snapshot, &config, visible_width);

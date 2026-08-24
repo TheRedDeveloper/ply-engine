@@ -421,20 +421,19 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     ///         .font_size(18)
     ///         .on_changed(|text| println!("Text changed: {}", text))
     ///         .on_submit(|text| println!("Submitted: {}", text))
-    ///     )
-    ///     .empty();
+    ///     );
     /// ```
     #[inline]
     pub fn text_input(
         mut self,
         f: impl for<'b> FnOnce(&'b mut text_input::TextInputBuilder<'ply>) -> &'b mut text_input::TextInputBuilder<'ply>,
-    ) -> Self {
+    ) -> Id {
         let mut builder = text_input::TextInputBuilder::new();
         f(&mut builder);
         self.inner.text_input = Some(builder.config);
         self.text_input_on_changed_fn = builder.on_changed_fn;
         self.text_input_on_submit_fn = builder.on_submit_fn;
-        self
+        self.empty()
     }
 
     /// Finalizes the element with children defined in a closure.
@@ -3776,4 +3775,61 @@ mod tests {
             assert!(h_thumb.bounding_box.x > 0.0);
         }
     }
+
+    #[test]
+    fn test_terminal_text_input_with_padding() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        ply.set_measure_text_function(|text, _| {
+            Dimensions::new(text.len() as f32 * 10.0, 20.0)
+        });
+
+        let id = {
+            let mut ui = ply.begin();
+            let ret_id = ui.element()
+                .id("padded_input")
+                .width(fixed!(200.0))
+                .height(fixed!(50.0))
+                .layout(|l| l.padding((10u16, 0u16, 0u16, 16u16)))
+                .text_input(|t| t
+                    .placeholder("Hello")
+                    .scrollbar(|s| s)
+                );
+            assert_eq!(ret_id.id, Id::from("padded_input").id);
+            let items = ui.eval();
+
+            // Text command should be offset by padding
+            let text_cmd = items
+                .iter()
+                .find(|cmd| matches!(cmd.config, render_commands::RenderCommandConfig::Text(_)))
+                .expect("Expected text render command");
+            assert_eq!(text_cmd.bounding_box.x, 16.0);
+
+            ret_id
+        };
+
+        // Ensure text value can be set and read directly on the element
+        {
+            let mut ui = ply.begin();
+            ui.set_text_value(id.clone(), "Long test text for scrolling");
+            ui.element()
+                .id("padded_input")
+                .width(fixed!(200.0))
+                .height(fixed!(50.0))
+                .layout(|l| l.padding((10u16, 0u16, 0u16, 16u16)))
+                .text_input(|t| t
+                    .placeholder("Hello")
+                    .scrollbar(|s| s)
+                );
+            let items = ui.eval();
+            assert_eq!(ui.get_text_value(id), "Long test text for scrolling");
+
+            // Text render command should still start at padded x position (when scroll offset is 0)
+            let text_cmd = items
+                .iter()
+                .find(|cmd| matches!(cmd.config, render_commands::RenderCommandConfig::Text(_)))
+                .expect("Expected text render command");
+            assert_eq!(text_cmd.bounding_box.x, 16.0);
+        }
+    }
 }
+
