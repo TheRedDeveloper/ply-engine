@@ -2,14 +2,14 @@ use crate::align::{AlignX, AlignY};
 use crate::id::Id;
 use crate::{color::Color, Vector2, engine};
 
-/// Specifies how pointer capture should behave for floating elements.
+/// Specifies how pointer capture should behave.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum PointerCaptureMode {
     /// Captures all pointer input.
-    #[default]
     Capture,
     /// Allows pointer input to pass through.
+    #[default]
     Passthrough,
 }
 

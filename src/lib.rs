@@ -348,6 +348,13 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
+    /// Captures the pointer, preventing it from propagating to parent elements.
+    #[inline]
+    pub fn capture(mut self) -> Self {
+        self.inner.pointer_capture_mode = elements::PointerCaptureMode::Capture;
+        self
+    }
+
     /// When set, clicking this element will not steal focus.
     /// Use this for toolbar buttons that modify a text input's content without unfocusing it.
     #[inline]
@@ -3872,6 +3879,207 @@ mod tests {
                 .expect("Expected text render command");
             assert_eq!(text_cmd.bounding_box.x, 16.0);
         }
+    }
+
+    #[test]
+    fn test_element_capture_stops_propagation_to_parent() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut parent_pressed = 0u32;
+        let mut parent_released = 0u32;
+        let mut child_pressed = 0u32;
+        let mut child_released = 0u32;
+        let mut grandchild_pressed = 0u32;
+
+        // Frame 1: layout tree
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("parent")
+                .width(fixed!(300.0))
+                .height(fixed!(300.0))
+                .children(|ui| {
+                    ui.element()
+                        .id("child_btn")
+                        .capture()
+                        .width(fixed!(100.0))
+                        .height(fixed!(100.0))
+                        .children(|ui| {
+                            ui.element()
+                                .id("grandchild")
+                                .width(fixed!(50.0))
+                                .height(fixed!(50.0))
+                                .empty();
+                        });
+                });
+            ui.eval();
+        }
+
+        // Frame 2: press on child button (25.0, 25.0) which is inside grandchild, child, and parent
+        ply.context.set_pointer_state(Vector2::new(25.0, 25.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("parent")
+                .width(fixed!(300.0))
+                .height(fixed!(300.0))
+                .on_press(|_, _| { parent_pressed += 1; })
+                .on_release(|_, _, _| { parent_released += 1; })
+                .children(|ui| {
+                    ui.element()
+                        .id("child_btn")
+                        .capture()
+                        .width(fixed!(100.0))
+                        .height(fixed!(100.0))
+                        .on_press(|_, _| { child_pressed += 1; })
+                        .on_release(|_, _, _| { child_released += 1; })
+                        .children(|ui| {
+                            ui.element()
+                                .id("grandchild")
+                                .width(fixed!(50.0))
+                                .height(fixed!(50.0))
+                                .on_press(|_, _| { grandchild_pressed += 1; })
+                                .empty();
+                        });
+                });
+            ui.eval();
+        }
+
+        let p_ids: Vec<String> = ply.pointer_over_ids().into_iter().map(|id| id.string_id.as_str().to_string()).collect();
+        assert!(!p_ids.contains(&"parent".to_string()), "parent should not be in pointer_over_ids");
+        assert!(p_ids.contains(&"child_btn".to_string()), "child_btn should be in pointer_over_ids");
+        assert!(p_ids.contains(&"grandchild".to_string()), "grandchild should be in pointer_over_ids");
+
+        assert_eq!(parent_pressed, 0, "parent on_press should not fire");
+        assert_eq!(child_pressed, 1, "child_btn on_press should fire");
+        assert_eq!(grandchild_pressed, 1, "grandchild on_press should fire");
+
+        // Frame 3: release
+        ply.context.set_pointer_state(Vector2::new(25.0, 25.0), false);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("parent")
+                .width(fixed!(300.0))
+                .height(fixed!(300.0))
+                .on_press(|_, _| { parent_pressed += 1; })
+                .on_release(|_, _, _| { parent_released += 1; })
+                .children(|ui| {
+                    ui.element()
+                        .id("child_btn")
+                        .capture()
+                        .width(fixed!(100.0))
+                        .height(fixed!(100.0))
+                        .on_press(|_, _| { child_pressed += 1; })
+                        .on_release(|_, _, _| { child_released += 1; })
+                        .empty();
+                });
+            ui.eval();
+        }
+
+        assert_eq!(parent_released, 0, "parent on_release should not fire");
+        assert_eq!(child_released, 1, "child_btn on_release should fire");
+    }
+
+    #[test]
+    fn test_element_without_capture_propagates_to_parent() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut parent_pressed = 0u32;
+        let mut child_pressed = 0u32;
+
+        // Frame 1: layout tree without .capture()
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("parent")
+                .width(fixed!(300.0))
+                .height(fixed!(300.0))
+                .children(|ui| {
+                    ui.element()
+                        .id("child_btn")
+                        .width(fixed!(100.0))
+                        .height(fixed!(100.0))
+                        .empty();
+                });
+            ui.eval();
+        }
+
+        // Frame 2: press on child button
+        ply.context.set_pointer_state(Vector2::new(25.0, 25.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("parent")
+                .width(fixed!(300.0))
+                .height(fixed!(300.0))
+                .on_press(|_, _| { parent_pressed += 1; })
+                .children(|ui| {
+                    ui.element()
+                        .id("child_btn")
+                        .width(fixed!(100.0))
+                        .height(fixed!(100.0))
+                        .on_press(|_, _| { child_pressed += 1; })
+                        .empty();
+                });
+            ui.eval();
+        }
+
+        let p_ids: Vec<String> = ply.pointer_over_ids().into_iter().map(|id| id.string_id.as_str().to_string()).collect();
+        assert!(p_ids.contains(&"parent".to_string()), "parent should be in pointer_over_ids when not captured");
+        assert!(p_ids.contains(&"child_btn".to_string()), "child_btn should be in pointer_over_ids");
+        assert_eq!(parent_pressed, 1, "parent on_press should fire without capture");
+        assert_eq!(child_pressed, 1, "child on_press should fire");
+    }
+
+    #[test]
+    fn test_capture_with_floating_passthrough() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut bg_pressed = 0u32;
+        let mut floating_pressed = 0u32;
+
+        // Frame 1: layout main tree + floating with .capture().floating(|f| f.passthrough())
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("bg")
+                .width(fixed!(500.0))
+                .height(fixed!(500.0))
+                .empty();
+            ui.element()
+                .id("floating_capture")
+                .capture()
+                .floating(|f| f.attach_root().passthrough())
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Frame 2: press on floating element at (50.0, 50.0)
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("bg")
+                .width(fixed!(500.0))
+                .height(fixed!(500.0))
+                .on_press(|_, _| { bg_pressed += 1; })
+                .empty();
+            ui.element()
+                .id("floating_capture")
+                .capture()
+                .floating(|f| f.attach_root().passthrough())
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .on_press(|_, _| { floating_pressed += 1; })
+                .empty();
+            ui.eval();
+        }
+
+        let p_ids: Vec<String> = ply.pointer_over_ids().into_iter().map(|id| id.string_id.as_str().to_string()).collect();
+        assert!(!p_ids.contains(&"bg".to_string()), "bg in lower root should not receive pointer when floating captures");
+        assert!(p_ids.contains(&"floating_capture".to_string()));
+        assert_eq!(bg_pressed, 0, "bg press should not fire");
+        assert_eq!(floating_pressed, 1, "floating press should fire");
     }
 }
 

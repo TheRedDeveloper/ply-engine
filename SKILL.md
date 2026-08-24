@@ -273,6 +273,7 @@ Structure and identity:
 
 Interactivity:
 
+- `capture()`
 - `on_hover(|Id, PointerData| ...)`
 - `on_press(|Id, PointerData| ...)`
 - `on_release(|Id, PointerData, bool| ...)`
@@ -470,6 +471,7 @@ Inside the active `.children(|ui| ...)` scope:
 - `pointer.just_pressed() -> bool`: checks if pointer was just pressed this frame (`PressedThisFrame`)
 - `pointer.just_released() -> bool`: checks if pointer was just released this frame (`ReleasedThisFrame`)
 
+Use `.capture()` on interactive elements (e.g. buttons inside a larger clickable area) to capture pointer input and prevent it from propagating to parent elements.
 Use `.preserve_focus()` on toolbar-like controls that should not steal text-input focus.
 
 ### 9.4 State Queries by ID

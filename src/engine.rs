@@ -227,7 +227,7 @@ pub struct FloatingAttachPoints {
     pub parent_y: AlignY,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct FloatingConfig {
     pub offset: Vector2,
     pub parent_id: u32,
@@ -236,6 +236,20 @@ pub struct FloatingConfig {
     pub pointer_capture_mode: PointerCaptureMode,
     pub attach_to: FloatingAttachToElement,
     pub clip_to: FloatingClipToElement,
+}
+
+impl Default for FloatingConfig {
+    fn default() -> Self {
+        Self {
+            offset: Vector2::default(),
+            parent_id: 0,
+            z_index: 0,
+            attach_points: FloatingAttachPoints::default(),
+            pointer_capture_mode: PointerCaptureMode::Capture,
+            attach_to: FloatingAttachToElement::None,
+            clip_to: FloatingClipToElement::None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -319,6 +333,7 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub accessibility: Option<crate::accessibility::AccessibilityConfig>,
     pub text_input: Option<crate::text_input::TextInputConfig>,
     pub preserve_focus: bool,
+    pub pointer_capture_mode: PointerCaptureMode,
 }
 
 impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDeclaration<CustomElementData> {
@@ -342,6 +357,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
             accessibility: None,
             text_input: None,
             preserve_focus: false,
+            pointer_capture_mode: PointerCaptureMode::Passthrough,
         }
     }
 }
@@ -405,6 +421,7 @@ struct LayoutElementHashMapItem {
     layout_element_index: i32,
     is_text_input: bool,
     preserve_focus: bool,
+    pointer_capture_mode: PointerCaptureMode,
     generation: u32,
     collision: bool,
     collapsed: bool,
@@ -1112,6 +1129,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     item.collision = false;
                     item.is_text_input = false;
                     item.preserve_focus = false;
+                    item.pointer_capture_mode = PointerCaptureMode::Passthrough;
                 } else {
                     // Duplicate ID
                     item.collision = true;
@@ -1125,6 +1143,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                     bounding_box: BoundingBox::default(),
                     is_text_input: false,
                     preserve_focus: false,
+                    pointer_capture_mode: PointerCaptureMode::Passthrough,
                     collision: false,
                     collapsed: false,
                 });
@@ -1787,6 +1806,14 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             let elem_id = self.layout_elements[open_idx].id;
             if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
                 item.preserve_focus = true;
+            }
+        }
+
+        // Pointer capture mode
+        if declaration.pointer_capture_mode == PointerCaptureMode::Capture {
+            let elem_id = self.layout_elements[open_idx].id;
+            if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+                item.pointer_capture_mode = PointerCaptureMode::Capture;
             }
         }
     }
@@ -5600,6 +5627,79 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
+    fn hit_test_tree_node(
+        &self,
+        elem_idx: usize,
+        pointer_offset: Vector2,
+        position: Vector2,
+    ) -> (Vec<Id>, bool) {
+        let elem_id = self.layout_elements[elem_idx].id;
+        let map_item = self.layout_element_map.get(&elem_id);
+
+        let mut is_hit = false;
+        let mut is_self_capturing = false;
+        let mut id_copy = None;
+
+        if let Some(item) = map_item {
+            let mut elem_box = item.bounding_box;
+            elem_box.x -= pointer_offset.x;
+            elem_box.y -= pointer_offset.y;
+
+            let clip_id = self.layout_element_clip_element_ids[elem_idx] as u32;
+            let clip_ok = clip_id == 0
+                || self
+                    .layout_element_map
+                    .get(&clip_id)
+                    .map(|ci| point_is_inside_rect(position, ci.bounding_box))
+                    .unwrap_or(false);
+
+            if point_is_inside_rect(position, elem_box) && clip_ok {
+                is_hit = true;
+                id_copy = Some(item.element_id.clone());
+                if item.pointer_capture_mode == PointerCaptureMode::Capture {
+                    is_self_capturing = true;
+                }
+            }
+        }
+
+        let mut collected_children_hits: Vec<(usize, Vec<Id>)> = Vec::new();
+
+        if !self.element_has_config(elem_idx, ElementConfigType::Text) {
+            let children_start = self.layout_elements[elem_idx].children_start;
+            let children_length = self.layout_elements[elem_idx].children_length as usize;
+
+            // Check children in reverse order (topmost in visual Z-order first)
+            for ci in (0..children_length).rev() {
+                if children_start + ci < self.layout_element_children.len() {
+                    let child_idx = self.layout_element_children[children_start + ci] as usize;
+                    let (ch_hits, ch_captured) =
+                        self.hit_test_tree_node(child_idx, pointer_offset, position);
+                    if ch_captured {
+                        // Child captured pointer: parent and siblings below are omitted
+                        return (ch_hits, true);
+                    }
+                    if !ch_hits.is_empty() {
+                        collected_children_hits.push((ci, ch_hits));
+                    }
+                }
+            }
+        }
+
+        let mut hits = Vec::new();
+        if is_hit {
+            if let Some(id) = id_copy {
+                hits.push(id);
+            }
+        }
+
+        collected_children_hits.sort_by_key(|(ci, _)| *ci);
+        for (_, ch_hits) in collected_children_hits {
+            hits.extend(ch_hits);
+        }
+
+        (hits, is_self_capturing)
+    }
+
     pub fn set_layout_dimensions(&mut self, dimensions: Dimensions) {
         self.layout_dimensions = dimensions;
     }
@@ -5614,82 +5714,30 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         // Check which elements are under the pointer
         for root_index in (0..self.layout_element_tree_roots.len()).rev() {
             let root = self.layout_element_tree_roots[root_index];
-            let mut dfs: Vec<i32> = vec![root.layout_element_index];
-            let mut vis: Vec<bool> = vec![false];
-            let mut found = false;
+            let root_elem_idx = root.layout_element_index as usize;
 
-            while !dfs.is_empty() {
-                let idx = dfs.len() - 1;
-                if vis[idx] {
-                    dfs.pop();
-                    vis.pop();
-                    continue;
-                }
-                vis[idx] = true;
-                let current_idx = dfs[idx] as usize;
-                let elem_id = self.layout_elements[current_idx].id;
+            let (hits, captured) =
+                self.hit_test_tree_node(root_elem_idx, root.pointer_offset, position);
 
-                // Copy data from map to avoid borrow issues with mutable access later
-                let map_data = self.layout_element_map.get(&elem_id).map(|item| {
-                    (item.bounding_box, item.element_id.clone())
-                });
-                if let Some((raw_box, elem_id_copy)) = map_data {
-                    let mut elem_box = raw_box;
-                    elem_box.x -= root.pointer_offset.x;
-                    elem_box.y -= root.pointer_offset.y;
-
-                    let clip_id =
-                        self.layout_element_clip_element_ids[current_idx] as u32;
-                    let clip_ok = clip_id == 0
-                        || self
-                            .layout_element_map
-                            .get(&clip_id)
-                            .map(|ci| {
-                                point_is_inside_rect(
-                                    position,
-                                    ci.bounding_box,
-                                )
-                            })
-                            .unwrap_or(false);
-
-                    if point_is_inside_rect(position, elem_box) && clip_ok {
-                        self.pointer_over_ids.push(elem_id_copy);
-                        found = true;
-                    }
-
-                    if self.element_has_config(current_idx, ElementConfigType::Text) {
-                        dfs.pop();
-                        vis.pop();
-                        continue;
-                    }
-                    let children_start = self.layout_elements[current_idx].children_start;
-                    let children_length =
-                        self.layout_elements[current_idx].children_length as usize;
-                    for ci in (0..children_length).rev() {
-                        if children_start + ci < self.layout_element_children.len() {
-                            let child = self.layout_element_children[children_start + ci];
-                            dfs.push(child);
-                            vis.push(false);
-                        }
-                    }
-                } else {
-                    dfs.pop();
-                    vis.pop();
-                }
-            }
-
+            let found = !hits.is_empty();
             if found {
-                let root_elem_idx = root.layout_element_index as usize;
-                if self.element_has_config(root_elem_idx, ElementConfigType::Floating) {
-                    if let Some(cfg_idx) = self
-                        .find_element_config_index(root_elem_idx, ElementConfigType::Floating)
-                    {
-                        if self.floating_element_configs[cfg_idx].pointer_capture_mode
-                            == PointerCaptureMode::Capture
-                        {
-                            break;
-                        }
-                    }
+                self.pointer_over_ids.extend(hits);
+
+                let floating_capture = if self
+                    .element_has_config(root_elem_idx, ElementConfigType::Floating)
+                {
+                    self.find_element_config_index(root_elem_idx, ElementConfigType::Floating)
+                        .map(|cfg_idx| {
+                            self.floating_element_configs[cfg_idx].pointer_capture_mode
+                                == PointerCaptureMode::Capture
+                        })
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if captured || floating_capture {
+                    break;
                 }
             }
         }
