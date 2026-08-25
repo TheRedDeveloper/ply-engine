@@ -78,17 +78,6 @@ pub struct Image {
     pub data: ImageSource,
 }
 
-/// Represents a custom element with a background color, corner radii, and associated data.
-#[derive(Debug, Clone)]
-pub struct Custom<CustomElementData> {
-    /// The background color of the custom element.
-    pub background_color: Color,
-    /// The corner radii for rounded edges.
-    pub corner_radii: CornerRadii,
-    /// The custom element data.
-    pub data: CustomElementData,
-}
-
 impl CornerRadii {
     pub fn clamp_to_size(&mut self, width: f32, height: f32) {
         let max_r = width.min(height) / 2.0;
@@ -111,7 +100,7 @@ impl From<crate::layout::CornerRadius> for CornerRadii {
 }
 
 #[derive(Debug, Clone)]
-pub enum RenderCommandConfig<CustomElementData> {
+pub enum RenderCommandConfig {
     None(),
     Rectangle(Rectangle),
     Border(Border),
@@ -119,7 +108,6 @@ pub enum RenderCommandConfig<CustomElementData> {
     Image(Image),
     ScissorStart(),
     ScissorEnd(),
-    Custom(Custom<CustomElementData>),
     /// Begin a group: Renders children to an offscreen buffer.
     /// Optionally applies a fragment shader and/or visual rotation.
     GroupBegin {
@@ -131,10 +119,8 @@ pub enum RenderCommandConfig<CustomElementData> {
     GroupEnd,
 }
 
-impl<CustomElementData: Clone + Default + std::fmt::Debug>
-    RenderCommandConfig<CustomElementData>
-{
-    pub(crate) fn from_engine_render_command(value: &engine::InternalRenderCommand<CustomElementData>) -> Self {
+impl RenderCommandConfig {
+    pub(crate) fn from_engine_render_command(value: &engine::InternalRenderCommand) -> Self {
         match value.command_type {
             engine::RenderCommandType::None => Self::None(),
             engine::RenderCommandType::Rectangle => {
@@ -200,28 +186,17 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug>
                 Self::GroupBegin { shader, visual_rotation }
             }
             engine::RenderCommandType::GroupEnd => Self::GroupEnd,
-            engine::RenderCommandType::Custom => {
-                if let engine::InternalRenderData::Custom { background_color, corner_radius, custom_data } = &value.render_data {
-                    Self::Custom(Custom {
-                        background_color: *background_color,
-                        corner_radii: (*corner_radius).into(),
-                        data: custom_data.clone(),
-                    })
-                } else {
-                    Self::None()
-                }
-            }
         }
     }
 }
 
 /// Represents a render command for drawing an element on the screen.
 #[derive(Debug, Clone)]
-pub struct RenderCommand<CustomElementData> {
+pub struct RenderCommand {
     /// The bounding box defining the area occupied by the element.
     pub bounding_box: BoundingBox,
     /// The specific configuration for rendering this command.
-    pub config: RenderCommandConfig<CustomElementData>,
+    pub config: RenderCommandConfig,
     /// A unique identifier for the render command.
     pub id: u32,
     /// The z-index determines the stacking order of elements.
@@ -229,19 +204,18 @@ pub struct RenderCommand<CustomElementData> {
     pub z_index: i16,
     /// Per-element shader effects (chained in order).
     pub effects: Vec<ShaderConfig>,
-    /// Shape rotation applied at the vertex level (only for Rectangle / Image / Custom / Border).
+    /// Shape rotation applied at the vertex level (only for Rectangle / Image / Border).
     pub shape_rotation: Option<ShapeRotationConfig>,
 }
 
-impl<CustomElementData: Clone + Default + std::fmt::Debug> RenderCommand<CustomElementData> {
-    pub(crate) fn from_engine_render_command(value: &engine::InternalRenderCommand<CustomElementData>) -> Self {
+impl RenderCommand {
+    pub(crate) fn from_engine_render_command(value: &engine::InternalRenderCommand) -> Self {
         let mut config = RenderCommandConfig::from_engine_render_command(value);
         let bb = value.bounding_box;
         match &mut config {
             RenderCommandConfig::Rectangle(r)  => r.corner_radii.clamp_to_size(bb.width, bb.height),
             RenderCommandConfig::Border(b)     => b.corner_radii.clamp_to_size(bb.width, bb.height),
             RenderCommandConfig::Image(i)      => i.corner_radii.clamp_to_size(bb.width, bb.height),
-            RenderCommandConfig::Custom(c)     => c.corner_radii.clamp_to_size(bb.width, bb.height),
             _ => {}
         }
         Self {

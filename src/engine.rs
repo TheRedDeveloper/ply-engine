@@ -42,7 +42,6 @@ pub enum RenderCommandType {
     Image,
     ScissorStart,
     ScissorEnd,
-    Custom,
     GroupBegin,
     GroupEnd,
 }
@@ -95,7 +94,6 @@ pub enum ElementConfigType {
     Text,
     Image,
     Floating,
-    Custom,
     Clip,
     Border,
     Aspect,
@@ -314,7 +312,7 @@ pub struct BorderConfig {
 
 /// The top-level element declaration.
 #[derive(Debug, Clone)]
-pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+pub struct ElementDeclaration {
     pub layout: LayoutConfig,
     pub background_color: Color,
     pub corner_radius: CornerRadius,
@@ -322,7 +320,6 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub cover_aspect_ratio: bool,
     pub image_data: Option<ImageSource>,
     pub floating: FloatingConfig,
-    pub custom_data: Option<CustomElementData>,
     pub clip: ClipConfig,
     pub border: BorderConfig,
     pub user_data: usize,
@@ -336,7 +333,7 @@ pub struct ElementDeclaration<CustomElementData: Clone + Default + std::fmt::Deb
     pub pointer_capture_mode: PointerCaptureMode,
 }
 
-impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDeclaration<CustomElementData> {
+impl Default for ElementDeclaration {
     fn default() -> Self {
         Self {
             layout: LayoutConfig::default(),
@@ -346,7 +343,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for ElementDe
             cover_aspect_ratio: false,
             image_data: None,
             floating: FloatingConfig::default(),
-            custom_data: None,
             clip: ClipConfig::default(),
             border: BorderConfig::default(),
             user_data: 0,
@@ -505,10 +501,10 @@ struct BooleanWarnings {
 }
 
 #[derive(Debug, Clone)]
-pub struct InternalRenderCommand<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+pub struct InternalRenderCommand {
     pub bounding_box: BoundingBox,
     pub command_type: RenderCommandType,
-    pub render_data: InternalRenderData<CustomElementData>,
+    pub render_data: InternalRenderData,
     pub user_data: usize,
     pub id: u32,
     pub z_index: i16,
@@ -518,7 +514,7 @@ pub struct InternalRenderCommand<CustomElementData: Clone + Default + std::fmt::
 }
 
 #[derive(Debug, Clone)]
-pub enum InternalRenderData<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+pub enum InternalRenderData {
     None,
     Rectangle {
         background_color: Color,
@@ -537,11 +533,6 @@ pub enum InternalRenderData<CustomElementData: Clone + Default + std::fmt::Debug
         corner_radius: CornerRadius,
         image_data: ImageSource,
     },
-    Custom {
-        background_color: Color,
-        corner_radius: CornerRadius,
-        custom_data: CustomElementData,
-    },
     Border {
         color: Color,
         corner_radius: CornerRadius,
@@ -554,13 +545,13 @@ pub enum InternalRenderData<CustomElementData: Clone + Default + std::fmt::Debug
     },
 }
 
-impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for InternalRenderData<CustomElementData> {
+impl Default for InternalRenderData {
     fn default() -> Self {
         Self::None
     }
 }
 
-impl<CustomElementData: Clone + Default + std::fmt::Debug> Default for InternalRenderCommand<CustomElementData> {
+impl Default for InternalRenderCommand {
     fn default() -> Self {
         Self {
             bounding_box: BoundingBox::default(),
@@ -599,7 +590,7 @@ impl Default for ScrollContainerData {
     }
 }
 
-pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+pub struct PlyContext {
     // Settings
     pub max_element_count: i32,
     pub max_measure_text_cache_word_count: i32,
@@ -633,7 +624,7 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
 
     // Layout elements
     layout_elements: Vec<LayoutElement>,
-    render_commands: Vec<InternalRenderCommand<CustomElementData>>,
+    render_commands: Vec<InternalRenderCommand>,
     open_layout_element_stack: Vec<i32>,
     layout_element_children: Vec<i32>,
     layout_element_children_buffer: Vec<i32>,
@@ -651,7 +642,6 @@ pub struct PlyContext<CustomElementData: Clone + Default + std::fmt::Debug = ()>
     image_element_configs: Vec<ImageSource>,
     floating_element_configs: Vec<FloatingConfig>,
     clip_element_configs: Vec<ClipConfig>,
-    custom_element_configs: Vec<CustomElementData>,
     border_element_configs: Vec<BorderConfig>,
     shared_element_configs: Vec<SharedElementConfig>,
 
@@ -981,7 +971,7 @@ fn compute_horizontal_scrollbar_geometry(
     })
 }
 
-impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElementData> {
+impl PlyContext {
     pub fn new(dimensions: Dimensions) -> Self {
         Self::new_with_headless(dimensions, false)
     }
@@ -1038,7 +1028,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             image_element_configs: Vec::new(),
             floating_element_configs: Vec::new(),
             clip_element_configs: Vec::new(),
-            custom_element_configs: Vec::new(),
             border_element_configs: Vec::new(),
             shared_element_configs: Vec::new(),
             element_effects: Vec::new(),
@@ -1305,7 +1294,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         }
     }
 
-    pub fn configure_open_element(&mut self, declaration: &ElementDeclaration<CustomElementData>) {
+    pub fn configure_open_element(&mut self, declaration: &ElementDeclaration) {
         if self.boolean_warnings.max_elements_exceeded {
             return;
         }
@@ -1429,13 +1418,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                 let idx = self.floating_element_configs.len() - 1;
                 self.attach_element_config(ElementConfigType::Floating, idx);
             }
-        }
-
-        // Custom config
-        if let Some(ref custom_data) = declaration.custom_data {
-            self.custom_element_configs.push(custom_data.clone());
-            let idx = self.custom_element_configs.len() - 1;
-            self.attach_element_config(ElementConfigType::Custom, idx);
         }
 
         // Clip config
@@ -2379,7 +2361,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         });
     }
 
-    pub fn end_layout(&mut self) -> &[InternalRenderCommand<CustomElementData>] {
+    pub fn end_layout(&mut self) -> &[InternalRenderCommand] {
         self.close_element();
 
         if self.open_layout_element_stack.len() > 1 {
@@ -2427,7 +2409,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
         self.image_element_configs.clear();
         self.floating_element_configs.clear();
         self.clip_element_configs.clear();
-        self.custom_element_configs.clear();
         self.border_element_configs.clear();
         self.shared_element_configs.clear();
         self.element_effects.clear();
@@ -3771,7 +3752,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             || bbox.y + bbox.height < 0.0
     }
 
-    fn add_render_command(&mut self, cmd: InternalRenderCommand<CustomElementData>) {
+    fn add_render_command(&mut self, cmd: InternalRenderCommand) {
         self.render_commands.push(cmd);
     }
 
@@ -4125,28 +4106,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                                     });
                                     y_position += final_line_height;
                                 }
-                            }
-                            ElementConfigType::Custom => {
-                                if should_render {
-                                    let custom_data =
-                                        self.custom_element_configs[config.config_index].clone();
-                                    self.add_render_command(InternalRenderCommand {
-                                        bounding_box: shape_draw_bbox,
-                                        command_type: RenderCommandType::Custom,
-                                        render_data: InternalRenderData::Custom {
-                                            background_color: shared.background_color,
-                                            corner_radius: shared.corner_radius,
-                                            custom_data,
-                                        },
-                                        user_data: shared.user_data,
-                                        id: elem_id,
-                                        z_index: root.z_index,
-                                        visual_rotation: None,
-                                        shape_rotation: elem_shape_rotation,
-                                        effects: elem_effects.clone(),
-                                    });
-                                }
-                                emit_rectangle = false;
                             }
                             ElementConfigType::TextInput => {
                                 if should_render {
@@ -7999,19 +7958,19 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
     }
 
     /// Helper: open an element, configure, return nothing. Caller must close_element().
-    fn debug_open(&mut self, decl: &ElementDeclaration<CustomElementData>) {
+    fn debug_open(&mut self, decl: &ElementDeclaration) {
         self.open_element();
         self.configure_open_element(decl);
     }
 
     /// Helper: open a named element, configure. Caller must close_element().
-    fn debug_open_id(&mut self, name: &str, decl: &ElementDeclaration<CustomElementData>) {
+    fn debug_open_id(&mut self, name: &str, decl: &ElementDeclaration) {
         self.open_element_with_id(&hash_string(name, 0));
         self.configure_open_element(decl);
     }
 
     /// Helper: open a named+indexed element, configure. Caller must close_element().
-    fn debug_open_idi(&mut self, name: &str, offset: u32, decl: &ElementDeclaration<CustomElementData>) {
+    fn debug_open_idi(&mut self, name: &str, offset: u32, decl: &ElementDeclaration) {
         self.open_element_with_id(&hash_string_with_offset(name, offset, 0));
         self.configure_open_element(decl);
     }
@@ -8025,7 +7984,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
             ElementConfigType::Floating => ("Floating", Color::rgba(250.0, 105.0, 0.0, 255.0)),
             ElementConfigType::Clip => ("Overflow", Color::rgba(242.0, 196.0, 90.0, 255.0)),
             ElementConfigType::Border => ("Border", Color::rgba(108.0, 91.0, 123.0, 255.0)),
-            ElementConfigType::Custom => ("Custom", Color::rgba(11.0, 72.0, 107.0, 255.0)),
             ElementConfigType::TextInput => ("TextInput", Color::rgba(52.0, 152.0, 219.0, 255.0)),
         }
     }
@@ -10022,7 +9980,6 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> PlyContext<CustomElem
                         }
                         self.close_element();
                     }
-                    _ => {}
                 }
             }
 

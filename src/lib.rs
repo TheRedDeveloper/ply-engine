@@ -40,8 +40,8 @@ use text::TextConfig;
 pub use color::Color;
 
 #[allow(dead_code)]
-pub struct Ply<CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    pub context: engine::PlyContext<CustomElementData>,
+pub struct Ply {
+    pub context: engine::PlyContext,
     /// Key repeat tracking for text input control keys
     text_input_repeat_key: u32,
     text_input_repeat_first: f64,
@@ -77,19 +77,19 @@ pub(crate) struct FrameCallbacks<'ply> {
     pub text_submit: FxHashMap<u32, Box<dyn FnMut(&str) + 'ply>>,
 }
 
-pub struct Ui<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    pub ply: &'a mut Ply<CustomElementData>,
+pub struct Ui<'a, 'ply> {
+    pub ply: &'a mut Ply,
     pub(crate) callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
 }
 
 /// Type-state representing an [`ElementBuilder`] attached to [`Ply`] that has not yet had an ID assigned.
-pub struct NoId<'ui, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    pub ply: &'ui mut Ply<CustomElementData>,
+pub struct NoId<'ui> {
+    pub ply: &'ui mut Ply,
 }
 
 /// Type-state representing an [`ElementBuilder`] attached to [`Ply`] that has had an ID assigned.
-pub struct WithId<'ui, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    pub ply: &'ui mut Ply<CustomElementData>,
+pub struct WithId<'ui> {
+    pub ply: &'ui mut Ply,
     pub id: Id,
 }
 
@@ -100,26 +100,22 @@ pub struct Detached {
 }
 
 /// Trait implemented by type-states attached to a [`Ply`] instance.
-pub trait AttachedState<'ui, CustomElementData: Clone + Default + std::fmt::Debug + 'ui> {
-    fn open(self) -> (&'ui mut Ply<CustomElementData>, Id);
+pub trait AttachedState<'ui> {
+    fn open(self) -> (&'ui mut Ply, Id);
 }
 
-impl<'ui, CustomElementData: Clone + Default + std::fmt::Debug + 'ui>
-    AttachedState<'ui, CustomElementData> for NoId<'ui, CustomElementData>
-{
+impl<'ui> AttachedState<'ui> for NoId<'ui> {
     #[inline]
-    fn open(self) -> (&'ui mut Ply<CustomElementData>, Id) {
+    fn open(self) -> (&'ui mut Ply, Id) {
         self.ply.context.open_element();
         let element_id = self.ply.context.get_open_element_id();
         (self.ply, Id { id: element_id, ..Default::default() })
     }
 }
 
-impl<'ui, CustomElementData: Clone + Default + std::fmt::Debug + 'ui>
-    AttachedState<'ui, CustomElementData> for WithId<'ui, CustomElementData>
-{
+impl<'ui> AttachedState<'ui> for WithId<'ui> {
     #[inline]
-    fn open(self) -> (&'ui mut Ply<CustomElementData>, Id) {
+    fn open(self) -> (&'ui mut Ply, Id) {
         self.ply.context.open_element_with_id(&self.id);
         (self.ply, self.id)
     }
@@ -128,10 +124,10 @@ impl<'ui, CustomElementData: Clone + Default + std::fmt::Debug + 'ui>
 /// Builder for creating elements with closure-based syntax.
 /// Methods return `self` by value for chaining. Finalize with `.children()` or `.empty()`.
 #[must_use]
-pub struct ElementBuilder<'ply, State, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+pub struct ElementBuilder<'ply, State> {
     pub state: State,
     callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
-    inner: engine::ElementDeclaration<CustomElementData>,
+    inner: engine::ElementDeclaration,
     on_hover_fn: Option<Box<dyn FnMut(Id, PointerData) + 'ply>>,
     on_press_fn: Option<Box<dyn FnMut(Id, PointerData) + 'ply>>,
     on_release_fn: Option<Box<dyn FnMut(Id, PointerData, bool) + 'ply>>,
@@ -142,23 +138,21 @@ pub struct ElementBuilder<'ply, State, CustomElementData: Clone + Default + std:
     with_fns: Vec<
         Box<
             dyn FnOnce(
-                &mut Ui<'_, 'ply, CustomElementData>,
-                ElementBuilder<'ply, Detached, CustomElementData>,
-            ) -> ElementBuilder<'ply, Detached, CustomElementData>
+                &mut Ui<'_, 'ply>,
+                ElementBuilder<'ply, Detached>,
+            ) -> ElementBuilder<'ply, Detached>
             + 'ply,
         >,
     >,
 }
 
-impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ply, NoId<'ui, CustomElementData>, CustomElementData>
-{
+impl<'ui, 'ply> ElementBuilder<'ply, NoId<'ui>> {
     /// Sets the element's ID.
     ///
     /// Accepts an `Id`, a `&'static str` label, or (&str, u32).
     /// Transitions the builder's type state from `NoId` to `WithId`.
     #[inline]
-    pub fn id(self, id: impl Into<Id>) -> ElementBuilder<'ply, WithId<'ui, CustomElementData>, CustomElementData> {
+    pub fn id(self, id: impl Into<Id>) -> ElementBuilder<'ply, WithId<'ui>> {
         ElementBuilder {
             state: WithId {
                 ply: self.state.ply,
@@ -178,9 +172,7 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 }
 
-impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ply, WithId<'ui, CustomElementData>, CustomElementData>
-{
+impl<'ui, 'ply> ElementBuilder<'ply, WithId<'ui>> {
     /// Returns a reference to the established `Id`.
     #[inline]
     pub fn get_id(&self) -> &Id {
@@ -188,9 +180,7 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 }
 
-impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ply, Detached, CustomElementData>
-{
+impl<'ply> ElementBuilder<'ply, Detached> {
     /// Returns a reference to the established `Id`.
     #[inline]
     pub fn get_id(&self) -> &Id {
@@ -198,9 +188,7 @@ impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 }
 
-impl<'ply, State, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ply, State, CustomElementData>
-{
+impl<'ply, State> ElementBuilder<'ply, State> {
     /// Sets the width of the element.
     #[inline]
     pub fn width(mut self, width: layout::Sizing) -> Self {
@@ -263,13 +251,6 @@ impl<'ply, State, CustomElementData: Clone + Default + std::fmt::Debug>
         let mut builder = elements::OverflowBuilder { config: self.inner.clip };
         f(&mut builder);
         self.inner.clip = builder.config;
-        self
-    }
-
-    /// Sets custom element data.
-    #[inline]
-    pub fn custom_element(mut self, data: CustomElementData) -> Self {
-        self.inner.custom_data = Some(data);
         self
     }
 
@@ -507,9 +488,9 @@ impl<'ply, State, CustomElementData: Clone + Default + std::fmt::Debug>
     pub fn with(
         mut self,
         f: impl FnOnce(
-            &mut Ui<'_, 'ply, CustomElementData>,
-            ElementBuilder<'ply, Detached, CustomElementData>,
-        ) -> ElementBuilder<'ply, Detached, CustomElementData>
+            &mut Ui<'_, 'ply>,
+            ElementBuilder<'ply, Detached>,
+        ) -> ElementBuilder<'ply, Detached>
         + 'ply,
     ) -> Self {
         self.with_fns.push(Box::new(f));
@@ -527,10 +508,9 @@ impl<'ply, State, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 }
 
-impl<'ui, 'ply, State, CustomElementData: Clone + Default + std::fmt::Debug + 'ui>
-    ElementBuilder<'ply, State, CustomElementData>
+impl<'ui, 'ply, State> ElementBuilder<'ply, State>
 where
-    State: AttachedState<'ui, CustomElementData>,
+    State: AttachedState<'ui>,
 {
     /// Configures this element as a text input.
     ///
@@ -563,7 +543,7 @@ where
     }
 
     /// Finalizes the element with children defined in a closure.
-    pub fn children(self, f: impl FnOnce(&mut Ui<'_, 'ply, CustomElementData>)) -> Id {
+    pub fn children(self, f: impl FnOnce(&mut Ui<'_, 'ply>)) -> Id {
         let (ply, established_id) = self.state.open();
         let element_id = ply.context.get_open_element_id();
 
@@ -572,7 +552,7 @@ where
             callbacks: self.callbacks,
         };
 
-        let mut el: ElementBuilder<'ply, Detached, CustomElementData> = ElementBuilder {
+        let mut el: ElementBuilder<'ply, Detached> = ElementBuilder {
             state: Detached { id: established_id },
             callbacks: child_ui.callbacks.clone(),
             inner: self.inner,
@@ -650,28 +630,24 @@ where
     }
 }
 
-impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::Deref
-    for Ui<'a, 'ply, CustomElementData>
-{
-    type Target = Ply<CustomElementData>;
+impl<'a, 'ply> core::ops::Deref for Ui<'a, 'ply> {
+    type Target = Ply;
 
     fn deref(&self) -> &Self::Target {
         self.ply
     }
 }
 
-impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::DerefMut
-    for Ui<'a, 'ply, CustomElementData>
-{
+impl<'a, 'ply> core::ops::DerefMut for Ui<'a, 'ply> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.ply
     }
 }
 
-impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply, CustomElementData> {
+impl<'a, 'ply> Ui<'a, 'ply> {
     /// Creates a new element builder for configuring and adding an element.
     /// Finalize with `.children(|ui| {...})` or `.empty()`.
-    pub fn element(&mut self) -> ElementBuilder<'ply, NoId<'_, CustomElementData>, CustomElementData> {
+    pub fn element(&mut self) -> ElementBuilder<'ply, NoId<'_>> {
         ElementBuilder {
             state: NoId { ply: self.ply },
             callbacks: self.callbacks.clone(),
@@ -751,7 +727,7 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
     }
 
     /// Evaluates the layout and dispatches all frame callbacks, returning all render commands.
-    pub fn eval(&mut self) -> Vec<RenderCommand<CustomElementData>> {
+    pub fn eval(&mut self) -> Vec<RenderCommand> {
         // Clean up stale networking entries (feature-gated)
         #[cfg(feature = "net")]
         net::NET_MANAGER.lock().unwrap().clean();
@@ -1509,12 +1485,9 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
     }
 
     /// Evaluate the layout and render all commands.
-    pub async fn show(
-        &mut self,
-        handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
-    ) {
+    pub async fn show(&mut self) {
         let commands = self.eval();
-        renderer::render(commands, handle_custom_command).await;
+        renderer::render(commands).await;
     }
 
     /// Adds a text element to the current open element or to the root layout.
@@ -1557,7 +1530,7 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
     }
 }
 
-impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData> {
+impl Ply {
     #[cfg(feature = "a11y")]
     fn accessibility_bounds(&self) -> FxHashMap<u32, math::BoundingBox> {
         let mut accessibility_bounds = FxHashMap::default();
@@ -1575,7 +1548,7 @@ impl<CustomElementData: Clone + Default + std::fmt::Debug> Ply<CustomElementData
     /// Starts a new frame, returning a [`Ui`] handle for building the element tree.
     pub fn begin(
         &mut self,
-    ) -> Ui<'_, '_, CustomElementData> {
+    ) -> Ui<'_, '_> {
         jobs::poll_completions();
 
         if !self.context.is_headless() {
@@ -1846,7 +1819,7 @@ mod tests {
 
     #[test]
     fn test_cursor_default_and_persistence() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         assert_eq!(ply.get_cursor(), macroquad::miniquad::CursorIcon::Pointer);
 
         {
@@ -1870,7 +1843,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_begin() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         ply.set_measure_text_function(|_, _| {
             Dimensions::new(100.0, 24.0)
@@ -2016,7 +1989,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_example() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(1000.0, 1000.0));
+        let mut ply = Ply::new_headless(Dimensions::new(1000.0, 1000.0));
 
         let mut ui = ply.begin();
 
@@ -2229,7 +2202,7 @@ mod tests {
 
     #[test]
     fn test_grow_weights_distribute_proportionally() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(600.0, 120.0));
+        let mut ply = Ply::new_headless(Dimensions::new(600.0, 120.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2258,7 +2231,7 @@ mod tests {
 
     #[test]
     fn test_zero_weight_grow_behaves_like_fit() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(600.0, 120.0));
+        let mut ply = Ply::new_headless(Dimensions::new(600.0, 120.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2287,7 +2260,7 @@ mod tests {
 
     #[test]
     fn test_single_main_axis_grow_respects_max() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(600.0, 120.0));
+        let mut ply = Ply::new_headless(Dimensions::new(600.0, 120.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2310,7 +2283,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_floating() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(1000.0, 1000.0));
+        let mut ply = Ply::new_headless(Dimensions::new(1000.0, 1000.0));
 
         let mut ui = ply.begin();
 
@@ -2385,7 +2358,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_simple_text_measure() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         ply.set_measure_text_function(|_text, _config| {
             Dimensions::default()
@@ -2421,7 +2394,7 @@ mod tests {
             fragment: "#version 100\nprecision lowp float;\nvarying vec2 uv;\nuniform sampler2D Texture;\nvoid main() { gl_FragColor = texture2D(Texture, uv); }",
         };
 
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         ply.set_measure_text_function(|_, _| Dimensions::new(100.0, 24.0));
 
         let mut ui = ply.begin();
@@ -2505,7 +2478,7 @@ mod tests {
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(0.5); }",
         };
 
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         ply.set_measure_text_function(|_, _| Dimensions::new(100.0, 24.0));
 
         let mut ui = ply.begin();
@@ -2582,7 +2555,7 @@ mod tests {
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
         };
 
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         let mut ui = ply.begin();
 
@@ -2607,7 +2580,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_visual_rotation_emits_group() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2655,7 +2628,7 @@ mod tests {
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(1.0); }",
         };
 
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         // Both shader and visual rotation — should emit ONE GroupBegin
@@ -2697,7 +2670,7 @@ mod tests {
             fragment: "#version 100\nprecision lowp float;\nvoid main() { gl_FragColor = vec4(0.5); }",
         };
 
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2735,7 +2708,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_visual_rotation_noop_skipped() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         // 0° rotation with no flips — should be optimized away
@@ -2758,7 +2731,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_visual_rotation_flip_only() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         // 0° but flip_x — NOT a noop, should emit group
@@ -2786,7 +2759,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_visual_rotation_preserves_bounding_box() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2806,7 +2779,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_visual_rotation_config_values() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2838,7 +2811,7 @@ mod tests {
     #[rustfmt::skip]
     #[test]
     fn test_shape_rotation_emits_with_rotation() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2861,7 +2834,7 @@ mod tests {
     #[test]
     fn test_shape_rotation_aabb_90_degrees() {
         // 90° rotation of a 200×100 rect → AABB should be 100×200
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element().width(grow!()).height(grow!())
@@ -2887,7 +2860,7 @@ mod tests {
     #[test]
     fn test_shape_rotation_aabb_45_degrees_sharp() {
         // 45° rotation of a 100×100 sharp rect → AABB ≈ 141.4×141.4
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         // We need a parent to see the AABB effect on sibling positioning
@@ -2927,7 +2900,7 @@ mod tests {
     fn test_shape_rotation_aabb_45_degrees_rounded() {
         // 45° rotation of a 100×100 rect with corner radius 10 →
         // AABB = |(100-20)cos45| + |(100-20)sin45| + 20 ≈ 133.14
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element().width(grow!()).height(grow!())
@@ -2965,7 +2938,7 @@ mod tests {
     #[test]
     fn test_shape_rotation_noop_no_aabb_change() {
         // 0° with no flip = noop, should not change dimensions
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -2987,7 +2960,7 @@ mod tests {
     #[test]
     fn test_shape_rotation_flip_only() {
         // flip_x with 0° — NOT noop, but doesn't change AABB
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -3010,7 +2983,7 @@ mod tests {
     #[test]
     fn test_shape_rotation_180_no_aabb_change() {
         // 180° rotation → AABB same as original
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         ui.element()
@@ -3086,7 +3059,7 @@ mod tests {
 
     #[test]
     fn test_on_press_callback_fires() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut press_count = 0u32;
         let mut release_count = 0u32;
 
@@ -3138,7 +3111,7 @@ mod tests {
 
     #[test]
     fn test_on_release_hovered_pointer() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut release_hovered = None;
 
         // Frame 1: layout 100x100 element at origin
@@ -3214,7 +3187,7 @@ mod tests {
 
     #[test]
     fn test_on_release_hovered_keyboard() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut release_hovered = None;
 
         // Frame 1: layout two focusable elements
@@ -3285,7 +3258,7 @@ mod tests {
 
     #[test]
     fn test_pressed_query() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         // Frame 1: layout
         {
@@ -3317,7 +3290,7 @@ mod tests {
 
     #[test]
     fn test_just_pressed_query_one_frame() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         // Frame 1: layout
         {
@@ -3375,7 +3348,7 @@ mod tests {
 
     #[test]
     fn test_keyboard_activation_marks_just_pressed() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         // Frame 1: layout
         {
@@ -3436,7 +3409,7 @@ mod tests {
 
     #[test]
     fn test_just_released_query_one_frame() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         // Frame 1: layout
         {
@@ -3496,7 +3469,7 @@ mod tests {
 
     #[test]
     fn test_keyboard_activation_marks_just_released() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         // Frame 1: layout
         {
@@ -3565,7 +3538,7 @@ mod tests {
 
     #[test]
     fn test_tab_navigation_cycles_focus() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         // Frame 1: create 3 focusable elements
         {
@@ -3621,7 +3594,7 @@ mod tests {
 
     #[test]
     fn test_tab_index_ordering() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         // Frame 1: create elements with explicit tab indices (reverse order)
         {
@@ -3662,7 +3635,7 @@ mod tests {
 
     #[test]
     fn test_arrow_key_navigation() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         use engine::ArrowDirection;
 
         let id_a = Id::from("a").id;
@@ -3705,7 +3678,7 @@ mod tests {
 
     #[test]
     fn test_focused_query() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         let id_a = Id::from("a").id;
 
@@ -3740,7 +3713,7 @@ mod tests {
 
     #[test]
     fn test_on_focus_callback_fires_on_tab() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut focus_a = 0u32;
         let mut unfocus_a = 0u32;
         let mut focus_b = 0u32;
@@ -3798,7 +3771,7 @@ mod tests {
 
     #[test]
     fn test_on_focus_callback_fires_on_set_focus() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut focus_count = 0u32;
         let mut unfocus_count = 0u32;
 
@@ -3843,7 +3816,7 @@ mod tests {
     fn test_focus_ring_render_command() {
         use render_commands::RenderCommandConfig;
 
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let id_a = Id::from("a").id;
 
         // Frame 1: layout
@@ -3890,7 +3863,7 @@ mod tests {
 
     #[test]
     fn test_overflow_scrollbar_renders_and_moves_with_set_scroll_position() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(400.0, 300.0));
+        let mut ply = Ply::new_headless(Dimensions::new(400.0, 300.0));
 
         {
             let mut ui = ply.begin();
@@ -3964,7 +3937,7 @@ mod tests {
 
     #[test]
     fn test_terminal_text_input_with_padding() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         ply.set_measure_text_function(|text, _| {
             Dimensions::new(text.len() as f32 * 10.0, 20.0)
         });
@@ -4020,7 +3993,7 @@ mod tests {
 
     #[test]
     fn test_element_capture_stops_propagation_to_parent() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut parent_pressed = 0u32;
         let mut parent_released = 0u32;
         let mut child_pressed = 0u32;
@@ -4119,7 +4092,7 @@ mod tests {
 
     #[test]
     fn test_element_without_capture_propagates_to_parent() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut parent_pressed = 0u32;
         let mut child_pressed = 0u32;
 
@@ -4169,7 +4142,7 @@ mod tests {
 
     #[test]
     fn test_capture_with_floating_passthrough() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut bg_pressed = 0u32;
         let mut floating_pressed = 0u32;
 
@@ -4221,7 +4194,7 @@ mod tests {
 
     #[test]
     fn test_element_builder_type_state_and_get_id() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         // 1. Without explicit ID (NoId state)
@@ -4253,7 +4226,7 @@ mod tests {
 
     #[test]
     fn test_element_builder_with_closure_queries_and_styling() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         // Frame 1: Pointer not hovering (at 500, 500)
         ply.context.set_pointer_state(Vector2::new(500.0, 500.0), false);
@@ -4354,7 +4327,7 @@ mod tests {
 
     #[test]
     fn test_element_builder_with_auto_id_and_multiple_closures() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         let observed_id_1 = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -4397,7 +4370,7 @@ mod tests {
 
     #[test]
     fn test_element_builder_with_children_and_nested_with() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
         let mut ui = ply.begin();
 
         let child_built = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -4433,7 +4406,7 @@ mod tests {
 
     #[test]
     fn test_element_builder_with_adding_callbacks_inside_with() {
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
 
         let press_fired = std::rc::Rc::new(std::cell::Cell::new(false));
         let hover_fired = std::rc::Rc::new(std::cell::Cell::new(false));

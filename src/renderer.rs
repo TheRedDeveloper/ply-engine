@@ -1551,10 +1551,7 @@ fn resize(texture: &Texture2D, height: f32, width: f32, clip: &Option<(i32, i32,
 }
 
 /// Draws all render commands to the screen using macroquad.
-pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
-    commands: Vec<RenderCommand<CustomElementData>>,
-    handle_custom_command: impl Fn(&RenderCommand<CustomElementData>),
-) {
+pub async fn render(commands: Vec<RenderCommand>) {
     let mut state = RenderState::new();
     for command in commands {
         let current_clip = state.clip_stack.last().copied();
@@ -2294,9 +2291,6 @@ pub async fn render<CustomElementData: Clone + Default + std::fmt::Debug>(
                 unsafe {
                     get_internal_gl().quad_gl.scissor(state.clip_stack.last().copied());
                 }
-            }
-            RenderCommandConfig::Custom(_) => {
-                handle_custom_command(&command);
             }
             RenderCommandConfig::GroupBegin { ref shader, ref visual_rotation } => {
                 let bb = command.bounding_box;

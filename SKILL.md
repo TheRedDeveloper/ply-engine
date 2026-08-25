@@ -90,7 +90,7 @@ fn window_conf() -> macroquad::conf::Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
   static DEFAULT_FONT: FontAsset = font!("assets/fonts/MyFont.ttf");
-  let mut ply = Ply::<()>::new(&DEFAULT_FONT).await;
+  let mut ply = Ply::new(&DEFAULT_FONT).await;
 
   loop {
     clear_background(BLACK);
@@ -105,7 +105,7 @@ async fn main() {
         ui.text("Hello, Ply!", |t| t.font_size(32).color(0xFFFFFF));
       });
 
-    ui.show(|_| {}).await;
+    ui.show().await;
     next_frame().await;
   }
 }
@@ -185,8 +185,8 @@ Construction and lifecycle:
 - `Ply::new(default_font).await`
 - `Ply::new_headless(dimensions)`
 - `begin() -> Ui`
-- `eval() -> Vec<RenderCommand<_>>`
-- `show(handle_custom_command).await`
+- `eval() -> Vec<RenderCommand>`
+- `show().await`
 
 Pointer, focus, and cursor:
 
@@ -271,7 +271,6 @@ Structure and identity:
 - `id(id_like)` (`NoId` -> `WithId`)
 - `get_id() -> &Id`
 - `floating(|FloatingBuilder| ...)`
-- `custom_element(data)`
 - `children(|ui| ...) -> Id`
 - `empty() -> Id`
 

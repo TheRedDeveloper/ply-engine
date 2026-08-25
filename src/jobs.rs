@@ -288,7 +288,7 @@ mod tests {
         );
         assert!(spawn_result.is_ok());
 
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(32.0, 32.0));
+        let mut ply = Ply::new_headless(Dimensions::new(32.0, 32.0));
         for _ in 0..100 {
             let _ = ply.begin();
             if result.borrow().is_some() {
@@ -316,7 +316,7 @@ mod tests {
         );
         assert!(spawn_result.is_ok());
 
-        let mut ply = Ply::<()>::new_headless(Dimensions::new(32.0, 32.0));
+        let mut ply = Ply::new_headless(Dimensions::new(32.0, 32.0));
         let mut panic_message = None;
 
         for _ in 0..100 {
