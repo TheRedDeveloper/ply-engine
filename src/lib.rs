@@ -82,22 +82,56 @@ pub struct Ui<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug = (
     pub(crate) callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
 }
 
-/// Type-state representing an [`ElementBuilder`] that has not yet had an ID assigned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoId;
+/// Type-state representing an [`ElementBuilder`] attached to [`Ply`] that has not yet had an ID assigned.
+pub struct NoId<'ui, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+    pub ply: &'ui mut Ply<CustomElementData>,
+}
 
-/// Type-state representing an [`ElementBuilder`] that has had an ID assigned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WithId;
+/// Type-state representing an [`ElementBuilder`] attached to [`Ply`] that has had an ID assigned.
+pub struct WithId<'ui, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+    pub ply: &'ui mut Ply<CustomElementData>,
+    pub id: Id,
+}
+
+/// Type-state representing an [`ElementBuilder`] detached from [`Ply`] with an established ID (used in `.with()` closures).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Detached {
+    pub id: Id,
+}
+
+/// Trait implemented by type-states attached to a [`Ply`] instance.
+pub trait AttachedState<'ui, CustomElementData: Clone + Default + std::fmt::Debug + 'ui> {
+    fn open(self) -> (&'ui mut Ply<CustomElementData>, Id);
+}
+
+impl<'ui, CustomElementData: Clone + Default + std::fmt::Debug + 'ui>
+    AttachedState<'ui, CustomElementData> for NoId<'ui, CustomElementData>
+{
+    #[inline]
+    fn open(self) -> (&'ui mut Ply<CustomElementData>, Id) {
+        self.ply.context.open_element();
+        let element_id = self.ply.context.get_open_element_id();
+        (self.ply, Id { id: element_id, ..Default::default() })
+    }
+}
+
+impl<'ui, CustomElementData: Clone + Default + std::fmt::Debug + 'ui>
+    AttachedState<'ui, CustomElementData> for WithId<'ui, CustomElementData>
+{
+    #[inline]
+    fn open(self) -> (&'ui mut Ply<CustomElementData>, Id) {
+        self.ply.context.open_element_with_id(&self.id);
+        (self.ply, self.id)
+    }
+}
 
 /// Builder for creating elements with closure-based syntax.
 /// Methods return `self` by value for chaining. Finalize with `.children()` or `.empty()`.
 #[must_use]
-pub struct ElementBuilder<'ui, 'ply, IdState = NoId, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
-    ply: &'ui mut Ply<CustomElementData>,
+pub struct ElementBuilder<'ply, State, CustomElementData: Clone + Default + std::fmt::Debug = ()> {
+    pub state: State,
     callbacks: std::rc::Rc<std::cell::RefCell<FrameCallbacks<'ply>>>,
     inner: engine::ElementDeclaration<CustomElementData>,
-    id: Option<Id>,
     on_hover_fn: Option<Box<dyn FnMut(Id, PointerData) + 'ply>>,
     on_press_fn: Option<Box<dyn FnMut(Id, PointerData) + 'ply>>,
     on_release_fn: Option<Box<dyn FnMut(Id, PointerData, bool) + 'ply>>,
@@ -105,23 +139,33 @@ pub struct ElementBuilder<'ui, 'ply, IdState = NoId, CustomElementData: Clone + 
     on_unfocus_fn: Option<Box<dyn FnMut(Id) + 'ply>>,
     text_input_on_changed_fn: Option<Box<dyn FnMut(&str) + 'ply>>,
     text_input_on_submit_fn: Option<Box<dyn FnMut(&str) + 'ply>>,
-    _phantom: std::marker::PhantomData<IdState>,
+    with_fns: Vec<
+        Box<
+            dyn FnOnce(
+                &mut Ui<'_, 'ply, CustomElementData>,
+                ElementBuilder<'ply, Detached, CustomElementData>,
+            ) -> ElementBuilder<'ply, Detached, CustomElementData>
+            + 'ply,
+        >,
+    >,
 }
 
 impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ui, 'ply, NoId, CustomElementData>
+    ElementBuilder<'ply, NoId<'ui, CustomElementData>, CustomElementData>
 {
     /// Sets the element's ID.
     ///
     /// Accepts an `Id`, a `&'static str` label, or (&str, u32).
     /// Transitions the builder's type state from `NoId` to `WithId`.
     #[inline]
-    pub fn id(self, id: impl Into<Id>) -> ElementBuilder<'ui, 'ply, WithId, CustomElementData> {
+    pub fn id(self, id: impl Into<Id>) -> ElementBuilder<'ply, WithId<'ui, CustomElementData>, CustomElementData> {
         ElementBuilder {
-            ply: self.ply,
+            state: WithId {
+                ply: self.state.ply,
+                id: id.into(),
+            },
             callbacks: self.callbacks,
             inner: self.inner,
-            id: Some(id.into()),
             on_hover_fn: self.on_hover_fn,
             on_press_fn: self.on_press_fn,
             on_release_fn: self.on_release_fn,
@@ -129,23 +173,33 @@ impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
             on_unfocus_fn: self.on_unfocus_fn,
             text_input_on_changed_fn: self.text_input_on_changed_fn,
             text_input_on_submit_fn: self.text_input_on_submit_fn,
-            _phantom: std::marker::PhantomData,
+            with_fns: self.with_fns,
         }
     }
 }
 
 impl<'ui, 'ply, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ui, 'ply, WithId, CustomElementData>
+    ElementBuilder<'ply, WithId<'ui, CustomElementData>, CustomElementData>
 {
     /// Returns a reference to the established `Id`.
     #[inline]
     pub fn get_id(&self) -> &Id {
-        self.id.as_ref().expect("Id is guaranteed in WithId state")
+        &self.state.id
     }
 }
 
-impl<'ui, 'ply, IdState, CustomElementData: Clone + Default + std::fmt::Debug>
-    ElementBuilder<'ui, 'ply, IdState, CustomElementData>
+impl<'ply, CustomElementData: Clone + Default + std::fmt::Debug>
+    ElementBuilder<'ply, Detached, CustomElementData>
+{
+    /// Returns a reference to the established `Id`.
+    #[inline]
+    pub fn get_id(&self) -> &Id {
+        &self.state.id
+    }
+}
+
+impl<'ply, State, CustomElementData: Clone + Default + std::fmt::Debug>
+    ElementBuilder<'ply, State, CustomElementData>
 {
     /// Sets the width of the element.
     #[inline]
@@ -442,6 +496,26 @@ impl<'ui, 'ply, IdState, CustomElementData: Clone + Default + std::fmt::Debug>
         self
     }
 
+    /// Registers a closure to run after the element's ID has been established in `.empty()` or `.children()`,
+    /// but before the element is configured and finalized.
+    ///
+    /// The closure receives `&mut Ui` (where queries like `ui.hovered()`, `ui.pressed()`, `ui.focused()`
+    /// refer to this element) and the `ElementBuilder` in `Detached` state with the established ID.
+    ///
+    /// Multiple `.with()` calls can be chained and will be executed in registration order.
+    #[inline]
+    pub fn with(
+        mut self,
+        f: impl FnOnce(
+            &mut Ui<'_, 'ply, CustomElementData>,
+            ElementBuilder<'ply, Detached, CustomElementData>,
+        ) -> ElementBuilder<'ply, Detached, CustomElementData>
+        + 'ply,
+    ) -> Self {
+        self.with_fns.push(Box::new(f));
+        self
+    }
+
     /// Registers a callback that fires when this element loses focus.
     #[inline]
     pub fn on_unfocus<F>(mut self, callback: F) -> Self
@@ -451,7 +525,13 @@ impl<'ui, 'ply, IdState, CustomElementData: Clone + Default + std::fmt::Debug>
         self.on_unfocus_fn = Some(Box::new(callback));
         self
     }
+}
 
+impl<'ui, 'ply, State, CustomElementData: Clone + Default + std::fmt::Debug + 'ui>
+    ElementBuilder<'ply, State, CustomElementData>
+where
+    State: AttachedState<'ui, CustomElementData>,
+{
     /// Configures this element as a text input.
     ///
     /// The element will capture keyboard input when focused and render
@@ -484,11 +564,39 @@ impl<'ui, 'ply, IdState, CustomElementData: Clone + Default + std::fmt::Debug>
 
     /// Finalizes the element with children defined in a closure.
     pub fn children(self, f: impl FnOnce(&mut Ui<'_, 'ply, CustomElementData>)) -> Id {
-        let ElementBuilder {
+        let (ply, established_id) = self.state.open();
+        let element_id = ply.context.get_open_element_id();
+
+        let mut child_ui = Ui {
             ply,
-            callbacks,
+            callbacks: self.callbacks,
+        };
+
+        let mut el: ElementBuilder<'ply, Detached, CustomElementData> = ElementBuilder {
+            state: Detached { id: established_id },
+            callbacks: child_ui.callbacks.clone(),
+            inner: self.inner,
+            on_hover_fn: self.on_hover_fn,
+            on_press_fn: self.on_press_fn,
+            on_release_fn: self.on_release_fn,
+            on_focus_fn: self.on_focus_fn,
+            on_unfocus_fn: self.on_unfocus_fn,
+            text_input_on_changed_fn: self.text_input_on_changed_fn,
+            text_input_on_submit_fn: self.text_input_on_submit_fn,
+            with_fns: Vec::new(),
+        };
+
+        let mut with_fns = self.with_fns;
+        while !with_fns.is_empty() {
+            let with_fn = with_fns.remove(0);
+            el = with_fn(&mut child_ui, el);
+            if !el.with_fns.is_empty() {
+                with_fns.append(&mut el.with_fns);
+            }
+        }
+
+        let ElementBuilder {
             inner,
-            id,
             on_hover_fn,
             on_press_fn,
             on_release_fn,
@@ -496,18 +604,13 @@ impl<'ui, 'ply, IdState, CustomElementData: Clone + Default + std::fmt::Debug>
             on_unfocus_fn,
             text_input_on_changed_fn,
             text_input_on_submit_fn,
-            _phantom: _,
-        } = self;
-        if let Some(ref id) = id {
-            ply.context.open_element_with_id(id);
-        } else {
-            ply.context.open_element();
-        }
-        ply.context.configure_open_element(&inner);
-        let element_id = ply.context.get_open_element_id();
+            ..
+        } = el;
+
+        child_ui.ply.context.configure_open_element(&inner);
 
         {
-            let mut cb = callbacks.borrow_mut();
+            let mut cb = child_ui.callbacks.borrow_mut();
             if let Some(hover_fn) = on_hover_fn {
                 cb.hover.insert(element_id, hover_fn);
             }
@@ -531,10 +634,6 @@ impl<'ui, 'ply, IdState, CustomElementData: Clone + Default + std::fmt::Debug>
             }
         }
 
-        let mut child_ui = Ui {
-            ply,
-            callbacks,
-        };
         f(&mut child_ui);
         child_ui.ply.context.close_element();
 
@@ -545,6 +644,7 @@ impl<'ui, 'ply, IdState, CustomElementData: Clone + Default + std::fmt::Debug>
     }
 
     /// Finalizes the element with no children.
+    #[inline]
     pub fn empty(self) -> Id {
         self.children(|_| {})
     }
@@ -571,12 +671,11 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> core::ops::
 impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply, CustomElementData> {
     /// Creates a new element builder for configuring and adding an element.
     /// Finalize with `.children(|ui| {...})` or `.empty()`.
-    pub fn element(&mut self) -> ElementBuilder<'_, 'ply, NoId, CustomElementData> {
+    pub fn element(&mut self) -> ElementBuilder<'ply, NoId<'_, CustomElementData>, CustomElementData> {
         ElementBuilder {
-            ply: self.ply,
+            state: NoId { ply: self.ply },
             callbacks: self.callbacks.clone(),
             inner: engine::ElementDeclaration::default(),
-            id: None,
             on_hover_fn: None,
             on_press_fn: None,
             on_release_fn: None,
@@ -584,7 +683,7 @@ impl<'a, 'ply, CustomElementData: Clone + Default + std::fmt::Debug> Ui<'a, 'ply
             on_unfocus_fn: None,
             text_input_on_changed_fn: None,
             text_input_on_submit_fn: None,
-            _phantom: std::marker::PhantomData,
+            with_fns: Vec::new(),
         }
     }
 
@@ -4141,8 +4240,8 @@ mod tests {
         let id2 = builder.empty();
         assert_eq!(id2.id, Id::new("custom_btn").id);
 
-        // 3. Reusable style function works on both NoId and WithId
-        fn apply_style<'ui, 'ply, S>(el: ElementBuilder<'ui, 'ply, S>) -> ElementBuilder<'ui, 'ply, S> {
+        // 3. Reusable style function works on both NoId, WithId, and Detached
+        fn apply_style<'ply, S>(el: ElementBuilder<'ply, S>) -> ElementBuilder<'ply, S> {
             el.width(fixed!(150.0)).background_color(0xFF0000)
         }
 
@@ -4150,6 +4249,231 @@ mod tests {
         let with_id_styled = apply_style(ui.element().id("styled_id"));
         assert_eq!(with_id_styled.get_id().string_id.as_str(), "styled_id");
         with_id_styled.empty();
+    }
+
+    #[test]
+    fn test_element_builder_with_closure_queries_and_styling() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        // Frame 1: Pointer not hovering (at 500, 500)
+        ply.context.set_pointer_state(Vector2::new(500.0, 500.0), false);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .with(|ui, el| {
+                    assert!(!ui.hovered());
+                    assert!(!ui.pressed());
+                    if ui.pressed() {
+                        el.background_color(0x00FF00)
+                    } else if ui.hovered() {
+                        el.background_color(0x0000FF)
+                    } else {
+                        el.background_color(0xFF0000)
+                    }
+                })
+                .empty();
+            let items = ui.eval();
+            assert_eq!(items.len(), 1);
+            match &items[0].config {
+                render_commands::RenderCommandConfig::Rectangle(rect) => {
+                    assert_eq!(rect.color.r, 255.0);
+                    assert_eq!(rect.color.g, 0.0);
+                    assert_eq!(rect.color.b, 0.0);
+                }
+                _ => panic!("Expected Rectangle config"),
+            }
+        }
+
+        // Frame 2: Hovering (at 50, 50)
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .with(|ui, el| {
+                    assert!(ui.hovered());
+                    assert!(!ui.pressed());
+                    if ui.pressed() {
+                        el.background_color(0x00FF00)
+                    } else if ui.hovered() {
+                        el.background_color(0x0000FF)
+                    } else {
+                        el.background_color(0xFF0000)
+                    }
+                })
+                .empty();
+            let items = ui.eval();
+            assert_eq!(items.len(), 1);
+            match &items[0].config {
+                render_commands::RenderCommandConfig::Rectangle(rect) => {
+                    assert_eq!(rect.color.r, 0.0);
+                    assert_eq!(rect.color.g, 0.0);
+                    assert_eq!(rect.color.b, 255.0);
+                }
+                _ => panic!("Expected Rectangle config"),
+            }
+        }
+
+        // Frame 3: Pressed (at 50, 50)
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .with(|ui, el| {
+                    assert!(ui.hovered());
+                    assert!(ui.pressed());
+                    if ui.pressed() {
+                        el.background_color(0x00FF00)
+                    } else if ui.hovered() {
+                        el.background_color(0x0000FF)
+                    } else {
+                        el.background_color(0xFF0000)
+                    }
+                })
+                .empty();
+            let items = ui.eval();
+            assert_eq!(items.len(), 1);
+            match &items[0].config {
+                render_commands::RenderCommandConfig::Rectangle(rect) => {
+                    assert_eq!(rect.color.r, 0.0);
+                    assert_eq!(rect.color.g, 255.0);
+                    assert_eq!(rect.color.b, 0.0);
+                }
+                _ => panic!("Expected Rectangle config"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_element_builder_with_auto_id_and_multiple_closures() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        let observed_id_1 = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let observed_id_2 = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let execution_order = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+        let id1_clone = observed_id_1.clone();
+        let id2_clone = observed_id_2.clone();
+        let order_clone1 = execution_order.clone();
+        let order_clone2 = execution_order.clone();
+
+        let elem_id = ui.element()
+            .width(fixed!(100.0))
+            .height(fixed!(50.0))
+            .with(move |_ui, el| {
+                *id1_clone.borrow_mut() = Some(el.get_id().clone());
+                order_clone1.borrow_mut().push(1);
+                el.background_color(0x112233)
+            })
+            .with(move |_ui, el| {
+                *id2_clone.borrow_mut() = Some(el.get_id().clone());
+                order_clone2.borrow_mut().push(2);
+                el.corner_radius(8.0)
+            })
+            .empty();
+
+        assert_eq!(*execution_order.borrow(), vec![1, 2]);
+        assert_eq!(observed_id_1.borrow().as_ref().unwrap().id, elem_id.id);
+        assert_eq!(observed_id_2.borrow().as_ref().unwrap().id, elem_id.id);
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 1);
+        match &items[0].config {
+            render_commands::RenderCommandConfig::Rectangle(rect) => {
+                assert_eq!(rect.corner_radii.top_left, 8.0);
+            }
+            _ => panic!("Expected Rectangle config"),
+        }
+    }
+
+    #[test]
+    fn test_element_builder_with_children_and_nested_with() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        let child_built = std::rc::Rc::new(std::cell::Cell::new(false));
+        let nested_with_executed = std::rc::Rc::new(std::cell::Cell::new(false));
+
+        let cb = child_built.clone();
+        let nw = nested_with_executed.clone();
+
+        ui.element()
+            .width(fixed!(200.0))
+            .height(fixed!(200.0))
+            .with(move |_ui, el| {
+                el.with(move |_ui, el2| {
+                    nw.set(true);
+                    el2.background_color(0xAABBCC)
+                })
+            })
+            .children(move |ui| {
+                ui.element()
+                    .width(fixed!(50.0))
+                    .height(fixed!(50.0))
+                    .background_color(0x112233)
+                    .empty();
+                cb.set(true);
+            });
+
+        assert!(child_built.get());
+        assert!(nested_with_executed.get());
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn test_element_builder_with_adding_callbacks_inside_with() {
+        let mut ply = Ply::<()>::new_headless(Dimensions::new(800.0, 600.0));
+
+        let press_fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let hover_fired = std::rc::Rc::new(std::cell::Cell::new(false));
+
+        let pf = press_fired.clone();
+        let hf = hover_fired.clone();
+
+        // Frame 1: Establish layout bounding box
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("test_btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .empty();
+            ui.eval();
+        }
+
+        // Frame 2: Pointer at (50, 50) and pressed
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element()
+                .id("test_btn")
+                .width(fixed!(100.0))
+                .height(fixed!(100.0))
+                .with(move |_ui, el| {
+                    el.on_press(move |_id, _data| {
+                        pf.set(true);
+                    })
+                    .on_hover(move |_id, _data| {
+                        hf.set(true);
+                    })
+                })
+                .empty();
+            ui.eval();
+        }
+
+        assert!(hover_fired.get(), "Hover callback attached inside .with() should fire");
+        assert!(press_fired.get(), "Press callback attached inside .with() should fire");
     }
 }
 

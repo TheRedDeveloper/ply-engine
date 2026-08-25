@@ -277,6 +277,7 @@ Structure and identity:
 
 Interactivity:
 
+- `with(|&mut Ui, ElementBuilder<WithId>| ...)`
 - `capture()`
 - `on_hover(|Id, PointerData| ...)`
 - `on_press(|Id, PointerData| ...)`
@@ -854,11 +855,11 @@ let current: CursorIcon = ui.get_cursor();
 Reusable styling should be plain Rust functions that take and return `ElementBuilder`.
 
 ```rust
-fn rounded<'ui, 'ply, S>(el: ElementBuilder<'ui, 'ply, S>) -> ElementBuilder<'ui, 'ply, S> {
+fn rounded<'ply, S>(el: ElementBuilder<'ply, S>) -> ElementBuilder<'ply, S> {
   el.corner_radius(12.0)
 }
 
-fn dark_bg<'ui, 'ply, S>(el: ElementBuilder<'ui, 'ply, S>) -> ElementBuilder<'ui, 'ply, S> {
+fn dark_bg<'ply, S>(el: ElementBuilder<'ply, S>) -> ElementBuilder<'ply, S> {
   el.background_color(0x2E2A28)
 }
 
@@ -873,7 +874,7 @@ dark_bg(rounded(ui.element()))
 For parameterized styles:
 
 ```rust
-fn my_style<'ui, 'ply, S>(el: ElementBuilder<'ui, 'ply, S>, bg: u32, radius: f32) -> ElementBuilder<'ui, 'ply, S> {
+fn my_style<'ply, S>(el: ElementBuilder<'ply, S>, bg: u32, radius: f32) -> ElementBuilder<'ply, S> {
   el.background_color(bg).corner_radius(radius)
 }
 
@@ -885,14 +886,16 @@ my_style(ui.element(), 0x181515, 10.0)
 
 ### 16.3 Button Example
 
-You might want your buttons to use something like this:
+You might want your buttons to use something like this with `.with()`:
 
 ```rust
-fn button(ui: &mut Ui, id: (&str, u32), label: &str, mut on_click: impl FnMut() + 'static) {
-  ui.element().id(id).width(fit!()).height(fit!())
-    .on_press(move |_, _| on_click())
+fn button(ui: &mut Ui, label: &str, mut on_click: impl FnMut() + 'static) {
+  ui.element().width(fit!()).height(fit!())
+    .corner_radius(SOME_RADIUS)
+    .layout(|l| l.padding(SOME_PADDING).align(CenterX, CenterY))
     .accessibility(|a| a.button(label))
-    .children(|ui| {
+    .on_press(move |_, _| on_click())
+    .with(|ui, el| {
       let bg = if ui.pressed() {
         LIGHT_PRIMARY_COLOR
       } else if ui.hovered() || ui.focused() {
@@ -900,19 +903,15 @@ fn button(ui: &mut Ui, id: (&str, u32), label: &str, mut on_click: impl FnMut() 
       } else {
         PRIMARY_COLOR
       };
-
-      ui.element().width(fit!()).height(fit!())
-        .background_color(bg)
-        .corner_radius(SOME_RADIUS)
-        .layout(|l| l.padding(SOME_PADDING).align(CenterX, CenterY))
-        .children(|ui| {
-          ui.text(label, |t| t.font_size(24).color(0xFFFFFF));
-        });
+      el.background_color(bg)
+    })
+    .children(|ui| {
+      ui.text(label, |t| t.font_size(24).color(0xFFFFFF));
     });
 }
 ```
 
-Wrapping the actual button inside wrapper element, let's you know where you are. Wrapping is often useful with inputs.
+`.with()` executes after the element's ID has been established in `.empty()` or `.children()`, so queries like `ui.pressed()`, `ui.hovered()`, and `ui.focused()` accurately refer to this element and `el.get_id()` is available without needing an extra wrapper element.
 
 ### 16.4 Polling HTTP Example
 

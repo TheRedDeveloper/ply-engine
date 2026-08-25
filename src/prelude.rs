@@ -10,6 +10,7 @@ pub use crate::Ui;
 pub use crate::ElementBuilder;
 pub use crate::NoId;
 pub use crate::WithId;
+pub use crate::Detached;
 pub use crate::id::Id;
 pub use crate::renderer::GraphicAsset;
 pub use crate::renderer::FontAsset;
