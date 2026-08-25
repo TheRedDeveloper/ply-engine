@@ -29,6 +29,7 @@ pub enum SizingType {
     Grow,
     Percent,
     Fixed,
+    Ratio,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -96,7 +97,7 @@ pub enum ElementConfigType {
     Floating,
     Clip,
     Border,
-    Aspect,
+    SlotFit,
     TextInput,
 }
 
@@ -112,6 +113,7 @@ pub struct SizingAxis {
     pub min_max: SizingMinMax,
     pub percent: f32,
     pub grow_weight: f32,
+    pub ratio: f32,
 }
 
 impl Default for SizingAxis {
@@ -121,6 +123,7 @@ impl Default for SizingAxis {
             min_max: SizingMinMax::default(),
             percent: 0.0,
             grow_weight: 1.0,
+            ratio: 0.0,
         }
     }
 }
@@ -215,6 +218,19 @@ impl ShapeRotationConfig {
     pub fn is_noop(&self) -> bool {
         self.rotation_radians == 0.0 && !self.flip_x && !self.flip_y
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SlotFitMode {
+    #[default]
+    Contain,
+    Cover,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SlotFitConfig {
+    pub ratio: f32,
+    pub mode: SlotFitMode,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -316,8 +332,7 @@ pub struct ElementDeclaration {
     pub layout: LayoutConfig,
     pub background_color: Color,
     pub corner_radius: CornerRadius,
-    pub aspect_ratio: f32,
-    pub cover_aspect_ratio: bool,
+    pub slot_fit: Option<SlotFitConfig>,
     pub image_data: Option<ImageSource>,
     pub floating: FloatingConfig,
     pub clip: ClipConfig,
@@ -339,8 +354,7 @@ impl Default for ElementDeclaration {
             layout: LayoutConfig::default(),
             background_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
             corner_radius: CornerRadius::default(),
-            aspect_ratio: 0.0,
-            cover_aspect_ratio: false,
+            slot_fit: None,
             image_data: None,
             floating: FloatingConfig::default(),
             clip: ClipConfig::default(),
@@ -629,7 +643,6 @@ pub struct PlyContext {
     layout_element_children: Vec<i32>,
     layout_element_children_buffer: Vec<i32>,
     text_element_data: Vec<TextElementData>,
-    aspect_ratio_element_indexes: Vec<i32>,
     reusable_element_index_buffer: Vec<i32>,
     layout_element_clip_element_ids: Vec<i32>,
 
@@ -637,8 +650,7 @@ pub struct PlyContext {
     layout_configs: Vec<LayoutConfig>,
     element_configs: Vec<ElementConfig>,
     text_element_configs: Vec<TextConfig>,
-    aspect_ratio_configs: Vec<f32>,
-    aspect_ratio_cover_configs: Vec<bool>,
+    slot_fit_element_configs: Vec<SlotFitConfig>,
     image_element_configs: Vec<ImageSource>,
     floating_element_configs: Vec<FloatingConfig>,
     clip_element_configs: Vec<ClipConfig>,
@@ -657,6 +669,8 @@ pub struct PlyContext {
     element_shape_rotations: Vec<Option<ShapeRotationConfig>>,
     // Original dimensions before AABB expansion (only set when shape_rotation is active)
     element_pre_rotation_dimensions: Vec<Option<Dimensions>>,
+    // Slot-fit adjusted dimensions (only set when slot_fit is active)
+    element_slot_fit_dimensions: Vec<Option<Dimensions>>,
 
     // String IDs for debug
     layout_element_id_strings: Vec<StringId>,
@@ -1017,14 +1031,12 @@ impl PlyContext {
             layout_element_children: Vec::new(),
             layout_element_children_buffer: Vec::new(),
             text_element_data: Vec::new(),
-            aspect_ratio_element_indexes: Vec::new(),
             reusable_element_index_buffer: Vec::new(),
             layout_element_clip_element_ids: Vec::new(),
             layout_configs: Vec::new(),
             element_configs: Vec::new(),
             text_element_configs: Vec::new(),
-            aspect_ratio_configs: Vec::new(),
-            aspect_ratio_cover_configs: Vec::new(),
+            slot_fit_element_configs: Vec::new(),
             image_element_configs: Vec::new(),
             floating_element_configs: Vec::new(),
             clip_element_configs: Vec::new(),
@@ -1035,6 +1047,7 @@ impl PlyContext {
             element_visual_rotations: Vec::new(),
             element_shape_rotations: Vec::new(),
             element_pre_rotation_dimensions: Vec::new(),
+            element_slot_fit_dimensions: Vec::new(),
             layout_element_id_strings: Vec::new(),
             wrapped_text_lines: Vec::new(),
             tree_node_array: Vec::new(),
@@ -1190,22 +1203,6 @@ impl PlyContext {
         None
     }
 
-    fn update_aspect_ratio_box(&mut self, element_index: usize) {
-        if let Some(config_idx) =
-            self.find_element_config_index(element_index, ElementConfigType::Aspect)
-        {
-            let aspect_ratio = self.aspect_ratio_configs[config_idx];
-            if aspect_ratio == 0.0 {
-                return;
-            }
-            let elem = &mut self.layout_elements[element_index];
-            if elem.dimensions.width == 0.0 && elem.dimensions.height != 0.0 {
-                elem.dimensions.width = elem.dimensions.height * aspect_ratio;
-            } else if elem.dimensions.width != 0.0 && elem.dimensions.height == 0.0 {
-                elem.dimensions.height = elem.dimensions.width * (1.0 / aspect_ratio);
-            }
-        }
-    }
 
     pub fn store_text_element_config(
         &mut self,
@@ -1349,15 +1346,11 @@ impl PlyContext {
             self.attach_element_config(ElementConfigType::Image, idx);
         }
 
-        // Aspect ratio config
-        if declaration.aspect_ratio > 0.0 {
-            self.aspect_ratio_configs.push(declaration.aspect_ratio);
-            self.aspect_ratio_cover_configs
-                .push(declaration.cover_aspect_ratio);
-            let idx = self.aspect_ratio_configs.len() - 1;
-            self.attach_element_config(ElementConfigType::Aspect, idx);
-            self.aspect_ratio_element_indexes
-                .push((self.layout_elements.len() - 1) as i32);
+        // Slot fit config
+        if let Some(slot_fit) = declaration.slot_fit {
+            self.slot_fit_element_configs.push(slot_fit);
+            let idx = self.slot_fit_element_configs.len() - 1;
+            self.attach_element_config(ElementConfigType::SlotFit, idx);
         }
 
         // Floating config
@@ -1965,8 +1958,6 @@ impl PlyContext {
             }
         }
 
-        self.update_aspect_ratio_box(open_idx);
-
         // Apply shape rotation AABB expansion
         if let Some(shape_rot) = self.element_shape_rotations.get(open_idx).copied().flatten() {
             if !shape_rot.is_noop() {
@@ -2338,6 +2329,7 @@ impl PlyContext {
                         },
                         percent: 0.0,
                         grow_weight: 1.0,
+                        ratio: 0.0,
                     },
                     height: SizingAxis {
                         type_: SizingType::Fixed,
@@ -2347,6 +2339,7 @@ impl PlyContext {
                         },
                         percent: 0.0,
                         grow_weight: 1.0,
+                        ratio: 0.0,
                     },
                 },
                 ..Default::default()
@@ -2404,8 +2397,7 @@ impl PlyContext {
         self.layout_configs.clear();
         self.element_configs.clear();
         self.text_element_configs.clear();
-        self.aspect_ratio_configs.clear();
-        self.aspect_ratio_cover_configs.clear();
+        self.slot_fit_element_configs.clear();
         self.image_element_configs.clear();
         self.floating_element_configs.clear();
         self.clip_element_configs.clear();
@@ -2416,6 +2408,7 @@ impl PlyContext {
         self.element_visual_rotations.clear();
         self.element_shape_rotations.clear();
         self.element_pre_rotation_dimensions.clear();
+        self.element_slot_fit_dimensions.clear();
         self.layout_element_id_strings.clear();
         self.wrapped_text_lines.clear();
         self.tree_node_array.clear();
@@ -2424,7 +2417,6 @@ impl PlyContext {
         self.layout_element_map.clear();
         self.open_layout_element_stack.clear();
         self.text_element_data.clear();
-        self.aspect_ratio_element_indexes.clear();
         self.render_commands.clear();
         self.tree_node_visited.clear();
         self.open_clip_element_stack.clear();
@@ -2464,7 +2456,7 @@ impl PlyContext {
         let child_sizing = self.child_sizing_on_axis(child_index, main_axis_x);
         match child_sizing.type_ {
             SizingType::Grow => child_sizing.min_max.min,
-            SizingType::Percent | SizingType::Fixed | SizingType::Fit => {
+            SizingType::Percent | SizingType::Fixed | SizingType::Fit | SizingType::Ratio => {
                 self.child_size_on_axis(child_index, main_axis_x)
             }
         }
@@ -2604,28 +2596,36 @@ impl PlyContext {
         }
     }
 
-    fn size_containers_along_axis(&mut self, x_axis: bool) {
-        let mut bfs_buffer: Vec<i32> = Vec::new();
-        let mut resizable_container_buffer: Vec<i32> = Vec::new();
+    fn size_root_along_axis(
+        &mut self,
+        root_index: usize,
+        x_axis: bool,
+        bfs_buffer: &mut Vec<i32>,
+        resizable_container_buffer: &mut Vec<i32>,
+    ) {
+        bfs_buffer.clear();
+        let root = self.layout_element_tree_roots[root_index];
+        let root_elem_idx = root.layout_element_index as usize;
+        bfs_buffer.push(root.layout_element_index);
 
-        for root_index in 0..self.layout_element_tree_roots.len() {
-            bfs_buffer.clear();
-            let root = self.layout_element_tree_roots[root_index];
-            let root_elem_idx = root.layout_element_index as usize;
-            bfs_buffer.push(root.layout_element_index);
+        // Size floating containers to their parents
+        if self.element_has_config(root_elem_idx, ElementConfigType::Floating) {
+            if let Some(float_cfg_idx) =
+                self.find_element_config_index(root_elem_idx, ElementConfigType::Floating)
+            {
+                let parent_id = self.floating_element_configs[float_cfg_idx].parent_id;
+                if let Some(parent_item) = self.layout_element_map.get(&parent_id) {
+                    let parent_elem_idx = parent_item.layout_element_index as usize;
+                    let parent_dims = self
+                        .element_slot_fit_dimensions
+                        .get(parent_elem_idx)
+                        .copied()
+                        .flatten()
+                        .unwrap_or(self.layout_elements[parent_elem_idx].dimensions);
+                    let root_layout_idx =
+                        self.layout_elements[root_elem_idx].layout_config_index;
 
-            // Size floating containers to their parents
-            if self.element_has_config(root_elem_idx, ElementConfigType::Floating) {
-                if let Some(float_cfg_idx) =
-                    self.find_element_config_index(root_elem_idx, ElementConfigType::Floating)
-                {
-                    let parent_id = self.floating_element_configs[float_cfg_idx].parent_id;
-                    if let Some(parent_item) = self.layout_element_map.get(&parent_id) {
-                        let parent_elem_idx = parent_item.layout_element_index as usize;
-                        let parent_dims = self.layout_elements[parent_elem_idx].dimensions;
-                        let root_layout_idx =
-                            self.layout_elements[root_elem_idx].layout_config_index;
-
+                    if x_axis {
                         let w_type = self.layout_configs[root_layout_idx].sizing.width.type_;
                         match w_type {
                             SizingType::Grow => {
@@ -2642,6 +2642,7 @@ impl PlyContext {
                             }
                             _ => {}
                         }
+                    } else {
                         let h_type = self.layout_configs[root_layout_idx].sizing.height.type_;
                         match h_type {
                             SizingType::Grow => {
@@ -2661,9 +2662,11 @@ impl PlyContext {
                     }
                 }
             }
+        }
 
-            // Clamp root element
-            let root_layout_idx = self.layout_elements[root_elem_idx].layout_config_index;
+        // Clamp root element
+        let root_layout_idx = self.layout_elements[root_elem_idx].layout_config_index;
+        if x_axis {
             if self.layout_configs[root_layout_idx].sizing.width.type_ != SizingType::Percent {
                 let min = self.layout_configs[root_layout_idx].sizing.width.min_max.min;
                 let max = self.layout_configs[root_layout_idx].sizing.width.min_max.max;
@@ -2672,6 +2675,7 @@ impl PlyContext {
                     max,
                 );
             }
+        } else {
             if self.layout_configs[root_layout_idx].sizing.height.type_ != SizingType::Percent {
                 let min = self.layout_configs[root_layout_idx].sizing.height.min_max.min;
                 let max = self.layout_configs[root_layout_idx].sizing.height.min_max.max;
@@ -2680,6 +2684,7 @@ impl PlyContext {
                     max,
                 );
             }
+        }
 
             let mut i = 0;
             while i < bfs_buffer.len() {
@@ -2805,7 +2810,6 @@ impl PlyContext {
                         if sizing_along_axis {
                             inner_content_size += new_size;
                         }
-                        self.update_aspect_ratio_box(child_element_index);
                     }
                 }
 
@@ -3160,7 +3164,7 @@ impl PlyContext {
                             let mut second_largest: f32 = 0.0;
                             let mut width_to_add = distribute;
 
-                            for &child_idx in &resizable_container_buffer {
+                            for &child_idx in resizable_container_buffer.iter() {
                                 let cs = if x_axis {
                                     self.layout_elements[child_idx as usize].dimensions.width
                                 } else {
@@ -3267,7 +3271,7 @@ impl PlyContext {
                                 let mut smallest_ratio = MAXFLOAT;
                                 let mut second_smallest_ratio = MAXFLOAT;
 
-                                for &child_idx in &resizable_container_buffer {
+                                for &child_idx in resizable_container_buffer.iter() {
                                     let child_layout_idx =
                                         self.layout_elements[child_idx as usize].layout_config_index;
                                     let child_sizing = if x_axis {
@@ -3376,7 +3380,7 @@ impl PlyContext {
                     }
                 } else {
                     // Off-axis sizing
-                    for &child_idx in &resizable_container_buffer {
+                    for &child_idx in resizable_container_buffer.iter() {
                         let child_idx = child_idx as usize;
                         let child_layout_idx =
                             self.layout_elements[child_idx].layout_config_index;
@@ -3401,11 +3405,6 @@ impl PlyContext {
                             }
                         }
 
-                        let is_cover_aspect = self
-                            .find_element_config_index(child_idx, ElementConfigType::Aspect)
-                            .map(|cfg_idx| self.aspect_ratio_cover_configs[cfg_idx])
-                            .unwrap_or(false);
-
                         let child_size_ref = if x_axis {
                             &mut self.layout_elements[child_idx].dimensions.width
                         } else {
@@ -3413,49 +3412,85 @@ impl PlyContext {
                         };
 
                         if child_sizing.type_ == SizingType::Grow && child_sizing.grow_weight > 0.0 {
-                            if is_cover_aspect {
-                                *child_size_ref = f32::max(*child_size_ref, max_size);
-                            } else {
-                                *child_size_ref = f32::min(max_size, child_sizing.min_max.max);
-                            }
+                            *child_size_ref = f32::min(max_size, child_sizing.min_max.max);
                         }
 
-                        if is_cover_aspect {
-                            *child_size_ref = f32::max(min_size, *child_size_ref);
-                        } else {
-                            *child_size_ref = f32::max(min_size, f32::min(*child_size_ref, max_size));
-                        }
+                        *child_size_ref = f32::max(min_size, f32::min(*child_size_ref, max_size));
                     }
+                }
+            }
+        }
+
+    fn size_containers_along_axis(&mut self, x_axis: bool) {
+        let mut bfs_buffer: Vec<i32> = Vec::new();
+        let mut resizable_container_buffer: Vec<i32> = Vec::new();
+
+        for root_index in 0..self.layout_element_tree_roots.len() {
+            self.size_root_along_axis(
+                root_index,
+                x_axis,
+                &mut bfs_buffer,
+                &mut resizable_container_buffer,
+            );
+        }
+    }
+
+    fn apply_slot_fit_to_all_elements(&mut self) {
+        while self.element_slot_fit_dimensions.len() < self.layout_elements.len() {
+            self.element_slot_fit_dimensions.push(None);
+        }
+        for elem_idx in 0..self.layout_elements.len() {
+            if let Some(cfg_idx) =
+                self.find_element_config_index(elem_idx, ElementConfigType::SlotFit)
+            {
+                let slot_fit = self.slot_fit_element_configs[cfg_idx];
+                let w = self.layout_elements[elem_idx].dimensions.width;
+                let h = self.layout_elements[elem_idx].dimensions.height;
+                if w > 0.0 && h > 0.0 && slot_fit.ratio > 0.0 {
+                    let (fitted_w, fitted_h) = match slot_fit.mode {
+                        SlotFitMode::Contain => (
+                            f32::min(w, h * slot_fit.ratio),
+                            f32::min(h, w / slot_fit.ratio),
+                        ),
+                        SlotFitMode::Cover => (
+                            f32::max(w, h * slot_fit.ratio),
+                            f32::max(h, w / slot_fit.ratio),
+                        ),
+                    };
+                    self.element_slot_fit_dimensions[elem_idx] =
+                        Some(Dimensions::new(fitted_w, fitted_h));
                 }
             }
         }
     }
 
     fn calculate_final_layout(&mut self) {
+        for elem_idx in 0..self.layout_elements.len() {
+            let layout_idx = self.layout_elements[elem_idx].layout_config_index;
+            let w_type = self.layout_configs[layout_idx].sizing.width.type_;
+            let h_type = self.layout_configs[layout_idx].sizing.height.type_;
+            if w_type == SizingType::Ratio && h_type == SizingType::Ratio {
+                panic!("An element cannot have ratio!() sizing on both width and height");
+            }
+        }
+
         // Size along X axis
         self.size_containers_along_axis(true);
 
         // Wrap text
         self.wrap_text();
 
-        // Scale vertical heights by aspect ratio
-        for i in 0..self.aspect_ratio_element_indexes.len() {
-            let elem_idx = self.aspect_ratio_element_indexes[i] as usize;
-            if let Some(cfg_idx) =
-                self.find_element_config_index(elem_idx, ElementConfigType::Aspect)
-            {
-                let aspect_ratio = self.aspect_ratio_configs[cfg_idx];
-                let is_cover = self.aspect_ratio_cover_configs[cfg_idx];
-                let new_height =
-                    (1.0 / aspect_ratio) * self.layout_elements[elem_idx].dimensions.width;
-                self.layout_elements[elem_idx].dimensions.height = new_height;
-                let layout_idx = self.layout_elements[elem_idx].layout_config_index;
-                self.layout_configs[layout_idx].sizing.height.min_max.min = new_height;
-                self.layout_configs[layout_idx].sizing.height.min_max.max = if is_cover {
-                    MAXFLOAT
-                } else {
-                    new_height
-                };
+        // Resolve height for elements that have SizingType::Ratio on height
+        for elem_idx in 0..self.layout_elements.len() {
+            let layout_idx = self.layout_elements[elem_idx].layout_config_index;
+            if self.layout_configs[layout_idx].sizing.height.type_ == SizingType::Ratio {
+                let ratio = self.layout_configs[layout_idx].sizing.height.ratio;
+                if ratio > 0.0 {
+                    let new_height = self.layout_elements[elem_idx].dimensions.width / ratio;
+                    self.layout_elements[elem_idx].dimensions.height = new_height;
+                    self.layout_configs[layout_idx].sizing.height.min_max.min = new_height;
+                    self.layout_configs[layout_idx].sizing.height.min_max.max = new_height;
+                }
             }
         }
 
@@ -3465,24 +3500,39 @@ impl PlyContext {
         // Size along Y axis
         self.size_containers_along_axis(false);
 
-        // Scale horizontal widths by aspect ratio
-        for i in 0..self.aspect_ratio_element_indexes.len() {
-            let elem_idx = self.aspect_ratio_element_indexes[i] as usize;
-            if let Some(cfg_idx) =
-                self.find_element_config_index(elem_idx, ElementConfigType::Aspect)
-            {
-                let aspect_ratio = self.aspect_ratio_configs[cfg_idx];
-                let is_cover = self.aspect_ratio_cover_configs[cfg_idx];
-                let new_width =
-                    aspect_ratio * self.layout_elements[elem_idx].dimensions.height;
-                self.layout_elements[elem_idx].dimensions.width = new_width;
-                let layout_idx = self.layout_elements[elem_idx].layout_config_index;
-                self.layout_configs[layout_idx].sizing.width.min_max.min = new_width;
-                self.layout_configs[layout_idx].sizing.width.min_max.max = if is_cover {
-                    MAXFLOAT
-                } else {
-                    new_width
-                };
+        // Resolve width for elements that have SizingType::Ratio on width
+        for elem_idx in 0..self.layout_elements.len() {
+            let layout_idx = self.layout_elements[elem_idx].layout_config_index;
+            if self.layout_configs[layout_idx].sizing.width.type_ == SizingType::Ratio {
+                let ratio = self.layout_configs[layout_idx].sizing.width.ratio;
+                if ratio > 0.0 {
+                    let new_width = self.layout_elements[elem_idx].dimensions.height * ratio;
+                    self.layout_elements[elem_idx].dimensions.width = new_width;
+                    self.layout_configs[layout_idx].sizing.width.min_max.min = new_width;
+                    self.layout_configs[layout_idx].sizing.width.min_max.max = new_width;
+                }
+            }
+        }
+
+        self.apply_slot_fit_to_all_elements();
+
+        // Size floating containers to their parents after ratios and slot-fit have been calculated
+        if self.layout_element_tree_roots.len() > 1 {
+            let mut bfs_buffer: Vec<i32> = Vec::new();
+            let mut resizable_container_buffer: Vec<i32> = Vec::new();
+            for root_index in 1..self.layout_element_tree_roots.len() {
+                self.size_root_along_axis(
+                    root_index,
+                    true,
+                    &mut bfs_buffer,
+                    &mut resizable_container_buffer,
+                );
+                self.size_root_along_axis(
+                    root_index,
+                    false,
+                    &mut bfs_buffer,
+                    &mut resizable_container_buffer,
+                );
             }
         }
 
@@ -3871,11 +3921,31 @@ impl PlyContext {
                 if !visited[buf_idx] {
                     visited[buf_idx] = true;
 
+                    let slot_dims = self.layout_elements[current_elem_idx].dimensions;
+                    let (elem_pos, elem_dims) = if let Some(fitted) = self
+                        .element_slot_fit_dimensions
+                        .get(current_elem_idx)
+                        .copied()
+                        .flatten()
+                    {
+                        let offset_x = (slot_dims.width - fitted.width) / 2.0;
+                        let offset_y = (slot_dims.height - fitted.height) / 2.0;
+                        (
+                            Vector2::new(
+                                current_node.position.x + offset_x,
+                                current_node.position.y + offset_y,
+                            ),
+                            fitted,
+                        )
+                    } else {
+                        (current_node.position, slot_dims)
+                    };
+
                     let current_bbox = BoundingBox::new(
-                        current_node.position.x,
-                        current_node.position.y,
-                        self.layout_elements[current_elem_idx].dimensions.width,
-                        self.layout_elements[current_elem_idx].dimensions.height,
+                        elem_pos.x,
+                        elem_pos.y,
+                        elem_dims.width,
+                        elem_dims.height,
                     );
 
                     // Apply scroll offset
@@ -3987,7 +4057,7 @@ impl PlyContext {
 
                         match config.config_type {
                             ElementConfigType::Shared
-                            | ElementConfigType::Aspect
+                            | ElementConfigType::SlotFit
                             | ElementConfigType::Floating
                             | ElementConfigType::Border => {}
                             ElementConfigType::Clip => {
@@ -7979,7 +8049,7 @@ impl PlyContext {
         match config_type {
             ElementConfigType::Shared => ("Shared", Color::rgba(243.0, 134.0, 48.0, 255.0)),
             ElementConfigType::Text => ("Text", Color::rgba(105.0, 210.0, 231.0, 255.0)),
-            ElementConfigType::Aspect => ("Aspect", Color::rgba(101.0, 149.0, 194.0, 255.0)),
+            ElementConfigType::SlotFit => ("Slot Fit", Color::rgba(101.0, 149.0, 194.0, 255.0)),
             ElementConfigType::Image => ("Image", Color::rgba(121.0, 189.0, 154.0, 255.0)),
             ElementConfigType::Floating => ("Floating", Color::rgba(250.0, 105.0, 0.0, 255.0)),
             ElementConfigType::Clip => ("Overflow", Color::rgba(242.0, 196.0, 90.0, 255.0)),
@@ -7995,7 +8065,7 @@ impl PlyContext {
             SizingType::Grow => "GROW",
             SizingType::Percent => "PERCENT",
             SizingType::Fixed => "FIXED",
-            // Default handled by Grow arm above
+            SizingType::Ratio => "RATIO",
         };
         self.debug_text(label, config_index);
         if matches!(sizing.type_, SizingType::Grow | SizingType::Fit | SizingType::Fixed) {
@@ -8028,6 +8098,10 @@ impl PlyContext {
             self.debug_text("(", config_index);
             self.debug_int_text(sizing.percent * 100.0, config_index);
             self.debug_text("%)", config_index);
+        } else if sizing.type_ == SizingType::Ratio {
+            self.debug_text("(", config_index);
+            self.debug_float_text(sizing.ratio, config_index);
+            self.debug_text(")", config_index);
         }
     }
 
@@ -9638,18 +9712,13 @@ impl PlyContext {
                         }
                         self.close_element();
                     }
-                    ElementConfigType::Aspect => {
+                    ElementConfigType::SlotFit => {
                         self.render_debug_view_element_config_header(
                             elem_id_string.clone(),
                             ec.config_type,
                             info_title_config,
                         );
-                        let aspect_ratio = self.aspect_ratio_configs[ec.config_index];
-                        let is_cover = self
-                            .aspect_ratio_cover_configs
-                            .get(ec.config_index)
-                            .copied()
-                            .unwrap_or(false);
+                        let slot_fit = self.slot_fit_element_configs[ec.config_index];
                         self.debug_open(&ElementDeclaration {
                             layout: LayoutConfig {
                                 padding: attr_padding,
@@ -9660,11 +9729,14 @@ impl PlyContext {
                             ..Default::default()
                         });
                         {
-                            self.debug_text("Aspect Ratio", info_title_config);
-                            self.debug_float_text(aspect_ratio, info_text_config);
+                            self.debug_text("Slot Fit", info_title_config);
+                            self.debug_float_text(slot_fit.ratio, info_text_config);
                             self.debug_text("Mode", info_title_config);
                             self.debug_text(
-                                if is_cover { "COVER" } else { "CONTAIN" },
+                                match slot_fit.mode {
+                                    SlotFitMode::Cover => "COVER",
+                                    SlotFitMode::Contain => "CONTAIN",
+                                },
                                 info_text_config,
                             );
                         }

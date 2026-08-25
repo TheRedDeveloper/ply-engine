@@ -56,6 +56,8 @@ pub enum SizingType {
     Percent,
     /// The element's size is set to a fixed value.
     Fixed,
+    /// The element's size is derived from the opposite axis using an aspect ratio.
+    Ratio,
 }
 
 /// Represents different sizing strategies for layout elements.
@@ -70,8 +72,10 @@ pub enum Sizing {
     Grow(f32, f32, f32),
     /// Sets a fixed width/height.
     Fixed(f32),
-    /// Sets width/height as a percentage of its parent. Value should be between `0.0` and `1.0`.
+    /// Sets width/height as a percentage of its parent.
     Percent(f32),
+    /// Derives width/height from the opposite axis using an aspect ratio.
+    Ratio(f32),
 }
 
 /// Converts a `Sizing` value into an engine `SizingAxis`.
@@ -83,6 +87,7 @@ impl From<Sizing> for engine::SizingAxis {
                 min_max: engine::SizingMinMax { min, max },
                 percent: 0.0,
                 grow_weight: 1.0,
+                ratio: 0.0,
             },
             Sizing::Grow(min, max, weight) => {
                 assert!(weight >= 0.0, "Grow weight must be non-negative.");
@@ -93,6 +98,7 @@ impl From<Sizing> for engine::SizingAxis {
                         min_max: engine::SizingMinMax { min, max },
                         percent: 0.0,
                         grow_weight: 1.0,
+                        ratio: 0.0,
                     }
                 } else {
                     Self {
@@ -100,6 +106,7 @@ impl From<Sizing> for engine::SizingAxis {
                         min_max: engine::SizingMinMax { min, max },
                         percent: 0.0,
                         grow_weight: weight,
+                        ratio: 0.0,
                     }
                 }
             }
@@ -111,13 +118,25 @@ impl From<Sizing> for engine::SizingAxis {
                 },
                 percent: 0.0,
                 grow_weight: 1.0,
+                ratio: 0.0,
             },
             Sizing::Percent(percent) => Self {
                 type_: engine::SizingType::Percent,
                 min_max: engine::SizingMinMax { min: 0.0, max: 0.0 },
                 percent,
                 grow_weight: 1.0,
+                ratio: 0.0,
             },
+            Sizing::Ratio(ratio) => {
+                assert!(ratio > 0.0, "Ratio must be greater than 0.0.");
+                Self {
+                    type_: engine::SizingType::Ratio,
+                    min_max: engine::SizingMinMax { min: 0.0, max: f32::MAX },
+                    percent: 0.0,
+                    grow_weight: 1.0,
+                    ratio,
+                }
+            }
         }
     }
 }
@@ -325,15 +344,26 @@ macro_rules! fixed {
 }
 
 /// Shorthand macro for [`Sizing::Percent`].
-/// The value has to be in range `0.0..=1.0`.
 #[macro_export]
 macro_rules! percent {
     ($percent:expr) => {{
         debug_assert!(
-            $percent >= 0.0 && $percent <= 1.0,
-            "Percent value must be between 0.0 and 1.0 inclusive!"
+            $percent >= 0.0,
+            "Percent value must be non-negative!"
         );
         $crate::layout::Sizing::Percent($percent)
+    }};
+}
+
+/// Shorthand macro for [`Sizing::Ratio`].
+#[macro_export]
+macro_rules! ratio {
+    ($ratio:expr) => {{
+        debug_assert!(
+            $ratio > 0.0,
+            "Ratio value must be greater than 0.0!"
+        );
+        $crate::layout::Sizing::Ratio($ratio)
     }};
 }
 

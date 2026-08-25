@@ -218,30 +218,25 @@ impl<'ply, State> ElementBuilder<'ply, State> {
         self
     }
 
-    /// Sets the aspect ratio of the element.
-    #[inline]
-    pub fn aspect_ratio(mut self, aspect_ratio: f32) -> Self {
-        self.inner.aspect_ratio = aspect_ratio;
-        self
-    }
-
-    /// Sizes the element to the largest box that fits its parent while preserving `aspect_ratio`.
+    /// Sizes the element to the largest box that fits its layout slot while preserving `aspect_ratio`.
     #[inline]
     pub fn contain(mut self, aspect_ratio: f32) -> Self {
-        self.inner.layout.sizing.width = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
-        self.inner.layout.sizing.height = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
-        self.inner.aspect_ratio = aspect_ratio;
-        self.inner.cover_aspect_ratio = false;
+        assert!(aspect_ratio > 0.0, "Aspect ratio must be greater than 0.0.");
+        self.inner.slot_fit = Some(engine::SlotFitConfig {
+            ratio: aspect_ratio,
+            mode: engine::SlotFitMode::Contain,
+        });
         self
     }
 
-    /// Sizes the element to completely cover its parent while preserving `aspect_ratio`.
+    /// Sizes the element to completely cover its layout slot while preserving `aspect_ratio`.
     #[inline]
     pub fn cover(mut self, aspect_ratio: f32) -> Self {
-        self.inner.layout.sizing.width = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
-        self.inner.layout.sizing.height = layout::Sizing::Grow(0.0, f32::MAX, 1.0).into();
-        self.inner.aspect_ratio = aspect_ratio;
-        self.inner.cover_aspect_ratio = true;
+        assert!(aspect_ratio > 0.0, "Aspect ratio must be greater than 0.0.");
+        self.inner.slot_fit = Some(engine::SlotFitConfig {
+            ratio: aspect_ratio,
+            mode: engine::SlotFitMode::Cover,
+        });
         self
     }
 
@@ -2227,6 +2222,127 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].bounding_box.width, 200.0);
         assert_eq!(items[1].bounding_box.width, 400.0);
+    }
+
+    #[test]
+    fn test_ratio_height_from_fixed_width() {
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(200.0))
+            .height(ratio!(2.0))
+            .background_color(0xFF0000)
+            .empty();
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].bounding_box.width, 200.0);
+        assert_eq!(items[0].bounding_box.height, 100.0);
+    }
+
+    #[test]
+    fn test_ratio_width_from_grow_height() {
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(800.0))
+            .height(fixed!(200.0))
+            .background_color(0xFF0000)
+            .children(|ui| {
+                ui.element()
+                    .width(ratio!(1.5))
+                    .height(grow!())
+                    .background_color(0x00FF00)
+                    .empty();
+            });
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 2);
+        let child = &items[1];
+        assert_eq!(child.bounding_box.height, 200.0);
+        assert_eq!(child.bounding_box.width, 300.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "An element cannot have ratio!() sizing on both width and height")]
+    fn test_ratio_on_both_axes_panics() {
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(ratio!(1.0))
+            .height(ratio!(1.0))
+            .empty();
+
+        let _ = ui.eval();
+    }
+
+    #[test]
+    fn test_contain_and_cover_slot_fit() {
+        let mut ply = Ply::new_headless(Dimensions::new(1000.0, 800.0));
+        let mut ui = ply.begin();
+
+        ui.element()
+            .width(fixed!(1000.0))
+            .height(fixed!(400.0))
+            .layout(|l| l.direction(crate::layout::LayoutDirection::LeftToRight).gap(0))
+            .children(|ui| {
+                // Sibling 0: fixed 100x200 -> placed at x=0..100
+                ui.element().width(fixed!(100.0)).height(fixed!(200.0)).background_color(0xFFFFFF).empty();
+
+                // Sibling 1: Slot of 400x200 (2:1). Ratio is 1:1.
+                // Allocated slot is x=100..500.
+                // Contain (1.0) creates 200x200 box centered at x = 100 + (400-200)/2 = 200.
+                ui.element()
+                    .width(fixed!(400.0))
+                    .height(fixed!(200.0))
+                    .contain(1.0)
+                    .background_color(0xFF0000)
+                    .empty();
+
+                // Sibling 2: fixed 100x200 -> placed at x=500..600 (sibling slot is preserved!)
+                ui.element().width(fixed!(100.0)).height(fixed!(200.0)).background_color(0x0000FF).empty();
+
+                // Sibling 3: Slot of 200x200. Ratio is 2:1 (w/h = 2).
+                // Allocated slot is x=600..800.
+                // Cover (2.0) creates 400x200 box centered at x = 600 + (200-400)/2 = 500.
+                ui.element()
+                    .width(fixed!(200.0))
+                    .height(fixed!(200.0))
+                    .cover(2.0)
+                    .background_color(0x00FF00)
+                    .empty();
+
+                // Sibling 4: fixed 100x200 -> placed at x=800..900
+                ui.element().width(fixed!(100.0)).height(fixed!(200.0)).background_color(0xFFFF00).empty();
+            });
+
+        let items = ui.eval();
+        assert_eq!(items.len(), 5); // 5 rendered elements (background color > 0)
+
+        // Sibling 0: x=0, w=100
+        assert_eq!(items[0].bounding_box.x, 0.0);
+        assert_eq!(items[0].bounding_box.width, 100.0);
+
+        // Sibling 1 (contain 1:1 in 400x200 slot): centered at x=200, w=200, h=200
+        assert_eq!(items[1].bounding_box.x, 200.0);
+        assert_eq!(items[1].bounding_box.width, 200.0);
+        assert_eq!(items[1].bounding_box.height, 200.0);
+
+        // Sibling 2: placed right after the 400px slot at x=500, w=100
+        assert_eq!(items[2].bounding_box.x, 500.0);
+        assert_eq!(items[2].bounding_box.width, 100.0);
+
+        // Sibling 3 (cover 2:1 in 200x200 slot): centered at x=500, w=400, h=200
+        assert_eq!(items[3].bounding_box.x, 500.0);
+        assert_eq!(items[3].bounding_box.width, 400.0);
+        assert_eq!(items[3].bounding_box.height, 200.0);
+
+        // Sibling 4: placed right after the 200px slot at x=800, w=100
+        assert_eq!(items[4].bounding_box.x, 800.0);
+        assert_eq!(items[4].bounding_box.width, 100.0);
     }
 
     #[test]

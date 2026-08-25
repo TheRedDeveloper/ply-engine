@@ -144,6 +144,7 @@ Everything below is re-exported from `ply_engine::prelude` in this repository.
 - `fit!`
 - `fixed!`
 - `percent!`
+- `ratio!`
 
 ### 4.4 Globbed Enums
 
@@ -249,7 +250,6 @@ Layout and sizing:
 
 - `width(Sizing)`
 - `height(Sizing)`
-- `aspect_ratio(f32)`
 - `contain(f32)`
 - `cover(f32)`
 - `layout(|LayoutBuilder| ...)`
@@ -297,12 +297,15 @@ Text input and accessibility:
 - `fit!()` or `fit!(min, max)` or named args (`min:`, `max:`)
 - `grow!()` or `grow!(min, max, weight)` or named args (`min:`, `max:`, `weight:`)
 - `fixed!(px)`
-- `percent!(0.0..=1.0)`
+- `percent!(fraction)`
+- `ratio!(aspect_ratio)`
 
 Notes:
 
 - `grow!(weight: 0.0)` behaves as fit internally.
 - negative grow weight is invalid.
+- `ratio!(r)` derives the dimension from the opposite axis (`height = width / ratio` on height, `width = height * ratio` on width). Setting `ratio!` on both axes panics during layout.
+- `contain(ratio)` and `cover(ratio)` adjust the element's resolved bounding box to fit or cover its allocated slot to respect the aspect ratio.
 
 ### 6.2 `LayoutBuilder`
 
