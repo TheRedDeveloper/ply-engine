@@ -258,7 +258,7 @@ Visuals:
 
 - `background_color(color)`
 - `corner_radius(f32 | (f32, f32, f32, f32))`
-- `border(|BorderBuilder| ...)`
+- `border(|BorderBuilder| ...)` (multiple possible)
 - `overflow(|OverflowBuilder| ...)`
 - `image(ImageSource)`
 - `effect(shader_asset, |ShaderBuilder| ...)`

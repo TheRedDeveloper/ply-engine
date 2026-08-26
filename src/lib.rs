@@ -267,12 +267,12 @@ impl<'ply, State> ElementBuilder<'ply, State> {
         self
     }
 
-    /// Configures border properties using a closure.
+    /// Configures border properties using a closure. Multiple `.border()` calls add additional overlaying borders.
     #[inline]
     pub fn border(mut self, f: impl for<'a> FnOnce(&'a mut elements::BorderBuilder) -> &'a mut elements::BorderBuilder) -> Self {
-        let mut builder = elements::BorderBuilder { config: self.inner.border };
+        let mut builder = elements::BorderBuilder { config: engine::BorderConfig::default() };
         f(&mut builder);
-        self.inner.border = builder.config;
+        self.inner.borders.push(builder.config);
         self
     }
 
@@ -1810,6 +1810,7 @@ impl Ply {
 mod tests {
     use super::*;
     use color::Color;
+    use elements::BorderPosition;
     use layout::{Padding, Sizing};
 
     #[test]
@@ -1868,6 +1869,11 @@ mod tests {
                 .color(0xFFFF00)
                 .all(2)
             )
+            .border(|b| b
+                .color(0xFF00FF)
+                .all(4)
+                .position(BorderPosition::Outside)
+            )
             .corner_radius(10.0)
             .children(|ui| {
                 ui.element().width(fixed!(50.0)).height(fixed!(50.0))
@@ -1884,7 +1890,7 @@ mod tests {
             );
         }
 
-        assert_eq!(items.len(), 6);
+        assert_eq!(items.len(), 7);
         
         assert_eq!(items[0].bounding_box.x, 0.0);
         assert_eq!(items[0].bounding_box.y, 0.0);
@@ -1978,6 +1984,29 @@ mod tests {
                 assert_eq!(border.width.bottom, 2);
             }
             _ => panic!("Expected Border config for item 5"),
+        }
+
+        assert_eq!(items[6].bounding_box.x, 100.0);
+        assert_eq!(items[6].bounding_box.y, 0.0);
+        assert_eq!(items[6].bounding_box.width, 50.0);
+        assert_eq!(items[6].bounding_box.height, 50.0);
+        match &items[6].config {
+            render_commands::RenderCommandConfig::Border(border) => {
+                assert_eq!(border.color.r, 255.0);
+                assert_eq!(border.color.g, 0.0);
+                assert_eq!(border.color.b, 255.0);
+                assert_eq!(border.color.a, 255.0);
+                assert_eq!(border.corner_radii.top_left, 10.0);
+                assert_eq!(border.corner_radii.top_right, 10.0);
+                assert_eq!(border.corner_radii.bottom_left, 10.0);
+                assert_eq!(border.corner_radii.bottom_right, 10.0);
+                assert_eq!(border.width.left, 4);
+                assert_eq!(border.width.right, 4);
+                assert_eq!(border.width.top, 4);
+                assert_eq!(border.width.bottom, 4);
+                assert!(matches!(border.position, BorderPosition::Outside));
+            }
+            _ => panic!("Expected Border config for item 6"),
         }
     }
 

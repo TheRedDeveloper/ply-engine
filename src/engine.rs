@@ -336,7 +336,7 @@ pub struct ElementDeclaration {
     pub image_data: Option<ImageSource>,
     pub floating: FloatingConfig,
     pub clip: ClipConfig,
-    pub border: BorderConfig,
+    pub borders: Vec<BorderConfig>,
     pub user_data: usize,
     pub effects: Vec<ShaderConfig>,
     pub shaders: Vec<ShaderConfig>,
@@ -358,7 +358,7 @@ impl Default for ElementDeclaration {
             image_data: None,
             floating: FloatingConfig::default(),
             clip: ClipConfig::default(),
-            border: BorderConfig::default(),
+            borders: Vec::new(),
             user_data: 0,
             effects: Vec::new(),
             shaders: Vec::new(),
@@ -1467,10 +1467,12 @@ impl PlyContext {
         }
 
         // Border config
-        if !declaration.border.width.is_zero() {
-            self.border_element_configs.push(declaration.border);
-            let idx = self.border_element_configs.len() - 1;
-            self.attach_element_config(ElementConfigType::Border, idx);
+        for border in &declaration.borders {
+            if !border.width.is_zero() {
+                self.border_element_configs.push(*border);
+                let idx = self.border_element_configs.len() - 1;
+                self.attach_element_config(ElementConfigType::Border, idx);
+            }
         }
 
         // Store per-element shader effects
@@ -5182,113 +5184,115 @@ impl PlyContext {
                                     )
                                     .map(|idx| self.shared_element_configs[idx])
                                     .unwrap_or_default();
-                                let border_cfg_idx = self
-                                    .find_element_config_index(
-                                        current_elem_idx,
-                                        ElementConfigType::Border,
-                                    )
-                                    .unwrap();
-                                let border_config = self.border_element_configs[border_cfg_idx];
 
-                                let children_count =
-                                    self.layout_elements[current_elem_idx].children_length;
+                                let elem = &self.layout_elements[current_elem_idx];
+                                let cfg_start = elem.element_configs.start as usize;
+                                let cfg_len = elem.element_configs.length as usize;
+                                let children_count = elem.children_length;
+                                let children_start = elem.children_start;
+                                let children_length = elem.children_length as usize;
 
-                                // between-children borders
-                                if border_config.width.between_children > 0
-                                    && border_config.color.a > 0.0
-                                {
-                                    let half_gap = layout_config.child_gap as f32 / 2.0;
-                                    let half_divider =
-                                        border_config.width.between_children as f32 / 2.0;
-                                    let children_start =
-                                        self.layout_elements[current_elem_idx].children_start;
-                                    let children_length = self.layout_elements[current_elem_idx]
-                                        .children_length
-                                        as usize;
+                                let mut border_order = 0u32;
+                                for cfg_i in 0..cfg_len {
+                                    let ec = &self.element_configs[cfg_start + cfg_i];
+                                    if ec.config_type != ElementConfigType::Border {
+                                        continue;
+                                    }
+                                    let border_config = self.border_element_configs[ec.config_index];
 
-                                    if layout_config.layout_direction
-                                        == LayoutDirection::LeftToRight
+                                    // between-children borders
+                                    if border_config.width.between_children > 0
+                                        && border_config.color.a > 0.0
                                     {
-                                        let mut border_offset_x =
-                                            layout_config.padding.left as f32 - half_gap;
-                                        for ci in 0..children_length {
-                                            let child_idx = self.layout_element_children
-                                                [children_start + ci]
-                                                as usize;
-                                            if ci > 0 {
-                                                self.add_render_command(InternalRenderCommand {
-                                                    bounding_box: BoundingBox::new(
-                                                        bbox.x + border_offset_x
-                                                            - half_divider
-                                                            + scroll_offset.x,
-                                                        bbox.y + scroll_offset.y,
-                                                        border_config.width.between_children as f32,
-                                                        self.layout_elements[current_elem_idx]
-                                                            .dimensions
-                                                            .height,
-                                                    ),
-                                                    command_type: RenderCommandType::Rectangle,
-                                                    render_data: InternalRenderData::Rectangle {
-                                                        background_color: border_config.color,
-                                                        corner_radius: CornerRadius::default(),
-                                                    },
-                                                    user_data: shared.user_data,
-                                                    id: hash_number(
-                                                        self.layout_elements[current_elem_idx].id,
-                                                        children_count as u32 + 1 + ci as u32,
-                                                    )
-                                                    .id,
-                                                    z_index: root.z_index,
-                                                    visual_rotation: None,
-                                                    shape_rotation: None,
-                                                    effects: Vec::new(),
-                                                });
+                                        let half_gap = layout_config.child_gap as f32 / 2.0;
+                                        let half_divider =
+                                            border_config.width.between_children as f32 / 2.0;
+
+                                        if layout_config.layout_direction
+                                            == LayoutDirection::LeftToRight
+                                        {
+                                            let mut border_offset_x =
+                                                layout_config.padding.left as f32 - half_gap;
+                                            for ci in 0..children_length {
+                                                let child_idx = self.layout_element_children
+                                                    [children_start + ci]
+                                                    as usize;
+                                                if ci > 0 {
+                                                    self.add_render_command(InternalRenderCommand {
+                                                        bounding_box: BoundingBox::new(
+                                                            bbox.x + border_offset_x
+                                                                - half_divider
+                                                                + scroll_offset.x,
+                                                            bbox.y + scroll_offset.y,
+                                                            border_config.width.between_children as f32,
+                                                            self.layout_elements[current_elem_idx]
+                                                                .dimensions
+                                                                .height,
+                                                        ),
+                                                        command_type: RenderCommandType::Rectangle,
+                                                        render_data: InternalRenderData::Rectangle {
+                                                            background_color: border_config.color,
+                                                            corner_radius: CornerRadius::default(),
+                                                        },
+                                                        user_data: shared.user_data,
+                                                        id: hash_number(
+                                                            self.layout_elements[current_elem_idx].id,
+                                                            children_count as u32 + 1 + ci as u32 + (border_order * 1000),
+                                                        )
+                                                        .id,
+                                                        z_index: root.z_index,
+                                                        visual_rotation: None,
+                                                        shape_rotation: None,
+                                                        effects: Vec::new(),
+                                                    });
+                                                }
+                                                border_offset_x +=
+                                                    self.layout_elements[child_idx].dimensions.width
+                                                        + layout_config.child_gap as f32;
                                             }
-                                            border_offset_x +=
-                                                self.layout_elements[child_idx].dimensions.width
-                                                    + layout_config.child_gap as f32;
-                                        }
-                                    } else {
-                                        let mut border_offset_y =
-                                            layout_config.padding.top as f32 - half_gap;
-                                        for ci in 0..children_length {
-                                            let child_idx = self.layout_element_children
-                                                [children_start + ci]
-                                                as usize;
-                                            if ci > 0 {
-                                                self.add_render_command(InternalRenderCommand {
-                                                    bounding_box: BoundingBox::new(
-                                                        bbox.x + scroll_offset.x,
-                                                        bbox.y + border_offset_y
-                                                            - half_divider
-                                                            + scroll_offset.y,
-                                                        self.layout_elements[current_elem_idx]
-                                                            .dimensions
-                                                            .width,
-                                                        border_config.width.between_children as f32,
-                                                    ),
-                                                    command_type: RenderCommandType::Rectangle,
-                                                    render_data: InternalRenderData::Rectangle {
-                                                        background_color: border_config.color,
-                                                        corner_radius: CornerRadius::default(),
-                                                    },
-                                                    user_data: shared.user_data,
-                                                    id: hash_number(
-                                                        self.layout_elements[current_elem_idx].id,
-                                                        children_count as u32 + 1 + ci as u32,
-                                                    )
-                                                    .id,
-                                                    z_index: root.z_index,
-                                                    visual_rotation: None,
-                                                    shape_rotation: None,
-                                                    effects: Vec::new(),
-                                                });
+                                        } else {
+                                            let mut border_offset_y =
+                                                layout_config.padding.top as f32 - half_gap;
+                                            for ci in 0..children_length {
+                                                let child_idx = self.layout_element_children
+                                                    [children_start + ci]
+                                                    as usize;
+                                                if ci > 0 {
+                                                    self.add_render_command(InternalRenderCommand {
+                                                        bounding_box: BoundingBox::new(
+                                                            bbox.x + scroll_offset.x,
+                                                            bbox.y + border_offset_y
+                                                                - half_divider
+                                                                + scroll_offset.y,
+                                                            self.layout_elements[current_elem_idx]
+                                                                .dimensions
+                                                                .width,
+                                                            border_config.width.between_children as f32,
+                                                        ),
+                                                        command_type: RenderCommandType::Rectangle,
+                                                        render_data: InternalRenderData::Rectangle {
+                                                            background_color: border_config.color,
+                                                            corner_radius: CornerRadius::default(),
+                                                        },
+                                                        user_data: shared.user_data,
+                                                        id: hash_number(
+                                                            self.layout_elements[current_elem_idx].id,
+                                                            children_count as u32 + 1 + ci as u32 + (border_order * 1000),
+                                                        )
+                                                        .id,
+                                                        z_index: root.z_index,
+                                                        visual_rotation: None,
+                                                        shape_rotation: None,
+                                                        effects: Vec::new(),
+                                                    });
+                                                }
+                                                border_offset_y +=
+                                                    self.layout_elements[child_idx].dimensions.height
+                                                        + layout_config.child_gap as f32;
                                             }
-                                            border_offset_y +=
-                                                self.layout_elements[child_idx].dimensions.height
-                                                    + layout_config.child_gap as f32;
                                         }
                                     }
+                                    border_order += 1;
                                 }
                             }
                         }
@@ -5360,36 +5364,52 @@ impl PlyContext {
                                     )
                                     .map(|idx| self.shared_element_configs[idx])
                                     .unwrap_or_default();
-                                let border_cfg_idx = self
-                                    .find_element_config_index(
-                                        current_elem_idx,
-                                        ElementConfigType::Border,
-                                    )
-                                    .unwrap();
-                                let border_config = self.border_element_configs[border_cfg_idx];
 
-                                let children_count =
-                                    self.layout_elements[current_elem_idx].children_length;
-                                self.add_render_command(InternalRenderCommand {
-                                    bounding_box: bbox,
-                                    command_type: RenderCommandType::Border,
-                                    render_data: InternalRenderData::Border {
-                                        color: border_config.color,
-                                        corner_radius: shared.corner_radius,
-                                        width: border_config.width,
-                                        position: border_config.position,
-                                    },
-                                    user_data: shared.user_data,
-                                    id: hash_number(
-                                        self.layout_elements[current_elem_idx].id,
-                                        children_count as u32,
-                                    )
-                                    .id,
-                                    z_index: root.z_index,
-                                    visual_rotation: None,
-                                    shape_rotation: None,
-                                    effects: Vec::new(),
-                                });
+                                let elem = &self.layout_elements[current_elem_idx];
+                                let cfg_start = elem.element_configs.start as usize;
+                                let cfg_len = elem.element_configs.length as usize;
+                                let children_count = elem.children_length;
+
+                                let mut border_order = 0u32;
+                                for cfg_i in 0..cfg_len {
+                                    let ec = &self.element_configs[cfg_start + cfg_i];
+                                    if ec.config_type != ElementConfigType::Border {
+                                        continue;
+                                    }
+                                    let border_config = self.border_element_configs[ec.config_index];
+
+                                    let cmd_id = if border_order == 0 {
+                                        hash_number(
+                                            self.layout_elements[current_elem_idx].id,
+                                            children_count as u32,
+                                        )
+                                        .id
+                                    } else {
+                                        hash_number(
+                                            self.layout_elements[current_elem_idx].id,
+                                            children_count as u32 + 200 + border_order,
+                                        )
+                                        .id
+                                    };
+
+                                    self.add_render_command(InternalRenderCommand {
+                                        bounding_box: bbox,
+                                        command_type: RenderCommandType::Border,
+                                        render_data: InternalRenderData::Border {
+                                            color: border_config.color,
+                                            corner_radius: shared.corner_radius,
+                                            width: border_config.width,
+                                            position: border_config.position,
+                                        },
+                                        user_data: shared.user_data,
+                                        id: cmd_id,
+                                        z_index: root.z_index,
+                                        visual_rotation: None,
+                                        shape_rotation: None,
+                                        effects: Vec::new(),
+                                    });
+                                    border_order += 1;
+                                }
                             }
                         }
                     }
@@ -8193,11 +8213,11 @@ impl PlyContext {
                 },
                 background_color: bg,
                 corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                border: BorderConfig {
+                borders: vec![BorderConfig {
                     color: label_color,
                     width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                     ..Default::default()
-                },
+                }],
                 ..Default::default()
             });
             {
@@ -8290,11 +8310,11 @@ impl PlyContext {
                 },
                 background_color: color,
                 corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                border: BorderConfig {
+                borders: vec![BorderConfig {
                     color: Self::DEBUG_COLOR_4,
                     width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                     ..Default::default()
-                },
+                }],
                 ..Default::default()
             });
             self.close_element();
@@ -8483,11 +8503,11 @@ impl PlyContext {
                             },
                             ..Default::default()
                         },
-                        border: BorderConfig {
+                        borders: vec![BorderConfig {
                             color: Self::DEBUG_COLOR_3,
                             width: BorderWidth { top: 1, ..Default::default() },
                             ..Default::default()
-                        },
+                        }],
                         ..Default::default()
                     });
                     self.close_element();
@@ -8577,11 +8597,11 @@ impl PlyContext {
                                 ..Default::default()
                             },
                             corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                            border: BorderConfig {
+                            borders: vec![BorderConfig {
                                 color: Self::DEBUG_COLOR_3,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                 ..Default::default()
-                            },
+                            }],
                             ..Default::default()
                         });
                         {
@@ -8635,11 +8655,11 @@ impl PlyContext {
                                 padding: PaddingConfig { left: 8, right: 8, top: 2, bottom: 2 },
                                 ..Default::default()
                             },
-                            border: BorderConfig {
+                            borders: vec![BorderConfig {
                                 color: Color::rgba(177.0, 147.0, 8.0, 255.0),
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                 ..Default::default()
-                            },
+                            }],
                             ..Default::default()
                         });
                         {
@@ -8660,11 +8680,11 @@ impl PlyContext {
                                 padding: PaddingConfig { left: 8, right: 8, top: 2, bottom: 2 },
                                 ..Default::default()
                             },
-                            border: BorderConfig {
+                            borders: vec![BorderConfig {
                                 color: Self::DEBUG_COLOR_3,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                 ..Default::default()
-                            },
+                            }],
                             ..Default::default()
                         });
                         {
@@ -8713,11 +8733,11 @@ impl PlyContext {
                                     },
                                     background_color: label_color,
                                     corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                                    border: BorderConfig {
+                                    borders: vec![BorderConfig {
                                         color: label_color,
                                         width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                         ..Default::default()
-                                    },
+                                    }],
                                     ..Default::default()
                                 });
                                 {
@@ -8739,11 +8759,11 @@ impl PlyContext {
                                     },
                                     background_color: radius_color,
                                     corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                                    border: BorderConfig {
+                                    borders: vec![BorderConfig {
                                         color: radius_color,
                                         width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                         ..Default::default()
-                                    },
+                                    }],
                                     ..Default::default()
                                 });
                                 {
@@ -8767,11 +8787,11 @@ impl PlyContext {
                             },
                             background_color: bg,
                             corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                            border: BorderConfig {
+                            borders: vec![BorderConfig {
                                 color: label_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                 ..Default::default()
-                            },
+                            }],
                             ..Default::default()
                         });
                         {
@@ -8807,11 +8827,11 @@ impl PlyContext {
                                 },
                                 background_color: bg,
                                 corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                                border: BorderConfig {
+                                borders: vec![BorderConfig {
                                     color: border_color,
                                     width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                     ..Default::default()
-                                },
+                                }],
                                 ..Default::default()
                             });
                             {
@@ -8838,11 +8858,11 @@ impl PlyContext {
                             },
                             background_color: badge_color,
                             corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                            border: BorderConfig {
+                            borders: vec![BorderConfig {
                                 color: badge_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                 ..Default::default()
-                            },
+                            }],
                             ..Default::default()
                         });
                         {
@@ -8868,11 +8888,11 @@ impl PlyContext {
                             },
                             background_color: badge_color,
                             corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                            border: BorderConfig {
+                            borders: vec![BorderConfig {
                                 color: badge_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                 ..Default::default()
-                            },
+                            }],
                             ..Default::default()
                         });
                         {
@@ -8898,11 +8918,11 @@ impl PlyContext {
                             },
                             background_color: badge_color,
                             corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                            border: BorderConfig {
+                            borders: vec![BorderConfig {
                                 color: badge_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                 ..Default::default()
-                            },
+                            }],
                             ..Default::default()
                         });
                         {
@@ -8928,11 +8948,11 @@ impl PlyContext {
                             },
                             background_color: badge_color,
                             corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                            border: BorderConfig {
+                            borders: vec![BorderConfig {
                                 color: badge_color,
                                 width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                                 ..Default::default()
-                            },
+                            }],
                             ..Default::default()
                         });
                         {
@@ -9031,11 +9051,11 @@ impl PlyContext {
                             padding: PaddingConfig { left: indent_width, ..Default::default() },
                             ..Default::default()
                         },
-                        border: BorderConfig {
+                        borders: vec![BorderConfig {
                             color: Self::DEBUG_COLOR_3,
                             width: BorderWidth { left: 1, ..Default::default() },
                             ..Default::default()
-                        },
+                        }],
                         ..Default::default()
                     });
                     self.open_element();
@@ -9206,11 +9226,11 @@ impl PlyContext {
                 clip_to: FloatingClipToElement::AttachedParent,
                 ..Default::default()
             },
-            border: BorderConfig {
+            borders: vec![BorderConfig {
                 color: Self::DEBUG_COLOR_3,
                 width: BorderWidth { bottom: 1, ..Default::default() },
                 ..Default::default()
-            },
+            }],
             ..Default::default()
         });
         {
@@ -9259,11 +9279,11 @@ impl PlyContext {
                     },
                     background_color: Color::rgba(217.0, 91.0, 67.0, 80.0),
                     corner_radius: CornerRadius { top_left: 4.0, top_right: 4.0, bottom_left: 4.0, bottom_right: 4.0 },
-                    border: BorderConfig {
+                    borders: vec![BorderConfig {
                         color: Color::rgba(217.0, 91.0, 67.0, 255.0),
                         width: BorderWidth { left: 1, right: 1, top: 1, bottom: 1, between_children: 0 },
                         ..Default::default()
-                    },
+                    }],
                     ..Default::default()
                 });
                 {
@@ -9442,11 +9462,11 @@ impl PlyContext {
                 child_offset: self.get_scroll_offset(),
                 ..Default::default()
             },
-            border: BorderConfig {
+            borders: vec![BorderConfig {
                 color: Self::DEBUG_COLOR_3,
                 width: BorderWidth { between_children: 1, ..Default::default() },
                 ..Default::default()
-            },
+            }],
             ..Default::default()
         });
         {
