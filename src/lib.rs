@@ -2300,7 +2300,21 @@ mod tests {
                     .height(fixed!(200.0))
                     .contain(1.0)
                     .background_color(0xFF0000)
-                    .empty();
+                    .children(|ui| {
+                        // Grow child inside contain element: must be 200x200 at x=200
+                        ui.element()
+                            .width(grow!())
+                            .height(grow!())
+                            .background_color(0x111111)
+                            .children(|ui| {
+                                // Percent grandchild inside contain element: must be 100x100 at x=200
+                                ui.element()
+                                    .width(percent!(0.5))
+                                    .height(percent!(0.5))
+                                    .background_color(0x222222)
+                                    .empty();
+                            });
+                    });
 
                 // Sibling 2: fixed 100x200 -> placed at x=500..600 (sibling slot is preserved!)
                 ui.element().width(fixed!(100.0)).height(fixed!(200.0)).background_color(0x0000FF).empty();
@@ -2313,14 +2327,21 @@ mod tests {
                     .height(fixed!(200.0))
                     .cover(2.0)
                     .background_color(0x00FF00)
-                    .empty();
+                    .children(|ui| {
+                        // Grow child inside cover element: must be 400x200 at x=500
+                        ui.element()
+                            .width(grow!())
+                            .height(grow!())
+                            .background_color(0x333333)
+                            .empty();
+                    });
 
-                // Sibling 4: fixed 100x200 -> placed at x=800..900
+                // Sibling 4: placed right after the 200px slot at x=800..900
                 ui.element().width(fixed!(100.0)).height(fixed!(200.0)).background_color(0xFFFF00).empty();
             });
 
         let items = ui.eval();
-        assert_eq!(items.len(), 5); // 5 rendered elements (background color > 0)
+        assert_eq!(items.len(), 8); // 5 top-level elements + 2 inside sibling 1 + 1 inside sibling 3
 
         // Sibling 0: x=0, w=100
         assert_eq!(items[0].bounding_box.x, 0.0);
@@ -2331,18 +2352,33 @@ mod tests {
         assert_eq!(items[1].bounding_box.width, 200.0);
         assert_eq!(items[1].bounding_box.height, 200.0);
 
+        // Child inside Sibling 1 (grow): centered at x=200, w=200, h=200
+        assert_eq!(items[2].bounding_box.x, 200.0);
+        assert_eq!(items[2].bounding_box.width, 200.0);
+        assert_eq!(items[2].bounding_box.height, 200.0);
+
+        // Grandchild inside Child 1 (percent 0.5): at x=200, w=100, h=100
+        assert_eq!(items[3].bounding_box.x, 200.0);
+        assert_eq!(items[3].bounding_box.width, 100.0);
+        assert_eq!(items[3].bounding_box.height, 100.0);
+
         // Sibling 2: placed right after the 400px slot at x=500, w=100
-        assert_eq!(items[2].bounding_box.x, 500.0);
-        assert_eq!(items[2].bounding_box.width, 100.0);
+        assert_eq!(items[4].bounding_box.x, 500.0);
+        assert_eq!(items[4].bounding_box.width, 100.0);
 
         // Sibling 3 (cover 2:1 in 200x200 slot): centered at x=500, w=400, h=200
-        assert_eq!(items[3].bounding_box.x, 500.0);
-        assert_eq!(items[3].bounding_box.width, 400.0);
-        assert_eq!(items[3].bounding_box.height, 200.0);
+        assert_eq!(items[5].bounding_box.x, 500.0);
+        assert_eq!(items[5].bounding_box.width, 400.0);
+        assert_eq!(items[5].bounding_box.height, 200.0);
+
+        // Child inside Sibling 3 (grow): centered at x=500, w=400, h=200
+        assert_eq!(items[6].bounding_box.x, 500.0);
+        assert_eq!(items[6].bounding_box.width, 400.0);
+        assert_eq!(items[6].bounding_box.height, 200.0);
 
         // Sibling 4: placed right after the 200px slot at x=800, w=100
-        assert_eq!(items[4].bounding_box.x, 800.0);
-        assert_eq!(items[4].bounding_box.width, 100.0);
+        assert_eq!(items[7].bounding_box.x, 800.0);
+        assert_eq!(items[7].bounding_box.width, 100.0);
     }
 
     #[test]

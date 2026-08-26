@@ -2509,10 +2509,16 @@ impl PlyContext {
             return Vec::new();
         }
 
+        let parent_dims = self
+            .element_slot_fit_dimensions
+            .get(parent_index)
+            .copied()
+            .flatten()
+            .unwrap_or(self.layout_elements[parent_index].dimensions);
         let parent_main_size = if main_axis_x {
-            self.layout_elements[parent_index].dimensions.width
+            parent_dims.width
         } else {
-            self.layout_elements[parent_index].dimensions.height
+            parent_dims.height
         };
         let main_padding = if main_axis_x {
             (layout.padding.left + layout.padding.right) as f32
@@ -2603,10 +2609,8 @@ impl PlyContext {
         bfs_buffer: &mut Vec<i32>,
         resizable_container_buffer: &mut Vec<i32>,
     ) {
-        bfs_buffer.clear();
         let root = self.layout_element_tree_roots[root_index];
         let root_elem_idx = root.layout_element_index as usize;
-        bfs_buffer.push(root.layout_element_index);
 
         // Size floating containers to their parents
         if self.element_has_config(root_elem_idx, ElementConfigType::Floating) {
@@ -2686,27 +2690,51 @@ impl PlyContext {
             }
         }
 
-            let mut i = 0;
-            while i < bfs_buffer.len() {
-                let parent_index = bfs_buffer[i] as usize;
-                i += 1;
+        self.size_subtree_along_axis(
+            root_elem_idx,
+            x_axis,
+            bfs_buffer,
+            resizable_container_buffer,
+        );
+    }
 
-                let parent_layout_idx = self.layout_elements[parent_index].layout_config_index;
-                let parent_config = self.layout_configs[parent_layout_idx];
-                let parent_size = if x_axis {
-                    self.layout_elements[parent_index].dimensions.width
-                } else {
-                    self.layout_elements[parent_index].dimensions.height
-                };
-                let parent_padding = if x_axis {
-                    (parent_config.padding.left + parent_config.padding.right) as f32
-                } else {
-                    (parent_config.padding.top + parent_config.padding.bottom) as f32
-                };
-                let sizing_along_axis = (x_axis
-                    && parent_config.layout_direction == LayoutDirection::LeftToRight)
-                    || (!x_axis
-                        && parent_config.layout_direction == LayoutDirection::TopToBottom);
+    fn size_subtree_along_axis(
+        &mut self,
+        start_elem_idx: usize,
+        x_axis: bool,
+        bfs_buffer: &mut Vec<i32>,
+        resizable_container_buffer: &mut Vec<i32>,
+    ) {
+        bfs_buffer.clear();
+        bfs_buffer.push(start_elem_idx as i32);
+
+        let mut i = 0;
+        while i < bfs_buffer.len() {
+            let parent_index = bfs_buffer[i] as usize;
+            i += 1;
+
+            let parent_layout_idx = self.layout_elements[parent_index].layout_config_index;
+            let parent_config = self.layout_configs[parent_layout_idx];
+            let parent_dims = self
+                .element_slot_fit_dimensions
+                .get(parent_index)
+                .copied()
+                .flatten()
+                .unwrap_or(self.layout_elements[parent_index].dimensions);
+            let parent_size = if x_axis {
+                parent_dims.width
+            } else {
+                parent_dims.height
+            };
+            let parent_padding = if x_axis {
+                (parent_config.padding.left + parent_config.padding.right) as f32
+            } else {
+                (parent_config.padding.top + parent_config.padding.bottom) as f32
+            };
+            let sizing_along_axis = (x_axis
+                && parent_config.layout_direction == LayoutDirection::LeftToRight)
+                || (!x_axis
+                    && parent_config.layout_direction == LayoutDirection::TopToBottom);
 
                 let mut inner_content_size: f32 = 0.0;
                 let mut total_padding_and_child_gaps = parent_padding;
@@ -3439,6 +3467,9 @@ impl PlyContext {
         while self.element_slot_fit_dimensions.len() < self.layout_elements.len() {
             self.element_slot_fit_dimensions.push(None);
         }
+        let mut bfs_buffer: Vec<i32> = Vec::new();
+        let mut resizable_container_buffer: Vec<i32> = Vec::new();
+
         for elem_idx in 0..self.layout_elements.len() {
             if let Some(cfg_idx) =
                 self.find_element_config_index(elem_idx, ElementConfigType::SlotFit)
@@ -3459,6 +3490,21 @@ impl PlyContext {
                     };
                     self.element_slot_fit_dimensions[elem_idx] =
                         Some(Dimensions::new(fitted_w, fitted_h));
+
+                    if self.layout_elements[elem_idx].children_length > 0 {
+                        self.size_subtree_along_axis(
+                            elem_idx,
+                            true,
+                            &mut bfs_buffer,
+                            &mut resizable_container_buffer,
+                        );
+                        self.size_subtree_along_axis(
+                            elem_idx,
+                            false,
+                            &mut bfs_buffer,
+                            &mut resizable_container_buffer,
+                        );
+                    }
                 }
             }
         }
@@ -3918,28 +3964,29 @@ impl PlyContext {
                 let layout_config = self.layout_configs[layout_idx];
                 let mut scroll_offset = Vector2::default();
 
+                let slot_dims = self.layout_elements[current_elem_idx].dimensions;
+                let (elem_pos, elem_dims) = if let Some(fitted) = self
+                    .element_slot_fit_dimensions
+                    .get(current_elem_idx)
+                    .copied()
+                    .flatten()
+                {
+                    let offset_x = (slot_dims.width - fitted.width) / 2.0;
+                    let offset_y = (slot_dims.height - fitted.height) / 2.0;
+                    (
+                        Vector2::new(
+                            current_node.position.x + offset_x,
+                            current_node.position.y + offset_y,
+                        ),
+                        fitted,
+                    )
+                } else {
+                    (current_node.position, slot_dims)
+                };
+
                 if !visited[buf_idx] {
                     visited[buf_idx] = true;
-
-                    let slot_dims = self.layout_elements[current_elem_idx].dimensions;
-                    let (elem_pos, elem_dims) = if let Some(fitted) = self
-                        .element_slot_fit_dimensions
-                        .get(current_elem_idx)
-                        .copied()
-                        .flatten()
-                    {
-                        let offset_x = (slot_dims.width - fitted.width) / 2.0;
-                        let offset_y = (slot_dims.height - fitted.height) / 2.0;
-                        (
-                            Vector2::new(
-                                current_node.position.x + offset_x,
-                                current_node.position.y + offset_y,
-                            ),
-                            fitted,
-                        )
-                    } else {
-                        (current_node.position, slot_dims)
-                    };
+                    dfs_buffer[buf_idx].position = elem_pos;
 
                     let current_bbox = BoundingBox::new(
                         elem_pos.x,
@@ -4936,8 +4983,7 @@ impl PlyContext {
                                             * layout_config.wrap_gap as f32
                                 };
 
-                                let mut extra_space = self.layout_elements[current_elem_idx]
-                                    .dimensions
+                                let mut extra_space = elem_dims
                                     .height
                                     - (layout_config.padding.top + layout_config.padding.bottom)
                                         as f32
@@ -4961,8 +5007,7 @@ impl PlyContext {
                                 }
                                 content_width += children_length.saturating_sub(1) as f32
                                     * layout_config.child_gap as f32;
-                                let mut extra_space = self.layout_elements[current_elem_idx]
-                                    .dimensions
+                                let mut extra_space = elem_dims
                                     .width
                                     - (layout_config.padding.left + layout_config.padding.right)
                                         as f32
@@ -4987,8 +5032,7 @@ impl PlyContext {
                                         * layout_config.wrap_gap as f32
                             };
 
-                            let mut extra_space = self.layout_elements[current_elem_idx]
-                                .dimensions
+                            let mut extra_space = elem_dims
                                 .width
                                 - (layout_config.padding.left + layout_config.padding.right)
                                     as f32
@@ -5012,8 +5056,7 @@ impl PlyContext {
                             }
                             content_height += children_length.saturating_sub(1) as f32
                                 * layout_config.child_gap as f32;
-                            let mut extra_space = self.layout_elements[current_elem_idx]
-                                .dimensions
+                            let mut extra_space = elem_dims
                                 .height
                                 - (layout_config.padding.top + layout_config.padding.bottom) as f32
                                 - content_height;
@@ -5416,7 +5459,7 @@ impl PlyContext {
                             let mut line_y = dfs_buffer[buf_idx].next_child_offset.y;
                             for (line_idx, line) in lines.iter().enumerate() {
                                 let mut line_extra_space =
-                                    self.layout_elements[current_elem_idx].dimensions.width
+                                    elem_dims.width
                                         - (layout_config.padding.left
                                             + layout_config.padding.right)
                                             as f32
@@ -5446,7 +5489,7 @@ impl PlyContext {
                             let mut line_x = dfs_buffer[buf_idx].next_child_offset.x;
                             for (line_idx, line) in lines.iter().enumerate() {
                                 let mut line_extra_space =
-                                    self.layout_elements[current_elem_idx].dimensions.height
+                                    elem_dims.height
                                         - (layout_config.padding.top
                                             + layout_config.padding.bottom)
                                             as f32
@@ -5531,7 +5574,7 @@ impl PlyContext {
                             }
                         } else if layout_config.layout_direction == LayoutDirection::LeftToRight {
                             child_offset.y = layout_config.padding.top as f32;
-                            let whitespace = self.layout_elements[current_elem_idx].dimensions.height
+                            let whitespace = elem_dims.height
                                 - (layout_config.padding.top + layout_config.padding.bottom) as f32
                                 - self.layout_elements[child_idx].dimensions.height;
                             match layout_config.child_alignment.y {
@@ -5545,7 +5588,7 @@ impl PlyContext {
                             }
                         } else {
                             child_offset.x = layout_config.padding.left as f32;
-                            let whitespace = self.layout_elements[current_elem_idx].dimensions.width
+                            let whitespace = elem_dims.width
                                 - (layout_config.padding.left + layout_config.padding.right) as f32
                                 - self.layout_elements[child_idx].dimensions.width;
                             match layout_config.child_alignment.x {
