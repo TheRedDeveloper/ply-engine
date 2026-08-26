@@ -21,6 +21,31 @@ const DEFAULT_MAX_MEASURE_TEXT_WORD_CACHE_COUNT: i32 = 16384;
 const MAXFLOAT: f32 = 3.40282346638528859812e+38;
 const EPSILON: f32 = 0.01;
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ActiveDrag {
+    #[default]
+    None,
+    ScrollContainer {
+        element_id: u32,
+        pointer_origin: Vector2,
+        scroll_origin: Vector2,
+        previous_delta: Vector2,
+    },
+    TextInput {
+        element_id: u32,
+        drag_origin: Vector2,
+        scroll_origin: Vector2,
+        from_touch: bool,
+    },
+    ScrollbarThumb {
+        element_id: u32,
+        is_text_input: bool,
+        is_vertical: bool,
+        drag_origin: f32,
+        scroll_origin: f32,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum SizingType {
@@ -247,7 +272,6 @@ pub struct FloatingConfig {
     pub parent_id: u32,
     pub z_index: i16,
     pub attach_points: FloatingAttachPoints,
-    pub pointer_capture_mode: PointerCaptureMode,
     pub attach_to: FloatingAttachToElement,
     pub clip_to: FloatingClipToElement,
 }
@@ -259,7 +283,6 @@ impl Default for FloatingConfig {
             parent_id: 0,
             z_index: 0,
             attach_points: FloatingAttachPoints::default(),
-            pointer_capture_mode: PointerCaptureMode::Capture,
             attach_to: FloatingAttachToElement::None,
             clip_to: FloatingClipToElement::None,
         }
@@ -344,7 +367,25 @@ pub struct ElementDeclaration {
     pub accessibility: Option<crate::accessibility::AccessibilityConfig>,
     pub text_input: Option<crate::text_input::TextInputConfig>,
     pub preserve_focus: bool,
-    pub pointer_capture_mode: PointerCaptureMode,
+    pub explicit_pointer_capture: Option<PointerCaptureMode>,
+}
+
+impl ElementDeclaration {
+    pub fn resolved_pointer_capture_mode(&self) -> PointerCaptureMode {
+        if let Some(mode) = self.explicit_pointer_capture {
+            return mode;
+        }
+        if self.floating.attach_to != FloatingAttachToElement::None {
+            return PointerCaptureMode::Capture;
+        }
+        if self.clip.scroll_x || self.clip.scroll_y {
+            return PointerCaptureMode::Capture;
+        }
+        if self.text_input.is_some() {
+            return PointerCaptureMode::Capture;
+        }
+        PointerCaptureMode::Passthrough
+    }
 }
 
 impl Default for ElementDeclaration {
@@ -365,7 +406,7 @@ impl Default for ElementDeclaration {
             accessibility: None,
             text_input: None,
             preserve_focus: false,
-            pointer_capture_mode: PointerCaptureMode::Passthrough,
+            explicit_pointer_capture: None,
         }
     }
 }
@@ -458,25 +499,17 @@ struct MeasureTextCacheItem {
 struct ScrollContainerDataInternal {
     bounding_box: BoundingBox,
     content_size: Dimensions,
-    scroll_origin: Vector2,
-    pointer_origin: Vector2,
     scroll_momentum: Vector2,
     scroll_position: Vector2,
-    previous_delta: Vector2,
     scrollbar: Option<ScrollbarConfig>,
     scroll_x_enabled: bool,
     scroll_y_enabled: bool,
     no_drag_scroll: bool,
     scrollbar_idle_frames: u32,
     scrollbar_activity_this_frame: bool,
-    scrollbar_thumb_drag_active_x: bool,
-    scrollbar_thumb_drag_active_y: bool,
-    scrollbar_drag_origin: Vector2,
-    scrollbar_drag_scroll_origin: Vector2,
     element_id: u32,
     layout_element_index: i32,
     open_this_frame: bool,
-    pointer_scroll_active: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -715,16 +748,8 @@ pub struct PlyContext {
     pub(crate) pending_text_click: Option<(u32, f32, f32, f32, f32, bool)>,
     /// Text input scrollbar auto-hide counters (frames since last activity) by element id.
     pub(crate) text_input_scrollbar_idle_frames: FxHashMap<u32, u32>,
-    /// Text input drag-scroll state (mobile-first: drag scrolls, doesn't select).
-    pub(crate) text_input_drag_active: bool,
-    pub(crate) text_input_drag_origin: crate::math::Vector2,
-    pub(crate) text_input_drag_scroll_origin: crate::math::Vector2,
-    pub(crate) text_input_drag_element_id: u32,
-    pub(crate) text_input_drag_from_touch: bool,
-    pub(crate) text_input_scrollbar_drag_active: bool,
-    pub(crate) text_input_scrollbar_drag_vertical: bool,
-    pub(crate) text_input_scrollbar_drag_origin: f32,
-    pub(crate) text_input_scrollbar_drag_scroll_origin: f32,
+    /// Active drag interaction state
+    pub(crate) active_drag: ActiveDrag,
     pub(crate) text_input_preedit: String,
     pub(crate) text_input_preedit_active: bool,
     pub(crate) forced_ime_preedit_value: Option<String>,
@@ -1071,15 +1096,7 @@ impl PlyContext {
             text_input_element_ids: Vec::new(),
             pending_text_click: None,
             text_input_scrollbar_idle_frames: FxHashMap::default(),
-            text_input_drag_active: false,
-            text_input_drag_origin: Vector2::default(),
-            text_input_drag_scroll_origin: Vector2::default(),
-            text_input_drag_element_id: 0,
-            text_input_drag_from_touch: false,
-            text_input_scrollbar_drag_active: false,
-            text_input_scrollbar_drag_vertical: false,
-            text_input_scrollbar_drag_origin: 0.0,
-            text_input_scrollbar_drag_scroll_origin: 0.0,
+            active_drag: ActiveDrag::None,
             text_input_preedit: String::new(),
             text_input_preedit_active: false,
             forced_ime_preedit_value: None,
@@ -1433,7 +1450,6 @@ impl PlyContext {
                 if !found_existing {
                     self.scroll_container_datas.push(ScrollContainerDataInternal {
                         layout_element_index: open_idx as i32,
-                        scroll_origin: Vector2::new(-1.0, -1.0),
                         scrollbar: clip.scrollbar,
                         scroll_x_enabled: clip.scroll_x,
                         scroll_y_enabled: clip.scroll_y,
@@ -1767,11 +1783,9 @@ impl PlyContext {
         }
 
         // Pointer capture mode
-        if declaration.pointer_capture_mode == PointerCaptureMode::Capture {
-            let elem_id = self.layout_elements[open_idx].id;
-            if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
-                item.pointer_capture_mode = PointerCaptureMode::Capture;
-            }
+        let elem_id = self.layout_elements[open_idx].id;
+        if let Some(item) = self.layout_element_map.get_mut(&elem_id) {
+            item.pointer_capture_mode = declaration.resolved_pointer_capture_mode();
         }
     }
 
@@ -5750,6 +5764,122 @@ impl PlyContext {
         self.layout_dimensions = dimensions;
     }
 
+    fn hit_test_scrollbar_thumb(&mut self, pointer: Vector2) -> Option<ActiveDrag> {
+        for idx in 0..self.text_input_element_ids.len() {
+            let elem_id = self.text_input_element_ids[idx];
+            let ti_cfg = self.text_input_configs.get(idx).cloned();
+            if let Some(ti_cfg) = ti_cfg {
+                if let Some(scrollbar_cfg) = ti_cfg.scrollbar {
+                    if let Some(item) = self.layout_element_map.get(&elem_id) {
+                        if let Some(state) = self.text_edit_states.get(&elem_id).cloned() {
+                            let bbox = item.bounding_box;
+                            let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
+                                let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                                let pad = self.layout_configs[layout_idx].padding;
+                                (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+                            } else {
+                                (0.0, 0.0, 0.0, 0.0)
+                            };
+                            let (content_width, content_height) = self.text_input_content_size(
+                                &state,
+                                &ti_cfg,
+                                (bbox.width - pad_left - pad_right).max(0.0),
+                            );
+                            let idle_frames = self
+                                .text_input_scrollbar_idle_frames
+                                .get(&elem_id)
+                                .copied()
+                                .unwrap_or(0);
+                            let alpha = scrollbar_visibility_alpha(scrollbar_cfg, idle_frames);
+                            if alpha > 0.0 {
+                                if ti_cfg.is_multiline {
+                                    if let Some(geo) = compute_vertical_scrollbar_geometry(
+                                        bbox,
+                                        content_height + pad_top + pad_bottom,
+                                        state.scroll_offset_y,
+                                        scrollbar_cfg,
+                                    ) {
+                                        if point_is_inside_rect(pointer, geo.thumb_bbox) {
+                                            return Some(ActiveDrag::ScrollbarThumb {
+                                                element_id: elem_id,
+                                                is_text_input: true,
+                                                is_vertical: true,
+                                                drag_origin: pointer.y,
+                                                scroll_origin: state.scroll_offset_y,
+                                            });
+                                        }
+                                    }
+                                }
+                                if let Some(geo) = compute_horizontal_scrollbar_geometry(
+                                    bbox,
+                                    content_width + pad_left + pad_right,
+                                    state.scroll_offset,
+                                    scrollbar_cfg,
+                                ) {
+                                    if point_is_inside_rect(pointer, geo.thumb_bbox) {
+                                        return Some(ActiveDrag::ScrollbarThumb {
+                                            element_id: elem_id,
+                                            is_text_input: true,
+                                            is_vertical: false,
+                                            drag_origin: pointer.x,
+                                            scroll_origin: state.scroll_offset,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for scd in self.scroll_container_datas.iter().rev() {
+            if let Some(scrollbar_cfg) = scd.scrollbar {
+                let alpha = scrollbar_visibility_alpha(scrollbar_cfg, scd.scrollbar_idle_frames);
+                if alpha > 0.0 {
+                    if scd.scroll_y_enabled {
+                        if let Some(geo) = compute_vertical_scrollbar_geometry(
+                            scd.bounding_box,
+                            scd.content_size.height,
+                            -scd.scroll_position.y,
+                            scrollbar_cfg,
+                        ) {
+                            if point_is_inside_rect(pointer, geo.thumb_bbox) {
+                                return Some(ActiveDrag::ScrollbarThumb {
+                                    element_id: scd.element_id,
+                                    is_text_input: false,
+                                    is_vertical: true,
+                                    drag_origin: pointer.y,
+                                    scroll_origin: -scd.scroll_position.y,
+                                });
+                            }
+                        }
+                    }
+                    if scd.scroll_x_enabled {
+                        if let Some(geo) = compute_horizontal_scrollbar_geometry(
+                            scd.bounding_box,
+                            scd.content_size.width,
+                            -scd.scroll_position.x,
+                            scrollbar_cfg,
+                        ) {
+                            if point_is_inside_rect(pointer, geo.thumb_bbox) {
+                                return Some(ActiveDrag::ScrollbarThumb {
+                                    element_id: scd.element_id,
+                                    is_text_input: false,
+                                    is_vertical: false,
+                                    drag_origin: pointer.x,
+                                    scroll_origin: -scd.scroll_position.x,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     pub fn set_pointer_state(&mut self, position: Vector2, is_down: bool) {
         if self.boolean_warnings.max_elements_exceeded {
             return;
@@ -5769,20 +5899,7 @@ impl PlyContext {
             if found {
                 self.pointer_over_ids.extend(hits);
 
-                let floating_capture = if self
-                    .element_has_config(root_elem_idx, ElementConfigType::Floating)
-                {
-                    self.find_element_config_index(root_elem_idx, ElementConfigType::Floating)
-                        .map(|cfg_idx| {
-                            self.floating_element_configs[cfg_idx].pointer_capture_mode
-                                == PointerCaptureMode::Capture
-                        })
-                        .unwrap_or(false)
-                } else {
-                    false
-                };
-
-                if captured || floating_capture {
+                if captured {
                     break;
                 }
             }
@@ -5814,6 +5931,15 @@ impl PlyContext {
         // Fire on_press / on_release callbacks and track pressed element
         match self.pointer_info.state {
             PointerState::PressedThisFrame => {
+                if let Some(scrollbar_drag) = self.hit_test_scrollbar_thumb(position) {
+                    self.active_drag = scrollbar_drag;
+                    self.pointer_over_ids.clear();
+                    self.pressed_element_ids.clear();
+                    self.pending_text_click = None;
+                    self.track_just_pressed_ids(&[]);
+                    return;
+                }
+
                 // Check if clicked element is a text input
                 let clicked_text_input = self.pointer_over_ids.last()
                     .and_then(|top| self.layout_element_map.get(&top.id))
@@ -5827,14 +5953,19 @@ impl PlyContext {
                         if self.focused_element_id != top.id {
                             self.change_focus(top.id);
                         }
+                        let (scroll_x, scroll_y) = self.text_edit_states.get(&top.id)
+                            .map(|s| (s.scroll_offset, s.scroll_offset_y))
+                            .unwrap_or((0.0, 0.0));
+                        self.active_drag = ActiveDrag::TextInput {
+                            element_id: top.id,
+                            drag_origin: position,
+                            scroll_origin: Vector2::new(scroll_x, scroll_y),
+                            from_touch: false,
+                        };
                         // Compute click x,y relative to the element's bounding box.
-                        // Also capture bbox size from the same frame so click hit-testing
-                        // can reuse the exact geometry basis drag-end uses.
                         if let Some(item) = self.layout_element_map.get(&top.id) {
                             let click_x = self.pointer_info.position.x - item.bounding_box.x;
                             let click_y = self.pointer_info.position.y - item.bounding_box.y;
-                            // We can't check shift from here (no keyboard state);
-                            // lib.rs will set shift via a dedicated method if needed.
                             self.pending_text_click = Some((
                                 top.id,
                                 click_x,
@@ -5848,7 +5979,6 @@ impl PlyContext {
                     }
                 } else {
                     // Check if any element in the pointer stack preserves focus
-                    // (e.g. a toolbar button's child text element inherits the parent's preserve_focus)
                     let preserves = self.pointer_over_ids.iter().any(|eid| {
                         self.layout_element_map.get(&eid.id)
                             .map(|item| item.preserve_focus)
@@ -5866,6 +5996,21 @@ impl PlyContext {
                         self.change_focus(0);
                     }
 
+                    let scroll_target = self.pointer_over_ids.iter().rev().find_map(|eid| {
+                        self.scroll_container_datas.iter().find(|scd| scd.element_id == eid.id)
+                    });
+
+                    if let Some(scd) = scroll_target {
+                        self.active_drag = ActiveDrag::ScrollContainer {
+                            element_id: scd.element_id,
+                            pointer_origin: position,
+                            scroll_origin: scd.scroll_position,
+                            previous_delta: Vector2::default(),
+                        };
+                    } else {
+                        self.active_drag = ActiveDrag::None;
+                    }
+
                     // Mark all hovered elements as pressed
                     self.pressed_element_ids = self.pointer_over_ids.clone();
                 }
@@ -5876,6 +6021,10 @@ impl PlyContext {
             PointerState::ReleasedThisFrame => {
                 let pressed = std::mem::take(&mut self.pressed_element_ids);
                 self.track_just_released_ids(&pressed);
+                self.active_drag = ActiveDrag::None;
+            }
+            PointerState::Idle => {
+                self.active_drag = ActiveDrag::None;
             }
             _ => {}
         }
@@ -5916,186 +6065,111 @@ impl PlyContext {
             let pointer_state = self.pointer_info.state;
 
             match pointer_state {
-                PointerState::PressedThisFrame => {
-                    // Find the deepest scroll container under the pointer and start drag
-                    let mut best: Option<usize> = None;
-                    for si in 0..self.scroll_container_datas.len() {
-                        let scd = &self.scroll_container_datas[si];
-                        let bb = scd.bounding_box;
-                        if pointer.x >= bb.x
-                            && pointer.x <= bb.x + bb.width
-                            && pointer.y >= bb.y
-                            && pointer.y <= bb.y + bb.height
-                        {
-                            best = Some(si);
-                        }
-                    }
-                    if let Some(si) = best {
-                        let scd = &mut self.scroll_container_datas[si];
-                        scd.scroll_momentum = Vector2::default();
-                        scd.previous_delta = Vector2::default();
-
-                        scd.pointer_scroll_active = false;
-                        scd.scrollbar_thumb_drag_active_x = false;
-                        scd.scrollbar_thumb_drag_active_y = false;
-
-                        let mut started_thumb_drag = false;
-                        if let Some(scrollbar_cfg) = scd.scrollbar {
-                            let alpha = scrollbar_visibility_alpha(scrollbar_cfg, scd.scrollbar_idle_frames);
-                            if alpha > 0.0 {
-                                if scd.scroll_y_enabled {
-                                    if let Some(geo) = compute_vertical_scrollbar_geometry(
-                                        scd.bounding_box,
-                                        scd.content_size.height,
-                                        -scd.scroll_position.y,
-                                        scrollbar_cfg,
-                                    ) {
-                                        if point_is_inside_rect(pointer, geo.thumb_bbox) {
-                                            scd.scrollbar_thumb_drag_active_y = true;
-                                            started_thumb_drag = true;
-                                        }
-                                    }
-                                }
-
-                                if !started_thumb_drag && scd.scroll_x_enabled {
-                                    if let Some(geo) = compute_horizontal_scrollbar_geometry(
-                                        scd.bounding_box,
-                                        scd.content_size.width,
-                                        -scd.scroll_position.x,
-                                        scrollbar_cfg,
-                                    ) {
-                                        if point_is_inside_rect(pointer, geo.thumb_bbox) {
-                                            scd.scrollbar_thumb_drag_active_x = true;
-                                            started_thumb_drag = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if started_thumb_drag {
-                            scd.scrollbar_drag_origin = pointer;
-                            scd.scrollbar_drag_scroll_origin =
-                                Vector2::new(-scd.scroll_position.x, -scd.scroll_position.y);
-                            scd.scrollbar_activity_this_frame = true;
-                        } else if !(scd.no_drag_scroll && !touch_input_active) {
-                            scd.pointer_scroll_active = true;
-                            scd.pointer_origin = pointer;
-                            scd.scroll_origin = scd.scroll_position;
-                        }
-                    }
-                }
                 PointerState::Pressed => {
-                    // Update drag: move scroll position to follow pointer
-                    for si in 0..self.scroll_container_datas.len() {
-                        let scd = &mut self.scroll_container_datas[si];
-
-                        if scd.scrollbar_thumb_drag_active_y {
-                            if let Some(scrollbar_cfg) = scd.scrollbar {
-                                if let Some(geo) = compute_vertical_scrollbar_geometry(
-                                    scd.bounding_box,
-                                    scd.content_size.height,
-                                    scd.scrollbar_drag_scroll_origin.y,
-                                    scrollbar_cfg,
-                                ) {
-                                    let delta = pointer.y - scd.scrollbar_drag_origin.y;
-                                    let new_scroll = if geo.thumb_travel <= 0.0 {
-                                        0.0
+                    match self.active_drag {
+                        ActiveDrag::ScrollbarThumb {
+                            element_id,
+                            is_text_input: false,
+                            is_vertical,
+                            drag_origin,
+                            scroll_origin,
+                        } => {
+                            if let Some(scd) = self.scroll_container_datas.iter_mut().find(|s| s.element_id == element_id) {
+                                if let Some(scrollbar_cfg) = scd.scrollbar {
+                                    if is_vertical {
+                                        if let Some(geo) = compute_vertical_scrollbar_geometry(
+                                            scd.bounding_box,
+                                            scd.content_size.height,
+                                            scroll_origin,
+                                            scrollbar_cfg,
+                                        ) {
+                                            let delta = pointer.y - drag_origin;
+                                            let new_scroll = if geo.thumb_travel <= 0.0 {
+                                                0.0
+                                            } else {
+                                                scroll_origin + delta * (geo.max_scroll / geo.thumb_travel)
+                                            };
+                                            scd.scroll_position.y = -new_scroll.clamp(0.0, geo.max_scroll);
+                                        }
+                                        scd.scroll_momentum.y = 0.0;
                                     } else {
-                                        scd.scrollbar_drag_scroll_origin.y
-                                            + delta * (geo.max_scroll / geo.thumb_travel)
-                                    };
-                                    scd.scroll_position.y = -new_scroll.clamp(0.0, geo.max_scroll);
+                                        if let Some(geo) = compute_horizontal_scrollbar_geometry(
+                                            scd.bounding_box,
+                                            scd.content_size.width,
+                                            scroll_origin,
+                                            scrollbar_cfg,
+                                        ) {
+                                            let delta = pointer.x - drag_origin;
+                                            let new_scroll = if geo.thumb_travel <= 0.0 {
+                                                0.0
+                                            } else {
+                                                scroll_origin + delta * (geo.max_scroll / geo.thumb_travel)
+                                            };
+                                            scd.scroll_position.x = -new_scroll.clamp(0.0, geo.max_scroll);
+                                        }
+                                        scd.scroll_momentum.x = 0.0;
+                                    }
+                                    scd.scrollbar_activity_this_frame = true;
+                                    scd.scrollbar_idle_frames = 0;
                                 }
                             }
-                            scd.scroll_momentum.y = 0.0;
-                            scd.scrollbar_activity_this_frame = true;
-                            continue;
                         }
+                        ActiveDrag::ScrollContainer {
+                            element_id,
+                            pointer_origin,
+                            scroll_origin,
+                            ref mut previous_delta,
+                        } => {
+                            if let Some(scd) = self.scroll_container_datas.iter_mut().find(|s| s.element_id == element_id) {
+                                if !(scd.no_drag_scroll && !touch_input_active) {
+                                    let drag_delta = Vector2::new(
+                                        pointer.x - pointer_origin.x,
+                                        pointer.y - pointer_origin.y,
+                                    );
+                                    scd.scroll_position = Vector2::new(
+                                        scroll_origin.x + drag_delta.x,
+                                        scroll_origin.y + drag_delta.y,
+                                    );
 
-                        if scd.scrollbar_thumb_drag_active_x {
-                            if let Some(scrollbar_cfg) = scd.scrollbar {
-                                if let Some(geo) = compute_horizontal_scrollbar_geometry(
-                                    scd.bounding_box,
-                                    scd.content_size.width,
-                                    scd.scrollbar_drag_scroll_origin.x,
-                                    scrollbar_cfg,
-                                ) {
-                                    let delta = pointer.x - scd.scrollbar_drag_origin.x;
-                                    let new_scroll = if geo.thumb_travel <= 0.0 {
-                                        0.0
-                                    } else {
-                                        scd.scrollbar_drag_scroll_origin.x
-                                            + delta * (geo.max_scroll / geo.thumb_travel)
-                                    };
-                                    scd.scroll_position.x = -new_scroll.clamp(0.0, geo.max_scroll);
+                                    let frame_delta = Vector2::new(
+                                        drag_delta.x - previous_delta.x,
+                                        drag_delta.y - previous_delta.y,
+                                    );
+                                    let moved = frame_delta.x.abs() > 0.5 || frame_delta.y.abs() > 0.5;
+
+                                    if moved {
+                                        let instant_velocity = Vector2::new(
+                                            frame_delta.x / dt,
+                                            frame_delta.y / dt,
+                                        );
+                                        let s = Self::SCROLL_VELOCITY_SMOOTHING;
+                                        scd.scroll_momentum = Vector2::new(
+                                            scd.scroll_momentum.x * (1.0 - s) + instant_velocity.x * s,
+                                            scd.scroll_momentum.y * (1.0 - s) + instant_velocity.y * s,
+                                        );
+                                        scd.scrollbar_activity_this_frame = true;
+                                        scd.scrollbar_idle_frames = 0;
+                                    }
+                                    *previous_delta = drag_delta;
                                 }
                             }
-                            scd.scroll_momentum.x = 0.0;
-                            scd.scrollbar_activity_this_frame = true;
-                            continue;
                         }
-
-                        if !scd.pointer_scroll_active {
-                            continue;
-                        }
-
-                        let drag_delta = Vector2::new(
-                            pointer.x - scd.pointer_origin.x,
-                            pointer.y - scd.pointer_origin.y,
-                        );
-                        scd.scroll_position = Vector2::new(
-                            scd.scroll_origin.x + drag_delta.x,
-                            scd.scroll_origin.y + drag_delta.y,
-                        );
-
-                        // Check if pointer actually moved this frame
-                        let frame_delta = Vector2::new(
-                            drag_delta.x - scd.previous_delta.x,
-                            drag_delta.y - scd.previous_delta.y,
-                        );
-                        let moved = frame_delta.x.abs() > 0.5 || frame_delta.y.abs() > 0.5;
-
-                        if moved {
-                            // Pointer moved — update velocity EMA and reset freshness timer
-                            let instant_velocity = Vector2::new(
-                                frame_delta.x / dt,
-                                frame_delta.y / dt,
-                            );
-                            let s = Self::SCROLL_VELOCITY_SMOOTHING;
-                            scd.scroll_momentum = Vector2::new(
-                                scd.scroll_momentum.x * (1.0 - s) + instant_velocity.x * s,
-                                scd.scroll_momentum.y * (1.0 - s) + instant_velocity.y * s,
-                            );
-                            scd.scrollbar_activity_this_frame = true;
-                        }
-                        scd.previous_delta = drag_delta;
+                        _ => {}
                     }
                 }
-                PointerState::ReleasedThisFrame
-                | PointerState::Idle => {
-                    for si in 0..self.scroll_container_datas.len() {
-                        let scd = &mut self.scroll_container_datas[si];
-                        if scd.scrollbar_thumb_drag_active_x
-                            || scd.scrollbar_thumb_drag_active_y
-                        {
-                            scd.scrollbar_activity_this_frame = true;
-                        }
-                        scd.pointer_scroll_active = false;
-                        scd.scrollbar_thumb_drag_active_x = false;
-                        scd.scrollbar_thumb_drag_active_y = false;
-                    }
-                }
+                _ => {}
             }
         }
 
         // --- Momentum scrolling (apply when not actively dragging) ---
         for si in 0..self.scroll_container_datas.len() {
             let scd = &mut self.scroll_container_datas[si];
-            if scd.pointer_scroll_active
-                || scd.scrollbar_thumb_drag_active_x
-                || scd.scrollbar_thumb_drag_active_y
-            {
+            let is_actively_dragging = match self.active_drag {
+                ActiveDrag::ScrollContainer { element_id, .. } => scd.element_id == element_id,
+                ActiveDrag::ScrollbarThumb { element_id, is_text_input: false, .. } => scd.element_id == element_id,
+                _ => false,
+            };
+            if is_actively_dragging {
                 // Still dragging — skip momentum
             } else if scd.scroll_momentum.x.abs() > Self::SCROLL_MIN_VELOCITY
                 || scd.scroll_momentum.y.abs() > Self::SCROLL_MIN_VELOCITY
@@ -6110,7 +6184,6 @@ impl PlyContext {
                 scd.scroll_momentum.x *= decay;
                 scd.scroll_momentum.y *= decay;
 
-                // Stop if below threshold
                 if scd.scroll_momentum.x.abs() < Self::SCROLL_MIN_VELOCITY {
                     scd.scroll_momentum.x = 0.0;
                 }
@@ -6122,25 +6195,18 @@ impl PlyContext {
 
         // --- Mouse wheel / external scroll delta ---
         if scroll_delta.x != 0.0 || scroll_delta.y != 0.0 {
-            // Find the deepest (last in list) scroll container the pointer is inside
-            let mut best: Option<usize> = None;
-            for si in 0..self.scroll_container_datas.len() {
-                let bb = self.scroll_container_datas[si].bounding_box;
-                if pointer.x >= bb.x
-                    && pointer.x <= bb.x + bb.width
-                    && pointer.y >= bb.y
-                    && pointer.y <= bb.y + bb.height
-                {
-                    best = Some(si);
+            // Find the deepest scroll container from pointer_over_ids
+            let target_elem_id = self.pointer_over_ids.iter().rev().find_map(|eid| {
+                self.scroll_container_datas.iter().find(|scd| scd.element_id == eid.id).map(|s| s.element_id)
+            });
+            if let Some(eid) = target_elem_id {
+                if let Some(scd) = self.scroll_container_datas.iter_mut().find(|scd| scd.element_id == eid) {
+                    scd.scroll_position.y += scroll_delta.y;
+                    scd.scroll_position.x += scroll_delta.x;
+                    scd.scroll_momentum = Vector2::default();
+                    scd.scrollbar_activity_this_frame = true;
+                    scd.scrollbar_idle_frames = 0;
                 }
-            }
-            if let Some(si) = best {
-                let scd = &mut self.scroll_container_datas[si];
-                scd.scroll_position.y += scroll_delta.y;
-                scd.scroll_position.x += scroll_delta.x;
-                // Kill any active momentum when mouse wheel is used
-                scd.scroll_momentum = Vector2::default();
-                scd.scrollbar_activity_this_frame = true;
             }
         }
 
@@ -7126,8 +7192,6 @@ impl PlyContext {
 
         let mut consumed_scroll = false;
 
-        let focused = self.focused_element_id;
-
         // --- Scroll wheel: scroll any hovered text input (even if unfocused) ---
         let has_scroll = scroll_delta.x.abs() > 0.01 || scroll_delta.y.abs() > 0.01;
         if has_scroll {
@@ -7173,383 +7237,253 @@ impl PlyContext {
             }
         }
 
-        // --- Drag scrolling (focused text input only) ---
-        if focused == 0 {
-            if self.text_input_drag_active {
-                let pointer_state = self.pointer_info.state;
-                if matches!(pointer_state, PointerState::ReleasedThisFrame | PointerState::Idle) {
-                    self.text_input_drag_active = false;
-                    self.text_input_drag_from_touch = false;
-                }
-            }
-            self.text_input_scrollbar_drag_active = false;
-            return consumed_scroll;
-        }
-
-        let ti_index = self
-            .text_input_element_ids
-            .iter()
-            .position(|&id| id == focused);
-        let Some(ti_index) = ti_index else {
-            if self.text_input_drag_active {
-                let pointer_state = self.pointer_info.state;
-                if matches!(pointer_state, PointerState::ReleasedThisFrame | PointerState::Idle) {
-                    self.text_input_drag_active = false;
-                    self.text_input_drag_from_touch = false;
-                }
-            }
-            self.text_input_scrollbar_drag_active = false;
-            return consumed_scroll;
-        };
-        let Some(ti_cfg) = self.text_input_configs.get(ti_index).cloned() else {
-            self.text_input_scrollbar_drag_active = false;
-            return consumed_scroll;
-        };
-        let is_multiline = ti_cfg.is_multiline;
-
-        if !is_multiline && (scroll_delta.x.abs() > 0.01 || scroll_delta.y.abs() > 0.01) {
-            if self.text_input_preedit_active {
-                if let Some(state) = self.text_edit_states.get_mut(&focused) {
-                    let h_delta = if scroll_delta.x.abs() > scroll_delta.y.abs() {
-                        scroll_delta.x
-                    } else {
-                        scroll_delta.y
-                    };
-                    if h_delta.abs() > 0.01 {
-                        state.scroll_offset -= h_delta;
-                        if state.scroll_offset < 0.0 {
-                            state.scroll_offset = 0.0;
-                        }
-                        consumed_scroll = true;
-                        self.text_input_scrollbar_idle_frames.insert(focused, 0);
-                    }
-                }
-            }
-        }
-
-        let pointer_over_focused = self.layout_element_map.get(&focused)
-            .map(|item| {
-                let bb = item.bounding_box;
-                let p = self.pointer_info.position;
-                p.x >= bb.x && p.x <= bb.x + bb.width
-                    && p.y >= bb.y && p.y <= bb.y + bb.height
-            })
-            .unwrap_or(false);
-
+        // --- Drag scrolling ---
         let pointer = self.pointer_info.position;
         let pointer_state = self.pointer_info.state;
 
         match pointer_state {
             PointerState::PressedThisFrame => {
-                if pointer_over_focused {
-                    let mut started_scrollbar_drag = false;
-
-                    if let Some(scrollbar_cfg) = ti_cfg.scrollbar {
-                        if let Some(item) = self.layout_element_map.get(&focused) {
-                            if let Some(state) = self.text_edit_states.get(&focused).cloned() {
-                                let bbox = item.bounding_box;
-                                let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
-                                    let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
-                                    let pad = self.layout_configs[layout_idx].padding;
-                                    (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
-                                } else {
-                                    (0.0, 0.0, 0.0, 0.0)
-                                };
-                                let (content_width, content_height) =
-                                    self.text_input_content_size(&state, &ti_cfg, (bbox.width - pad_left - pad_right).max(0.0));
-
-                                let idle_frames = self
-                                    .text_input_scrollbar_idle_frames
-                                    .get(&focused)
-                                    .copied()
-                                    .unwrap_or(0);
-                                let alpha = scrollbar_visibility_alpha(scrollbar_cfg, idle_frames);
-
-                                if alpha > 0.0 {
-                                    if ti_cfg.is_multiline {
-                                        if let Some(geo) = compute_vertical_scrollbar_geometry(
-                                            bbox,
-                                            content_height + pad_top + pad_bottom,
-                                            state.scroll_offset_y,
-                                            scrollbar_cfg,
-                                        ) {
-                                            if point_is_inside_rect(pointer, geo.thumb_bbox) {
-                                                started_scrollbar_drag = true;
-                                                self.text_input_scrollbar_drag_active = true;
-                                                self.text_input_scrollbar_drag_vertical = true;
-                                                self.text_input_scrollbar_drag_origin = pointer.y;
-                                                self.text_input_scrollbar_drag_scroll_origin =
-                                                    state.scroll_offset_y;
-                                            }
-                                        }
-                                    }
-
-                                    if !started_scrollbar_drag {
-                                        if let Some(geo) = compute_horizontal_scrollbar_geometry(
-                                            bbox,
-                                            content_width + pad_left + pad_right,
-                                            state.scroll_offset,
-                                            scrollbar_cfg,
-                                        ) {
-                                            if point_is_inside_rect(pointer, geo.thumb_bbox) {
-                                                started_scrollbar_drag = true;
-                                                self.text_input_scrollbar_drag_active = true;
-                                                self.text_input_scrollbar_drag_vertical = false;
-                                                self.text_input_scrollbar_drag_origin = pointer.x;
-                                                self.text_input_scrollbar_drag_scroll_origin =
-                                                    state.scroll_offset;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if started_scrollbar_drag {
-                        self.text_input_drag_active = false;
-                        self.text_input_drag_from_touch = false;
-                        self.text_input_drag_element_id = focused;
-                        self.pending_text_click = None;
-                        self.text_input_scrollbar_idle_frames.insert(focused, 0);
-                        consumed_scroll = true;
-                        return consumed_scroll;
-                    }
-
-                    let (scroll_x, scroll_y) = self.text_edit_states.get(&focused)
-                        .map(|s| (s.scroll_offset, s.scroll_offset_y))
-                        .unwrap_or((0.0, 0.0));
-                    self.text_input_drag_active = true;
-                    self.text_input_drag_origin = pointer;
-                    self.text_input_drag_scroll_origin = Vector2::new(scroll_x, scroll_y);
-                    self.text_input_drag_element_id = focused;
-                    self.text_input_drag_from_touch = touch_input_active;
-                    self.text_input_scrollbar_drag_active = false;
+                if let ActiveDrag::TextInput { ref mut from_touch, .. } = self.active_drag {
+                    *from_touch = touch_input_active;
+                    consumed_scroll = true;
+                } else if let ActiveDrag::ScrollbarThumb { is_text_input: true, element_id, .. } = self.active_drag {
+                    consumed_scroll = true;
+                    self.pending_text_click = None;
+                    self.text_input_scrollbar_idle_frames.insert(element_id, 0);
                 }
             }
             PointerState::Pressed => {
-                if self.text_input_scrollbar_drag_active {
-                    if let Some(item) = self.layout_element_map.get(&self.text_input_drag_element_id)
-                    {
-                        if let Some(state_snapshot) = self
-                            .text_edit_states
-                            .get(&self.text_input_drag_element_id)
-                            .cloned()
-                        {
-                            if let Some(scrollbar_cfg) = ti_cfg.scrollbar {
-                                let bbox = item.bounding_box;
-                                let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
-                                    let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
-                                    let pad = self.layout_configs[layout_idx].padding;
-                                    (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
-                                } else {
-                                    (0.0, 0.0, 0.0, 0.0)
-                                };
-                                let (content_width, content_height) = self
-                                    .text_input_content_size(&state_snapshot, &ti_cfg, (bbox.width - pad_left - pad_right).max(0.0));
-
-                                if let Some(state) =
-                                    self.text_edit_states.get_mut(&self.text_input_drag_element_id)
-                                {
-                                    if self.text_input_scrollbar_drag_vertical {
-                                        if let Some(geo) = compute_vertical_scrollbar_geometry(
-                                            bbox,
-                                            content_height + pad_top + pad_bottom,
-                                            self.text_input_scrollbar_drag_scroll_origin,
-                                            scrollbar_cfg,
-                                        ) {
-                                            let delta = pointer.y - self.text_input_scrollbar_drag_origin;
-                                            let new_scroll = if geo.thumb_travel <= 0.0 {
-                                                0.0
-                                            } else {
-                                                self.text_input_scrollbar_drag_scroll_origin
-                                                    + delta * (geo.max_scroll / geo.thumb_travel)
-                                            };
-                                            state.scroll_offset_y = new_scroll.clamp(0.0, geo.max_scroll);
-                                        }
-                                    } else if let Some(geo) = compute_horizontal_scrollbar_geometry(
-                                        bbox,
-                                        content_width + pad_left + pad_right,
-                                        self.text_input_scrollbar_drag_scroll_origin,
-                                        scrollbar_cfg,
-                                    ) {
-                                        let delta = pointer.x - self.text_input_scrollbar_drag_origin;
-                                        let new_scroll = if geo.thumb_travel <= 0.0 {
-                                            0.0
+                match self.active_drag {
+                    ActiveDrag::ScrollbarThumb {
+                        element_id,
+                        is_text_input: true,
+                        is_vertical,
+                        drag_origin,
+                        scroll_origin,
+                    } => {
+                        let ti_pos = self.text_input_element_ids.iter().position(|&id| id == element_id);
+                        if let Some(pos) = ti_pos {
+                            if let Some(ti_cfg) = self.text_input_configs.get(pos).cloned() {
+                                if let Some(scrollbar_cfg) = ti_cfg.scrollbar {
+                                    if let Some(item) = self.layout_element_map.get(&element_id) {
+                                        let bbox = item.bounding_box;
+                                        let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
+                                            let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                                            let pad = self.layout_configs[layout_idx].padding;
+                                            (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
                                         } else {
-                                            self.text_input_scrollbar_drag_scroll_origin
-                                                + delta * (geo.max_scroll / geo.thumb_travel)
+                                            (0.0, 0.0, 0.0, 0.0)
                                         };
-                                        state.scroll_offset = new_scroll.clamp(0.0, geo.max_scroll);
+                                        if let Some(state_snapshot) = self.text_edit_states.get(&element_id).cloned() {
+                                            let (content_width, content_height) = self.text_input_content_size(
+                                                &state_snapshot,
+                                                &ti_cfg,
+                                                (bbox.width - pad_left - pad_right).max(0.0),
+                                            );
+                                            if let Some(state) = self.text_edit_states.get_mut(&element_id) {
+                                                if is_vertical {
+                                                    if let Some(geo) = compute_vertical_scrollbar_geometry(
+                                                        bbox,
+                                                        content_height + pad_top + pad_bottom,
+                                                        scroll_origin,
+                                                        scrollbar_cfg,
+                                                    ) {
+                                                        let delta = pointer.y - drag_origin;
+                                                        let new_scroll = if geo.thumb_travel <= 0.0 {
+                                                            0.0
+                                                        } else {
+                                                            scroll_origin + delta * (geo.max_scroll / geo.thumb_travel)
+                                                        };
+                                                        state.scroll_offset_y = new_scroll.clamp(0.0, geo.max_scroll);
+                                                    }
+                                                } else {
+                                                    if let Some(geo) = compute_horizontal_scrollbar_geometry(
+                                                        bbox,
+                                                        content_width + pad_left + pad_right,
+                                                        scroll_origin,
+                                                        scrollbar_cfg,
+                                                    ) {
+                                                        let delta = pointer.x - drag_origin;
+                                                        let new_scroll = if geo.thumb_travel <= 0.0 {
+                                                            0.0
+                                                        } else {
+                                                            scroll_origin + delta * (geo.max_scroll / geo.thumb_travel)
+                                                        };
+                                                        state.scroll_offset = new_scroll.clamp(0.0, geo.max_scroll);
+                                                    }
+                                                }
+                                                self.text_input_scrollbar_idle_frames.insert(element_id, 0);
+                                                consumed_scroll = true;
+                                            }
+                                        }
                                     }
                                 }
-
-                                self.text_input_scrollbar_idle_frames
-                                    .insert(self.text_input_drag_element_id, 0);
-                                consumed_scroll = true;
                             }
                         }
                     }
-                } else if self.text_input_drag_active {
-                    let drag_id = self.text_input_drag_element_id;
-                    if ti_cfg.drag_select && !self.text_input_drag_from_touch {
-                        consumed_scroll = true;
-
-                        let drag_dx = pointer.x - self.text_input_drag_origin.x;
-                        let drag_dy = pointer.y - self.text_input_drag_origin.y;
-                        let drag_distance_sq = drag_dx * drag_dx + drag_dy * drag_dy;
-                        if drag_distance_sq < 4.0 {
-                            return consumed_scroll;
-                        }
-
-                        if let (Some(item), Some(measure_fn)) = (
-                            self.layout_element_map.get(&drag_id),
-                            self.measure_text_fn.as_ref(),
-                        ) {
-                            let bbox = item.bounding_box;
-                            let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
-                                let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
-                                let pad = self.layout_configs[layout_idx].padding;
-                                (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
-                            } else {
-                                (0.0, 0.0, 0.0, 0.0)
-                            };
-                            let inner_w = (bbox.width - pad_left - pad_right).max(0.0);
-                            let inner_h = (bbox.height - pad_top - pad_bottom).max(0.0);
-                            let click_x = pointer.x - bbox.x;
-                            let click_y = pointer.y - bbox.y;
-
-                            if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
-                                if ti_cfg.is_multiline {
-                                    if click_y < 0.0 {
-                                        state.scroll_offset_y = (state.scroll_offset_y + click_y).max(0.0);
-                                    } else if click_y > bbox.height {
-                                        state.scroll_offset_y += click_y - bbox.height;
-                                    }
-                                } else {
-                                    if click_x < 0.0 {
-                                        state.scroll_offset = (state.scroll_offset + click_x).max(0.0);
-                                    } else if click_x > bbox.width {
-                                        state.scroll_offset += click_x - bbox.width;
-                                    }
-                                }
-                            }
-
-                            if let Some(state_snapshot) = self.text_edit_states.get(&drag_id).cloned() {
-                                let clamped_x = (click_x - pad_left).clamp(0.0, inner_w);
-                                let _clamped_y = (click_y - pad_top).clamp(0.0, inner_h);
-                                let disp_text = crate::text_input::display_text(
-                                    &state_snapshot.text,
-                                    &ti_cfg.placeholder,
-                                    ti_cfg.is_password,
-                                );
-
-                                if !state_snapshot.text.is_empty() {
-                                    if ti_cfg.is_multiline {
-                                        let visual_lines = crate::text_input::wrap_lines(
-                                            &disp_text,
-                                            inner_w,
-                                            ti_cfg.font_asset,
-                                            ti_cfg.font_size,
-                                            measure_fn.as_ref(),
-                                        );
-                                        if !visual_lines.is_empty() {
-                                            let line_height = if ti_cfg.line_height > 0 {
-                                                ti_cfg.line_height as f32
+                    ActiveDrag::TextInput {
+                        element_id,
+                        drag_origin,
+                        scroll_origin,
+                        from_touch,
+                    } => {
+                        let ti_pos = self.text_input_element_ids.iter().position(|&id| id == element_id);
+                        if let Some(pos) = ti_pos {
+                            if let Some(ti_cfg) = self.text_input_configs.get(pos).cloned() {
+                                if ti_cfg.drag_select && !from_touch {
+                                    consumed_scroll = true;
+                                    let drag_dx = pointer.x - drag_origin.x;
+                                    let drag_dy = pointer.y - drag_origin.y;
+                                    let drag_distance_sq = drag_dx * drag_dx + drag_dy * drag_dy;
+                                    if drag_distance_sq >= 4.0 {
+                                        if let (Some(item), Some(measure_fn)) = (
+                                            self.layout_element_map.get(&element_id),
+                                            self.measure_text_fn.as_ref(),
+                                        ) {
+                                            let bbox = item.bounding_box;
+                                            let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0 {
+                                                let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                                                let pad = self.layout_configs[layout_idx].padding;
+                                                (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
                                             } else {
-                                                let config = crate::text::TextConfig {
-                                                    font_asset: ti_cfg.font_asset,
-                                                    font_size: ti_cfg.font_size,
-                                                    ..Default::default()
-                                                };
-                                                measure_fn("Mg", &config).height
+                                                (0.0, 0.0, 0.0, 0.0)
                                             };
+                                            let inner_w = (bbox.width - pad_left - pad_right).max(0.0);
+                                            let inner_h = (bbox.height - pad_top - pad_bottom).max(0.0);
+                                            let click_x = pointer.x - bbox.x;
+                                            let click_y = pointer.y - bbox.y;
 
-                                            let adjusted_y = (click_y - pad_top).max(0.0) + state_snapshot.scroll_offset_y;
-                                            let clicked_line = (adjusted_y / line_height).floor().max(0.0) as usize;
-                                            let clicked_line = clicked_line.min(visual_lines.len().saturating_sub(1));
-
-                                            let vl = &visual_lines[clicked_line];
-                                            let line_char_x_positions = crate::text_input::compute_char_x_positions(
-                                                &vl.text,
-                                                ti_cfg.font_asset,
-                                                ti_cfg.font_size,
-                                                measure_fn.as_ref(),
-                                            );
-                                            let col = crate::text_input::find_nearest_char_boundary(
-                                                clamped_x,
-                                                &line_char_x_positions,
-                                            );
-                                            let raw_pos = vl.global_char_start + col;
-
-                                            if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
-                                                #[cfg(feature = "text-styling")]
-                                                {
-                                                    let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_pos);
-                                                    state.click_to_cursor_styled(visual_pos, true);
-                                                }
-                                                #[cfg(not(feature = "text-styling"))]
-                                                {
-                                                    if state.selection_anchor.is_none() {
-                                                        state.selection_anchor = Some(state.cursor_pos);
+                                            if let Some(state) = self.text_edit_states.get_mut(&element_id) {
+                                                if ti_cfg.is_multiline {
+                                                    if click_y < 0.0 {
+                                                        state.scroll_offset_y = (state.scroll_offset_y + click_y).max(0.0);
+                                                    } else if click_y > bbox.height {
+                                                        state.scroll_offset_y += click_y - bbox.height;
                                                     }
-                                                    state.cursor_pos = raw_pos;
-                                                    if state.selection_anchor == Some(state.cursor_pos) {
-                                                        state.selection_anchor = None;
+                                                } else {
+                                                    if click_x < 0.0 {
+                                                        state.scroll_offset = (state.scroll_offset + click_x).max(0.0);
+                                                    } else if click_x > bbox.width {
+                                                        state.scroll_offset += click_x - bbox.width;
                                                     }
-                                                    state.reset_blink();
                                                 }
                                             }
-                                        }
-                                    } else {
-                                        let char_x_positions = crate::text_input::compute_char_x_positions(
-                                            &disp_text,
-                                            ti_cfg.font_asset,
-                                            ti_cfg.font_size,
-                                            measure_fn.as_ref(),
-                                        );
-                                        let adjusted_x = (click_x - pad_left).max(0.0) + state_snapshot.scroll_offset;
 
-                                        if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
-                                            #[cfg(feature = "text-styling")]
-                                            {
-                                                let raw_pos = crate::text_input::find_nearest_char_boundary(
-                                                    adjusted_x,
-                                                    &char_x_positions,
+                                            if let Some(state_snapshot) = self.text_edit_states.get(&element_id).cloned() {
+                                                let clamped_x = (click_x - pad_left).clamp(0.0, inner_w);
+                                                let _clamped_y = (click_y - pad_top).clamp(0.0, inner_h);
+                                                let disp_text = crate::text_input::display_text(
+                                                    &state_snapshot.text,
+                                                    &ti_cfg.placeholder,
+                                                    ti_cfg.is_password,
                                                 );
-                                                let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_pos);
-                                                state.click_to_cursor_styled(visual_pos, true);
+
+                                                if !state_snapshot.text.is_empty() {
+                                                    if ti_cfg.is_multiline {
+                                                        let visual_lines = crate::text_input::wrap_lines(
+                                                            &disp_text,
+                                                            inner_w,
+                                                            ti_cfg.font_asset,
+                                                            ti_cfg.font_size,
+                                                            measure_fn.as_ref(),
+                                                        );
+                                                        if !visual_lines.is_empty() {
+                                                            let line_height = if ti_cfg.line_height > 0 {
+                                                                ti_cfg.line_height as f32
+                                                            } else {
+                                                                let config = crate::text::TextConfig {
+                                                                    font_asset: ti_cfg.font_asset,
+                                                                    font_size: ti_cfg.font_size,
+                                                                    ..Default::default()
+                                                                };
+                                                                measure_fn("Mg", &config).height
+                                                            };
+
+                                                            let adjusted_y = (click_y - pad_top).max(0.0) + state_snapshot.scroll_offset_y;
+                                                            let clicked_line = (adjusted_y / line_height).floor().max(0.0) as usize;
+                                                            let clicked_line = clicked_line.min(visual_lines.len().saturating_sub(1));
+
+                                                            let vl = &visual_lines[clicked_line];
+                                                            let line_char_x_positions = crate::text_input::compute_char_x_positions(
+                                                                &vl.text,
+                                                                ti_cfg.font_asset,
+                                                                ti_cfg.font_size,
+                                                                measure_fn.as_ref(),
+                                                            );
+                                                            let col = crate::text_input::find_nearest_char_boundary(
+                                                                clamped_x,
+                                                                &line_char_x_positions,
+                                                            );
+                                                            let raw_pos = vl.global_char_start + col;
+
+                                                            if let Some(state) = self.text_edit_states.get_mut(&element_id) {
+                                                                #[cfg(feature = "text-styling")]
+                                                                {
+                                                                    let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_pos);
+                                                                    state.click_to_cursor_styled(visual_pos, true);
+                                                                }
+                                                                #[cfg(not(feature = "text-styling"))]
+                                                                {
+                                                                    if state.selection_anchor.is_none() {
+                                                                        state.selection_anchor = Some(state.cursor_pos);
+                                                                    }
+                                                                    state.cursor_pos = raw_pos;
+                                                                    if state.selection_anchor == Some(state.cursor_pos) {
+                                                                        state.selection_anchor = None;
+                                                                    }
+                                                                    state.reset_blink();
+                                                                }
+                                                            }
+                                                        }
+                                                    } else {
+                                                        let char_x_positions = crate::text_input::compute_char_x_positions(
+                                                            &disp_text,
+                                                            ti_cfg.font_asset,
+                                                            ti_cfg.font_size,
+                                                            measure_fn.as_ref(),
+                                                        );
+                                                        let adjusted_x = (click_x - pad_left).max(0.0) + state_snapshot.scroll_offset;
+
+                                                        if let Some(state) = self.text_edit_states.get_mut(&element_id) {
+                                                            #[cfg(feature = "text-styling")]
+                                                            {
+                                                                let raw_pos = crate::text_input::find_nearest_char_boundary(
+                                                                    adjusted_x,
+                                                                    &char_x_positions,
+                                                                );
+                                                                let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_pos);
+                                                                state.click_to_cursor_styled(visual_pos, true);
+                                                            }
+                                                            #[cfg(not(feature = "text-styling"))]
+                                                            {
+                                                                state.click_to_cursor(adjusted_x, &char_x_positions, true);
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
-                                            #[cfg(not(feature = "text-styling"))]
-                                            {
-                                                state.click_to_cursor(adjusted_x, &char_x_positions, true);
-                                            }
+
+                                            self.text_input_scrollbar_idle_frames.insert(element_id, 0);
                                         }
                                     }
+                                } else if let Some(state) = self.text_edit_states.get_mut(&element_id) {
+                                    if ti_cfg.is_multiline {
+                                        let drag_delta_y = drag_origin.y - pointer.y;
+                                        state.scroll_offset_y = (scroll_origin.y + drag_delta_y).max(0.0);
+                                    } else {
+                                        let drag_delta_x = drag_origin.x - pointer.x;
+                                        state.scroll_offset = (scroll_origin.x + drag_delta_x).max(0.0);
+                                    }
+                                    self.text_input_scrollbar_idle_frames.insert(element_id, 0);
+                                    consumed_scroll = true;
                                 }
                             }
-
-                            self.text_input_scrollbar_idle_frames.insert(drag_id, 0);
                         }
-                    } else if let Some(state) = self.text_edit_states.get_mut(&drag_id) {
-                        if is_multiline {
-                            let drag_delta_y = self.text_input_drag_origin.y - pointer.y;
-                            state.scroll_offset_y = (self.text_input_drag_scroll_origin.y + drag_delta_y).max(0.0);
-                        } else {
-                            let drag_delta_x = self.text_input_drag_origin.x - pointer.x;
-                            state.scroll_offset = (self.text_input_drag_scroll_origin.x + drag_delta_x).max(0.0);
-                        }
-                        self.text_input_scrollbar_idle_frames
-                            .insert(drag_id, 0);
                     }
+                    _ => {}
                 }
             }
-            PointerState::ReleasedThisFrame
-            | PointerState::Idle => {
-                self.text_input_drag_active = false;
-                self.text_input_drag_from_touch = false;
-                self.text_input_scrollbar_drag_active = false;
-            }
+            _ => {}
         }
         consumed_scroll
     }
@@ -7766,6 +7700,15 @@ impl PlyContext {
         let elem_id = self.layout_elements[open_idx].id;
         for scd in &self.scroll_container_datas {
             if scd.element_id == elem_id {
+                return scd.scroll_position;
+            }
+        }
+        Vector2::default()
+    }
+
+    pub fn get_scroll_position(&self, id: Id) -> Vector2 {
+        for scd in &self.scroll_container_datas {
+            if scd.element_id == id.id {
                 return scd.scroll_position;
             }
         }
@@ -9071,10 +9014,10 @@ impl PlyContext {
                     },
                     ..Default::default()
                 },
+                explicit_pointer_capture: Some(PointerCaptureMode::Passthrough),
                 floating: FloatingConfig {
                     parent_id: highlight_target,
                     z_index: 32767,
-                    pointer_capture_mode: PointerCaptureMode::Passthrough,
                     attach_to: FloatingAttachToElement::ElementWithId,
                     ..Default::default()
                 },
@@ -9885,14 +9828,6 @@ impl PlyContext {
                                 self.debug_text(") }", info_text_config);
                             }
                             self.close_element();
-
-                            self.debug_text("Pointer Capture Mode", info_title_config);
-                            let pcm = if float_config.pointer_capture_mode == PointerCaptureMode::Passthrough {
-                                "PASSTHROUGH"
-                            } else {
-                                "NONE"
-                            };
-                            self.debug_text(pcm, info_text_config);
 
                             self.debug_text("Attach To", info_title_config);
                             let at = match float_config.attach_to {

@@ -106,13 +106,6 @@ impl FloatingBuilder {
         self.config.clip_to = FloatingClipToElement::AttachedParent;
         self
     }
-
-    /// Sets pointer capture mode to Passthrough.
-    #[inline]
-    pub fn passthrough(&mut self) -> &mut Self {
-        self.config.pointer_capture_mode = PointerCaptureMode::Passthrough;
-        self
-    }
 }
 
 /// Builder for configuring overflow (clip/scroll) properties using a closure.

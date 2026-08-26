@@ -417,7 +417,14 @@ impl<'ply, State> ElementBuilder<'ply, State> {
     /// Captures the pointer, preventing it from propagating to parent elements.
     #[inline]
     pub fn capture(mut self) -> Self {
-        self.inner.pointer_capture_mode = elements::PointerCaptureMode::Capture;
+        self.inner.explicit_pointer_capture = Some(elements::PointerCaptureMode::Capture);
+        self
+    }
+
+    /// Allows pointer input to pass through to parent elements.
+    #[inline]
+    pub fn passthrough(mut self) -> Self {
+        self.inner.explicit_pointer_capture = Some(elements::PointerCaptureMode::Passthrough);
         self
     }
 
@@ -2474,11 +2481,11 @@ mod tests {
 
         ui.element().width(fixed!(20.0)).height(fixed!(20.0))
             .layout(|l| l.align(crate::align::AlignX::CenterX, crate::align::AlignY::CenterY))
+            .passthrough()
             .floating(|f| f
                 .attach_root()
                 .anchor((crate::align::AlignX::CenterX, crate::align::AlignY::CenterY), (crate::align::AlignX::Left, crate::align::AlignY::Top))
                 .offset((100.0, 150.0))
-                .passthrough()
                 .z_index(110)
             )
             .corner_radius(10.0)
@@ -4338,7 +4345,7 @@ mod tests {
             ui.element()
                 .id("floating_capture")
                 .capture()
-                .floating(|f| f.attach_root().passthrough())
+                .floating(|f| f.attach_root())
                 .width(fixed!(100.0))
                 .height(fixed!(100.0))
                 .empty();
@@ -4358,7 +4365,7 @@ mod tests {
             ui.element()
                 .id("floating_capture")
                 .capture()
-                .floating(|f| f.attach_root().passthrough())
+                .floating(|f| f.attach_root())
                 .width(fixed!(100.0))
                 .height(fixed!(100.0))
                 .on_press(|_, _| { floating_pressed += 1; })
@@ -4628,6 +4635,113 @@ mod tests {
 
         assert!(hover_fired.get(), "Hover callback attached inside .with() should fire");
         assert!(press_fired.get(), "Press callback attached inside .with() should fire");
+    }
+
+    #[test]
+    fn test_pointer_capture_defaults_and_explicit_overrides() {
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        let mut parent_pressed = 0u32;
+        let mut child_pressed = 0u32;
+
+        // Test 1: Scrollable container defaults to Capture, blocks parent click
+        {
+            let mut ui = ply.begin();
+            ui.element().id("parent").width(fixed!(400.0)).height(fixed!(400.0))
+                .children(|ui| {
+                    ui.element().id("scroll_child").overflow(|o| o.scroll_y())
+                        .width(fixed!(200.0)).height(fixed!(200.0))
+                        .empty();
+                });
+            ui.eval();
+        }
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element().id("parent").width(fixed!(400.0)).height(fixed!(400.0))
+                .on_press(|_, _| { parent_pressed += 1; })
+                .children(|ui| {
+                    ui.element().id("scroll_child").overflow(|o| o.scroll_y())
+                        .width(fixed!(200.0)).height(fixed!(200.0))
+                        .on_press(|_, _| { child_pressed += 1; })
+                        .empty();
+                });
+            ui.eval();
+        }
+        assert_eq!(child_pressed, 1, "scroll_child should receive click");
+        assert_eq!(parent_pressed, 0, "parent should not receive click when child defaults to capture");
+
+        // Test 2: Explicit .passthrough() on scrollable container allows parent click
+        parent_pressed = 0;
+        child_pressed = 0;
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
+        {
+            let mut ui = ply.begin();
+            ui.element().id("parent").width(fixed!(400.0)).height(fixed!(400.0))
+                .children(|ui| {
+                    ui.element().id("scroll_child")
+                        .passthrough()
+                        .overflow(|o| o.scroll_y())
+                        .width(fixed!(200.0)).height(fixed!(200.0))
+                        .empty();
+                });
+            ui.eval();
+        }
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element().id("parent").width(fixed!(400.0)).height(fixed!(400.0))
+                .on_press(|_, _| { parent_pressed += 1; })
+                .children(|ui| {
+                    ui.element().id("scroll_child")
+                        .passthrough()
+                        .overflow(|o| o.scroll_y())
+                        .width(fixed!(200.0)).height(fixed!(200.0))
+                        .on_press(|_, _| { child_pressed += 1; })
+                        .empty();
+                });
+            ui.eval();
+        }
+        assert_eq!(child_pressed, 1, "scroll_child should receive click");
+        assert_eq!(parent_pressed, 1, "parent should receive click when child explicitly calls passthrough");
+    }
+
+    #[test]
+    fn test_exclusive_drag_and_nested_containers() {
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
+
+        let render_tree = |ply: &mut Ply| {
+            let mut ui = ply.begin();
+            ui.element().id("outer_scroll").overflow(|o| o.scroll_y())
+                .width(fixed!(500.0)).height(fixed!(500.0))
+                .children(|ui| {
+                    ui.element().id("inner_scroll").overflow(|o| o.scroll_y())
+                        .width(fixed!(200.0)).height(fixed!(200.0))
+                        .children(|ui| {
+                            ui.element().id("inner_content").width(fixed!(200.0)).height(fixed!(800.0)).empty();
+                        });
+                    ui.element().id("outer_content").width(fixed!(500.0)).height(fixed!(1200.0)).empty();
+                });
+            ui.eval();
+        };
+
+        // Frame 1: Initial layout
+        render_tree(&mut ply);
+
+        // Frame 2: Pointer press inside inner scroll container at (50, 50)
+        ply.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        render_tree(&mut ply);
+        ply.context.update_scroll_containers(true, Vector2::default(), 0.016, false);
+
+        // Frame 3: Drag pointer to (50, 20) -> delta_y = -30
+        ply.context.set_pointer_state(Vector2::new(50.0, 20.0), true);
+        render_tree(&mut ply);
+        ply.context.update_scroll_containers(true, Vector2::default(), 0.016, false);
+
+        // Verify only inner_scroll position changed
+        let outer_scroll_pos = ply.context.get_scroll_position(Id::new("outer_scroll"));
+        let inner_scroll_pos = ply.context.get_scroll_position(Id::new("inner_scroll"));
+        assert_eq!(outer_scroll_pos, Vector2::new(0.0, 0.0), "outer scroll container should not drag");
+        assert_eq!(inner_scroll_pos, Vector2::new(0.0, -30.0), "inner scroll container should drag");
     }
 }
 
