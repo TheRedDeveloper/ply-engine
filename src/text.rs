@@ -18,8 +18,6 @@ pub enum WrapMode {
 /// Configuration settings for rendering text elements.
 #[derive(Debug, Clone)]
 pub struct TextConfig {
-    /// Internal engine user data.
-    pub(crate) user_data: usize,
     /// The color of the text.
     pub color: Color,
     /// The font asset to use. `None` means use the default font.
@@ -119,7 +117,6 @@ impl TextConfig {
 impl Default for TextConfig {
     fn default() -> Self {
         Self {
-            user_data: 0,
             color: Color::rgba(0., 0., 0., 0.),
             font_size: 0,
             letter_spacing: 0,

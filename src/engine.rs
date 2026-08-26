@@ -337,7 +337,6 @@ pub struct ElementDeclaration {
     pub floating: FloatingConfig,
     pub clip: ClipConfig,
     pub borders: Vec<BorderConfig>,
-    pub user_data: usize,
     pub effects: Vec<ShaderConfig>,
     pub shaders: Vec<ShaderConfig>,
     pub visual_rotation: Option<VisualRotationConfig>,
@@ -359,7 +358,6 @@ impl Default for ElementDeclaration {
             floating: FloatingConfig::default(),
             clip: ClipConfig::default(),
             borders: Vec::new(),
-            user_data: 0,
             effects: Vec::new(),
             shaders: Vec::new(),
             visual_rotation: None,
@@ -378,7 +376,6 @@ use crate::id::{Id, StringId};
 struct SharedElementConfig {
     background_color: Color,
     corner_radius: CornerRadius,
-    user_data: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -519,7 +516,6 @@ pub struct InternalRenderCommand {
     pub bounding_box: BoundingBox,
     pub command_type: RenderCommandType,
     pub render_data: InternalRenderData,
-    pub user_data: usize,
     pub id: u32,
     pub z_index: i16,
     pub effects: Vec<ShaderConfig>,
@@ -571,7 +567,6 @@ impl Default for InternalRenderCommand {
             bounding_box: BoundingBox::default(),
             command_type: RenderCommandType::None,
             render_data: InternalRenderData::None,
-            user_data: 0,
             id: 0,
             z_index: 0,
             effects: Vec::new(),
@@ -1302,13 +1297,12 @@ impl PlyContext {
         // Record the start of element configs for this element
         self.layout_elements[open_idx].element_configs.start = self.element_configs.len();
 
-        // Shared config (background color, corner radius, user data)
+        // Shared config (background color, corner radius)
         let mut shared_config_index: Option<usize> = None;
         if declaration.background_color.a > 0.0 {
             let idx = self.store_shared_config(SharedElementConfig {
                 background_color: declaration.background_color,
                 corner_radius: CornerRadius::default(),
-                user_data: 0,
             });
             shared_config_index = Some(idx);
             self.attach_element_config(ElementConfigType::Shared, idx);
@@ -1320,20 +1314,6 @@ impl PlyContext {
                 let idx = self.store_shared_config(SharedElementConfig {
                     background_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
                     corner_radius: declaration.corner_radius,
-                    user_data: 0,
-                });
-                shared_config_index = Some(idx);
-                self.attach_element_config(ElementConfigType::Shared, idx);
-            }
-        }
-        if declaration.user_data != 0 {
-            if let Some(idx) = shared_config_index {
-                self.shared_element_configs[idx].user_data = declaration.user_data;
-            } else {
-                let idx = self.store_shared_config(SharedElementConfig {
-                    background_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
-                    corner_radius: CornerRadius::default(),
-                    user_data: declaration.user_data,
                 });
                 self.attach_element_config(ElementConfigType::Shared, idx);
             }
@@ -4118,7 +4098,6 @@ impl PlyContext {
                                         horizontal: clip.horizontal,
                                         vertical: clip.vertical,
                                     },
-                                    user_data: 0,
                                     id: elem_id,
                                     z_index: root.z_index,
                                     visual_rotation: None,
@@ -4138,7 +4117,6 @@ impl PlyContext {
                                             corner_radius: shared.corner_radius,
                                             image_data,
                                         },
-                                        user_data: shared.user_data,
                                         id: elem_id,
                                         z_index: root.z_index,
                                         visual_rotation: None,
@@ -4216,7 +4194,6 @@ impl PlyContext {
                                             line_height: text_config.line_height,
                                             font_asset: text_config.font_asset,
                                         },
-                                        user_data: text_config.user_data,
                                         id: hash_number(line_index as u32, elem_id).id,
                                         z_index: root.z_index,
                                         visual_rotation: None,
@@ -4240,7 +4217,6 @@ impl PlyContext {
                                                 background_color: shared.background_color,
                                                 corner_radius: shared.corner_radius,
                                             },
-                                            user_data: shared.user_data,
                                             id: elem_id,
                                             z_index: root.z_index,
                                             visual_rotation: None,
@@ -4413,7 +4389,6 @@ impl PlyContext {
                                             horizontal: true,
                                             vertical: true,
                                         },
-                                        user_data: 0,
                                         id: hash_number(1000, elem_id).id,
                                         z_index: root.z_index,
                                         visual_rotation: None,
@@ -4518,7 +4493,6 @@ impl PlyContext {
                                                                 background_color: ti_config.selection_color,
                                                                 corner_radius: CornerRadius::default(),
                                                             },
-                                                            user_data: 0,
                                                             id: hash_number(1001 + line_idx as u32, elem_id).id,
                                                             z_index: root.z_index,
                                                             visual_rotation: None,
@@ -4552,7 +4526,6 @@ impl PlyContext {
                                                         line_height: 0,
                                                         font_asset: ti_config.font_asset,
                                                     },
-                                                    user_data: 0,
                                                     id: hash_number(2000 + line_idx as u32, elem_id).id,
                                                     z_index: root.z_index,
                                                     visual_rotation: None,
@@ -4635,7 +4608,6 @@ impl PlyContext {
                                                                         corner_radius:
                                                                             CornerRadius::default(),
                                                                     },
-                                                                user_data: 0,
                                                                 id: hash_number(
                                                                     2600 + line_idx as u32,
                                                                     elem_id,
@@ -4682,7 +4654,6 @@ impl PlyContext {
                                                         background_color: ti_config.cursor_color,
                                                         corner_radius: CornerRadius::default(),
                                                     },
-                                                    user_data: 0,
                                                     id: hash_number(1003, elem_id).id,
                                                     z_index: root.z_index,
                                                     visual_rotation: None,
@@ -4751,7 +4722,6 @@ impl PlyContext {
                                                             background_color: ti_config.selection_color,
                                                             corner_radius: CornerRadius::default(),
                                                         },
-                                                        user_data: 0,
                                                         id: hash_number(1001, elem_id).id,
                                                         z_index: root.z_index,
                                                         visual_rotation: None,
@@ -4785,7 +4755,6 @@ impl PlyContext {
                                                     line_height: 0,
                                                     font_asset: ti_config.font_asset,
                                                 },
-                                                user_data: 0,
                                                 id: hash_number(1002, elem_id).id,
                                                 z_index: root.z_index,
                                                 visual_rotation: None,
@@ -4838,7 +4807,6 @@ impl PlyContext {
                                                                         corner_radius:
                                                                             CornerRadius::default(),
                                                                     },
-                                                                user_data: 0,
                                                                 id: hash_number(2600, elem_id).id,
                                                                 z_index: root.z_index,
                                                                 visual_rotation: None,
@@ -4879,7 +4847,6 @@ impl PlyContext {
                                                         background_color: ti_config.cursor_color,
                                                         corner_radius: CornerRadius::default(),
                                                     },
-                                                    user_data: 0,
                                                     id: hash_number(1003, elem_id).id,
                                                     z_index: root.z_index,
                                                     visual_rotation: None,
@@ -4934,7 +4901,6 @@ impl PlyContext {
                                         bounding_box: current_bbox,
                                         command_type: RenderCommandType::ScissorEnd,
                                         render_data: InternalRenderData::None,
-                                        user_data: 0,
                                         id: hash_number(1004, elem_id).id,
                                         z_index: root.z_index,
                                         visual_rotation: None,
@@ -4956,7 +4922,6 @@ impl PlyContext {
                                 background_color: shared.background_color,
                                 corner_radius: shared.corner_radius,
                             },
-                            user_data: shared.user_data,
                             id: elem_id,
                             z_index: root.z_index,
                             visual_rotation: None,
@@ -5177,14 +5142,6 @@ impl PlyContext {
                         if let Some(border_bbox) = self.layout_element_map.get(&border_elem_id).map(|item| item.bounding_box) {
                             let bbox = border_bbox;
                             if !self.element_is_offscreen(&bbox) {
-                                let shared = self
-                                    .find_element_config_index(
-                                        current_elem_idx,
-                                        ElementConfigType::Shared,
-                                    )
-                                    .map(|idx| self.shared_element_configs[idx])
-                                    .unwrap_or_default();
-
                                 let elem = &self.layout_elements[current_elem_idx];
                                 let cfg_start = elem.element_configs.start as usize;
                                 let cfg_len = elem.element_configs.length as usize;
@@ -5234,7 +5191,6 @@ impl PlyContext {
                                                             background_color: border_config.color,
                                                             corner_radius: CornerRadius::default(),
                                                         },
-                                                        user_data: shared.user_data,
                                                         id: hash_number(
                                                             self.layout_elements[current_elem_idx].id,
                                                             children_count as u32 + 1 + ci as u32 + (border_order * 1000),
@@ -5274,7 +5230,6 @@ impl PlyContext {
                                                             background_color: border_config.color,
                                                             corner_radius: CornerRadius::default(),
                                                         },
-                                                        user_data: shared.user_data,
                                                         id: hash_number(
                                                             self.layout_elements[current_elem_idx].id,
                                                             children_count as u32 + 1 + ci as u32 + (border_order * 1000),
@@ -5401,7 +5356,6 @@ impl PlyContext {
                                             width: border_config.width,
                                             position: border_config.position,
                                         },
-                                        user_data: shared.user_data,
                                         id: cmd_id,
                                         z_index: root.z_index,
                                         visual_rotation: None,
