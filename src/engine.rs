@@ -501,12 +501,18 @@ struct ScrollContainerDataInternal {
     content_size: Dimensions,
     scroll_momentum: Vector2,
     scroll_position: Vector2,
+    target_scroll_position: Vector2,
+    anim_start_position: Vector2,
+    anim_time: f32,
+    anim_duration: f32,
     scrollbar: Option<ScrollbarConfig>,
     scroll_x_enabled: bool,
     scroll_y_enabled: bool,
     no_drag_scroll: bool,
     scrollbar_idle_frames: u32,
     scrollbar_activity_this_frame: bool,
+    scroll_hysteresis_accum: Vector2,
+    scroll_hysteresis_active: bool,
     element_id: u32,
     layout_element_index: i32,
     open_this_frame: bool,
@@ -6109,6 +6115,9 @@ impl PlyContext {
                                         }
                                         scd.scroll_momentum.x = 0.0;
                                     }
+                                    scd.target_scroll_position = scd.scroll_position;
+                                    scd.anim_start_position = scd.scroll_position;
+                                    scd.anim_time = scd.anim_duration;
                                     scd.scrollbar_activity_this_frame = true;
                                     scd.scrollbar_idle_frames = 0;
                                 }
@@ -6130,6 +6139,9 @@ impl PlyContext {
                                         scroll_origin.x + drag_delta.x,
                                         scroll_origin.y + drag_delta.y,
                                     );
+                                    scd.target_scroll_position = scd.scroll_position;
+                                    scd.anim_start_position = scd.scroll_position;
+                                    scd.anim_time = scd.anim_duration;
 
                                     let frame_delta = Vector2::new(
                                         drag_delta.x - previous_delta.x,
@@ -6177,6 +6189,9 @@ impl PlyContext {
                 // Apply momentum
                 scd.scroll_position.x += scd.scroll_momentum.x * dt;
                 scd.scroll_position.y += scd.scroll_momentum.y * dt;
+                scd.target_scroll_position = scd.scroll_position;
+                scd.anim_start_position = scd.scroll_position;
+                scd.anim_time = scd.anim_duration;
                 scd.scrollbar_activity_this_frame = true;
 
                 // Exponential decay (frame-rate independent)
@@ -6195,18 +6210,79 @@ impl PlyContext {
 
         // --- Mouse wheel / external scroll delta ---
         if scroll_delta.x != 0.0 || scroll_delta.y != 0.0 {
+            let is_continuous_x = scroll_delta.x != 0.0
+                && (scroll_delta.x.abs() < 40.0 || (scroll_delta.x.abs() % 48.0 > 2.0 && scroll_delta.x.abs() % 48.0 < 46.0));
+            let is_continuous_y = scroll_delta.y != 0.0
+                && (scroll_delta.y.abs() < 40.0 || (scroll_delta.y.abs() % 48.0 > 2.0 && scroll_delta.y.abs() % 48.0 < 46.0));
+            let is_continuous = is_continuous_x || is_continuous_y;
+
             // Find the deepest scroll container from pointer_over_ids
             let target_elem_id = self.pointer_over_ids.iter().rev().find_map(|eid| {
                 self.scroll_container_datas.iter().find(|scd| scd.element_id == eid.id).map(|s| s.element_id)
             });
             if let Some(eid) = target_elem_id {
                 if let Some(scd) = self.scroll_container_datas.iter_mut().find(|scd| scd.element_id == eid) {
-                    scd.scroll_position.y += scroll_delta.y;
-                    scd.scroll_position.x += scroll_delta.x;
+                    let max_scroll_y = -(scd.content_size.height - scd.bounding_box.height).max(0.0);
+                    let max_scroll_x = -(scd.content_size.width - scd.bounding_box.width).max(0.0);
+
+                    if is_continuous {
+                        // Apply 4px hysteresis deadzone when starting continuous scroll from rest
+                        let effective_delta = if scd.scroll_hysteresis_active {
+                            scroll_delta
+                        } else {
+                            scd.scroll_hysteresis_accum.x += scroll_delta.x;
+                            scd.scroll_hysteresis_accum.y += scroll_delta.y;
+                            let dist = (scd.scroll_hysteresis_accum.x * scd.scroll_hysteresis_accum.x
+                                + scd.scroll_hysteresis_accum.y * scd.scroll_hysteresis_accum.y).sqrt();
+                            if dist >= 4.0 {
+                                scd.scroll_hysteresis_active = true;
+                                let flushed = scd.scroll_hysteresis_accum;
+                                scd.scroll_hysteresis_accum = Vector2::default();
+                                flushed
+                            } else {
+                                Vector2::default()
+                            }
+                        };
+
+                        if effective_delta.x != 0.0 || effective_delta.y != 0.0 {
+                            scd.scroll_position.y = (scd.scroll_position.y + effective_delta.y).clamp(max_scroll_y, 0.0);
+                            scd.scroll_position.x = (scd.scroll_position.x + effective_delta.x).clamp(max_scroll_x, 0.0);
+                            scd.target_scroll_position = scd.scroll_position;
+                            scd.anim_start_position = scd.scroll_position;
+                            scd.anim_time = scd.anim_duration;
+                            scd.scrollbar_activity_this_frame = true;
+                            scd.scrollbar_idle_frames = 0;
+                        }
+                    } else {
+                        // Discrete wheel tick: resets hysteresis
+                        scd.scroll_hysteresis_active = false;
+                        scd.scroll_hysteresis_accum = Vector2::default();
+
+                        let base_y = if scd.anim_time < scd.anim_duration { scd.target_scroll_position.y } else { scd.scroll_position.y };
+                        let base_x = if scd.anim_time < scd.anim_duration { scd.target_scroll_position.x } else { scd.scroll_position.x };
+                        scd.target_scroll_position.y = (base_y + scroll_delta.y).clamp(max_scroll_y, 0.0);
+                        scd.target_scroll_position.x = (base_x + scroll_delta.x).clamp(max_scroll_x, 0.0);
+                        scd.anim_start_position = scd.scroll_position;
+                        scd.anim_time = 0.0;
+                        scd.anim_duration = 0.15;
+                        scd.scrollbar_activity_this_frame = true;
+                        scd.scrollbar_idle_frames = 0;
+                    }
                     scd.scroll_momentum = Vector2::default();
-                    scd.scrollbar_activity_this_frame = true;
-                    scd.scrollbar_idle_frames = 0;
                 }
+            }
+        }
+
+        // --- Smooth scroll interpolation (Chromium cubic-bezier ease) ---
+        for scd in &mut self.scroll_container_datas {
+            if scd.anim_time < scd.anim_duration {
+                scd.anim_time = (scd.anim_time + dt).min(scd.anim_duration);
+                let progress = (scd.anim_time / scd.anim_duration).clamp(0.0, 1.0);
+                let ease = crate::math::cubic_bezier_ease(progress);
+                scd.scroll_position.x = scd.anim_start_position.x + (scd.target_scroll_position.x - scd.anim_start_position.x) * ease;
+                scd.scroll_position.y = scd.anim_start_position.y + (scd.target_scroll_position.y - scd.anim_start_position.y) * ease;
+                scd.scrollbar_activity_this_frame = true;
+                scd.scrollbar_idle_frames = 0;
             }
         }
 
@@ -6217,6 +6293,8 @@ impl PlyContext {
                 -(scd.content_size.height - scd.bounding_box.height).max(0.0);
             let max_scroll_x =
                 -(scd.content_size.width - scd.bounding_box.width).max(0.0);
+            scd.target_scroll_position.y = scd.target_scroll_position.y.clamp(max_scroll_y, 0.0);
+            scd.target_scroll_position.x = scd.target_scroll_position.x.clamp(max_scroll_x, 0.0);
             scd.scroll_position.y = scd.scroll_position.y.clamp(max_scroll_y, 0.0);
             scd.scroll_position.x = scd.scroll_position.x.clamp(max_scroll_x, 0.0);
 
@@ -6228,12 +6306,68 @@ impl PlyContext {
                 scd.scroll_momentum.x = 0.0;
             }
 
-            if scd.scrollbar.is_some() {
-                if scd.scrollbar_activity_this_frame {
-                    scd.scrollbar_idle_frames = 0;
-                } else {
-                    scd.scrollbar_idle_frames = scd.scrollbar_idle_frames.saturating_add(1);
+            if scd.scrollbar_activity_this_frame {
+                scd.scrollbar_idle_frames = 0;
+            } else {
+                scd.scrollbar_idle_frames = scd.scrollbar_idle_frames.saturating_add(1);
+                if scd.scrollbar_idle_frames > 4 {
+                    scd.scroll_hysteresis_active = false;
+                    scd.scroll_hysteresis_accum = Vector2::default();
                 }
+            }
+        }
+    }
+
+    pub fn apply_keyboard_scroll(
+        &mut self,
+        delta: Vector2,
+        page_scroll_y: Option<f32>,
+        scroll_to_end_y: Option<f32>,
+    ) {
+        let target_elem_id = self.pointer_over_ids.iter().rev().find_map(|eid| {
+            self.scroll_container_datas.iter().find(|scd| scd.element_id == eid.id).map(|s| s.element_id)
+        }).or_else(|| {
+            if self.focused_element_id != 0 {
+                if self.scroll_container_datas.iter().any(|scd| scd.element_id == self.focused_element_id) {
+                    Some(self.focused_element_id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }).or_else(|| {
+            self.scroll_container_datas.last().map(|s| s.element_id)
+        });
+
+        if let Some(eid) = target_elem_id {
+            if let Some(scd) = self.scroll_container_datas.iter_mut().find(|scd| scd.element_id == eid) {
+                let max_scroll_y = -(scd.content_size.height - scd.bounding_box.height).max(0.0);
+                let max_scroll_x = -(scd.content_size.width - scd.bounding_box.width).max(0.0);
+
+                let base_y = if scd.anim_time < scd.anim_duration { scd.target_scroll_position.y } else { scd.scroll_position.y };
+                let base_x = if scd.anim_time < scd.anim_duration { scd.target_scroll_position.x } else { scd.scroll_position.x };
+
+                if let Some(dir) = page_scroll_y {
+                    let page_step = scd.bounding_box.height * 0.85;
+                    scd.target_scroll_position.y = (base_y + dir * page_step).clamp(max_scroll_y, 0.0);
+                } else if let Some(end) = scroll_to_end_y {
+                    if end == 0.0 {
+                        scd.target_scroll_position.y = 0.0;
+                    } else {
+                        scd.target_scroll_position.y = max_scroll_y;
+                    }
+                } else {
+                    scd.target_scroll_position.x = (base_x + delta.x).clamp(max_scroll_x, 0.0);
+                    scd.target_scroll_position.y = (base_y + delta.y).clamp(max_scroll_y, 0.0);
+                }
+
+                scd.anim_start_position = scd.scroll_position;
+                scd.anim_time = 0.0;
+                scd.anim_duration = 0.15;
+                scd.scroll_momentum = Vector2::default();
+                scd.scrollbar_activity_this_frame = true;
+                scd.scrollbar_idle_frames = 0;
             }
         }
     }
@@ -7185,12 +7319,18 @@ impl PlyContext {
     /// Mobile-first: dragging scrolls the content rather than selecting text.
     /// `scroll_delta` contains (x, y) scroll wheel deltas. For single-line, both axes
     /// map to horizontal scroll. For multiline, y scrolls vertically.
-    pub fn update_text_input_pointer_scroll(&mut self, scroll_delta: Vector2, touch_input_active: bool) -> bool {
+    pub fn update_text_input_pointer_scroll(
+        &mut self,
+        scroll_delta: Vector2,
+        delta_time: f32,
+        touch_input_active: bool,
+    ) -> bool {
         for idle in self.text_input_scrollbar_idle_frames.values_mut() {
             *idle = idle.saturating_add(1);
         }
 
         let mut consumed_scroll = false;
+        let dt = delta_time.max(0.0001);
 
         // --- Scroll wheel: scroll any hovered text input (even if unfocused) ---
         let has_scroll = scroll_delta.x.abs() > 0.01 || scroll_delta.y.abs() > 0.01;
@@ -7211,11 +7351,41 @@ impl PlyContext {
                     .map(|cfg| cfg.is_multiline)
                     .unwrap_or(false);
                 if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
+                    let is_continuous_x = scroll_delta.x != 0.0
+                        && (scroll_delta.x.abs() < 40.0 || (scroll_delta.x.abs() % 48.0 > 2.0 && scroll_delta.x.abs() % 48.0 < 46.0));
+                    let is_continuous_y = scroll_delta.y != 0.0
+                        && (scroll_delta.y.abs() < 40.0 || (scroll_delta.y.abs() % 48.0 > 2.0 && scroll_delta.y.abs() % 48.0 < 46.0));
+                    let is_continuous = is_continuous_x || is_continuous_y;
+
                     if is_multiline {
                         if scroll_delta.y.abs() > 0.01 {
-                            state.scroll_offset_y -= scroll_delta.y;
-                            if state.scroll_offset_y < 0.0 {
-                                state.scroll_offset_y = 0.0;
+                            if is_continuous {
+                                let effective_y = if state.scroll_hysteresis_active {
+                                    scroll_delta.y
+                                } else {
+                                    state.scroll_hysteresis_accum_y += scroll_delta.y;
+                                    if state.scroll_hysteresis_accum_y.abs() >= 4.0 {
+                                        state.scroll_hysteresis_active = true;
+                                        let flushed = state.scroll_hysteresis_accum_y;
+                                        state.scroll_hysteresis_accum_y = 0.0;
+                                        flushed
+                                    } else {
+                                        0.0
+                                    }
+                                };
+                                if effective_y.abs() > 0.01 {
+                                    state.scroll_offset_y = (state.scroll_offset_y - effective_y).max(0.0);
+                                    state.target_scroll_offset_y = state.scroll_offset_y;
+                                    state.anim_time = state.anim_duration;
+                                }
+                            } else {
+                                state.scroll_hysteresis_active = false;
+                                state.scroll_hysteresis_accum_y = 0.0;
+                                let base_y = if state.anim_time < state.anim_duration { state.target_scroll_offset_y } else { state.scroll_offset_y };
+                                state.target_scroll_offset_y = (base_y - scroll_delta.y).max(0.0);
+                                state.anim_start_offset_y = state.scroll_offset_y;
+                                state.anim_time = 0.0;
+                                state.anim_duration = 0.15;
                             }
                         }
                     } else {
@@ -7225,9 +7395,33 @@ impl PlyContext {
                             scroll_delta.y
                         };
                         if h_delta.abs() > 0.01 {
-                            state.scroll_offset -= h_delta;
-                            if state.scroll_offset < 0.0 {
-                                state.scroll_offset = 0.0;
+                            if is_continuous {
+                                let effective_x = if state.scroll_hysteresis_active {
+                                    h_delta
+                                } else {
+                                    state.scroll_hysteresis_accum += h_delta;
+                                    if state.scroll_hysteresis_accum.abs() >= 4.0 {
+                                        state.scroll_hysteresis_active = true;
+                                        let flushed = state.scroll_hysteresis_accum;
+                                        state.scroll_hysteresis_accum = 0.0;
+                                        flushed
+                                    } else {
+                                        0.0
+                                    }
+                                };
+                                if effective_x.abs() > 0.01 {
+                                    state.scroll_offset = (state.scroll_offset - effective_x).max(0.0);
+                                    state.target_scroll_offset = state.scroll_offset;
+                                    state.anim_time = state.anim_duration;
+                                }
+                            } else {
+                                state.scroll_hysteresis_active = false;
+                                state.scroll_hysteresis_accum = 0.0;
+                                let base_x = if state.anim_time < state.anim_duration { state.target_scroll_offset } else { state.scroll_offset };
+                                state.target_scroll_offset = (base_x - h_delta).max(0.0);
+                                state.anim_start_offset = state.scroll_offset;
+                                state.anim_time = 0.0;
+                                state.anim_duration = 0.15;
                             }
                         }
                     }
@@ -7312,6 +7506,9 @@ impl PlyContext {
                                                         state.scroll_offset = new_scroll.clamp(0.0, geo.max_scroll);
                                                     }
                                                 }
+                                                state.target_scroll_offset = state.scroll_offset;
+                                                state.target_scroll_offset_y = state.scroll_offset_y;
+                                                state.anim_time = state.anim_duration;
                                                 self.text_input_scrollbar_idle_frames.insert(element_id, 0);
                                                 consumed_scroll = true;
                                             }
@@ -7367,6 +7564,9 @@ impl PlyContext {
                                                         state.scroll_offset += click_x - bbox.width;
                                                     }
                                                 }
+                                                state.target_scroll_offset = state.scroll_offset;
+                                                state.target_scroll_offset_y = state.scroll_offset_y;
+                                                state.anim_time = state.anim_duration;
                                             }
 
                                             if let Some(state_snapshot) = self.text_edit_states.get(&element_id).cloned() {
@@ -7442,21 +7642,27 @@ impl PlyContext {
                                                             ti_cfg.font_size,
                                                             measure_fn.as_ref(),
                                                         );
-                                                        let adjusted_x = (click_x - pad_left).max(0.0) + state_snapshot.scroll_offset;
+                                                        let col = crate::text_input::find_nearest_char_boundary(
+                                                            clamped_x + state_snapshot.scroll_offset,
+                                                            &char_x_positions,
+                                                        );
 
                                                         if let Some(state) = self.text_edit_states.get_mut(&element_id) {
                                                             #[cfg(feature = "text-styling")]
                                                             {
-                                                                let raw_pos = crate::text_input::find_nearest_char_boundary(
-                                                                    adjusted_x,
-                                                                    &char_x_positions,
-                                                                );
-                                                                let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, raw_pos);
+                                                                let visual_pos = crate::text_input::styling::raw_to_cursor(&state.text, col);
                                                                 state.click_to_cursor_styled(visual_pos, true);
                                                             }
                                                             #[cfg(not(feature = "text-styling"))]
                                                             {
-                                                                state.click_to_cursor(adjusted_x, &char_x_positions, true);
+                                                                if state.selection_anchor.is_none() {
+                                                                    state.selection_anchor = Some(state.cursor_pos);
+                                                                }
+                                                                state.cursor_pos = col;
+                                                                if state.selection_anchor == Some(state.cursor_pos) {
+                                                                    state.selection_anchor = None;
+                                                                }
+                                                                state.reset_blink();
                                                             }
                                                         }
                                                     }
@@ -7474,6 +7680,9 @@ impl PlyContext {
                                         let drag_delta_x = drag_origin.x - pointer.x;
                                         state.scroll_offset = (scroll_origin.x + drag_delta_x).max(0.0);
                                     }
+                                    state.target_scroll_offset = state.scroll_offset;
+                                    state.target_scroll_offset_y = state.scroll_offset_y;
+                                    state.anim_time = state.anim_duration;
                                     self.text_input_scrollbar_idle_frames.insert(element_id, 0);
                                     consumed_scroll = true;
                                 }
@@ -7485,6 +7694,18 @@ impl PlyContext {
             }
             _ => {}
         }
+
+        for (&elem_id, state) in &mut self.text_edit_states {
+            if state.anim_time < state.anim_duration {
+                state.anim_time = (state.anim_time + dt).min(state.anim_duration);
+                let progress = (state.anim_time / state.anim_duration).clamp(0.0, 1.0);
+                let ease = crate::math::cubic_bezier_ease(progress);
+                state.scroll_offset = state.anim_start_offset + (state.target_scroll_offset - state.anim_start_offset) * ease;
+                state.scroll_offset_y = state.anim_start_offset_y + (state.target_scroll_offset_y - state.anim_start_offset_y) * ease;
+                self.text_input_scrollbar_idle_frames.insert(elem_id, 0);
+            }
+        }
+
         consumed_scroll
     }
 
@@ -7529,6 +7750,8 @@ impl PlyContext {
 
             if text_empty {
                 if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {
+                    state_mut.target_scroll_offset = 0.0;
+                    state_mut.target_scroll_offset_y = 0.0;
                     state_mut.scroll_offset = 0.0;
                     state_mut.scroll_offset_y = 0.0;
                 }
@@ -7553,9 +7776,8 @@ impl PlyContext {
                     let total_height = visual_lines.len() as f32 * font_height;
                     let max_scroll = (total_height - visible_height).max(0.0);
                     if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {
-                        if state_mut.scroll_offset_y > max_scroll {
-                            state_mut.scroll_offset_y = max_scroll;
-                        }
+                        state_mut.target_scroll_offset_y = state_mut.target_scroll_offset_y.clamp(0.0, max_scroll);
+                        state_mut.scroll_offset_y = state_mut.scroll_offset_y.clamp(0.0, max_scroll);
                     }
                 } else {
                     // Single-line: clamp horizontal scroll
@@ -7568,9 +7790,8 @@ impl PlyContext {
                     let total_width = char_x_positions.last().copied().unwrap_or(0.0);
                     let max_scroll = (total_width - visible_width).max(0.0);
                     if let Some(state_mut) = self.text_edit_states.get_mut(&elem_id) {
-                        if state_mut.scroll_offset > max_scroll {
-                            state_mut.scroll_offset = max_scroll;
-                        }
+                        state_mut.target_scroll_offset = state_mut.target_scroll_offset.clamp(0.0, max_scroll);
+                        state_mut.scroll_offset = state_mut.scroll_offset.clamp(0.0, max_scroll);
                     }
                 }
             }
@@ -7619,9 +7840,10 @@ impl PlyContext {
     }
 
     /// Move focus based on arrow key direction, using `focus_left/right/up/down` overrides.
-    pub fn arrow_focus(&mut self, direction: ArrowDirection) {
+    /// Returns true if focus was successfully moved by an override.
+    pub fn arrow_focus(&mut self, direction: ArrowDirection) -> bool {
         if self.focused_element_id == 0 {
-            return;
+            return false;
         }
         self.focus_from_keyboard = true;
         if let Some(config) = self.accessibility_configs.get(&self.focused_element_id) {
@@ -7633,8 +7855,10 @@ impl PlyContext {
             };
             if let Some(target_id) = target {
                 self.change_focus(target_id);
+                return true;
             }
         }
+        false
     }
 
     /// Handle keyboard activation (Enter/Space) on the focused element.

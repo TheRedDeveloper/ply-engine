@@ -46,6 +46,10 @@ pub struct Ply {
     text_input_repeat_key: u32,
     text_input_repeat_first: f64,
     text_input_repeat_last: f64,
+    /// Key repeat tracking for non-text-input navigation keys
+    nav_repeat_key: u32,
+    nav_repeat_first: f64,
+    nav_repeat_last: f64,
     /// Which element was focused when the current repeat started.
     /// Used to clear stale repeat state on focus change.
     text_input_repeat_focus_id: u32,
@@ -781,10 +785,7 @@ impl<'a, 'ply> Ui<'a, 'ply> {
             }
 
             let (scroll_x, scroll_y) = macroquad::prelude::mouse_wheel();
-            #[cfg(target_arch = "wasm32")]
-            const SCROLL_SPEED: f32 = 1.0;
-            #[cfg(not(target_arch = "wasm32"))]
-            const SCROLL_SPEED: f32 = 20.0;
+            const SCROLL_LINE_HEIGHT: f32 = 48.0;
             // Shift+scroll wheel swaps vertical to horizontal scrolling
             let scroll_shift = {
                 use macroquad::prelude::{is_key_down, KeyCode};
@@ -793,17 +794,19 @@ impl<'a, 'ply> Ui<'a, 'ply> {
             let scroll_delta = if scroll_shift {
                 // Shift held: vertical scroll becomes horizontal
                 Vector2::new(
-                    (scroll_x + scroll_y) * SCROLL_SPEED,
+                    (scroll_x + scroll_y) * SCROLL_LINE_HEIGHT,
                     0.0,
                 )
             } else {
-                Vector2::new(scroll_x * SCROLL_SPEED, scroll_y * SCROLL_SPEED)
+                Vector2::new(scroll_x * SCROLL_LINE_HEIGHT, scroll_y * SCROLL_LINE_HEIGHT)
             };
             let touch_input_active = !macroquad::prelude::touches().is_empty();
+            let frame_time = macroquad::prelude::get_frame_time();
 
             // Text input pointer scrolling (scroll wheel + drag) — consumes scroll if applicable
             let text_consumed_scroll = self.context.update_text_input_pointer_scroll(
                 scroll_delta,
+                frame_time,
                 touch_input_active,
             );
             self.context.clamp_text_input_scroll();
@@ -817,7 +820,7 @@ impl<'a, 'ply> Ui<'a, 'ply> {
             self.context.update_scroll_containers(
                 true,
                 container_scroll,
-                macroquad::prelude::get_frame_time(),
+                frame_time,
                 touch_input_active,
             );
 
@@ -1250,10 +1253,82 @@ impl<'a, 'ply> Ui<'a, 'ply> {
                 }
             } else {
                 // Normal keyboard navigation (non-text-input)
-                if is_key_pressed(KeyCode::Right) { self.context.arrow_focus(engine::ArrowDirection::Right); }
-                if is_key_pressed(KeyCode::Left)  { self.context.arrow_focus(engine::ArrowDirection::Left); }
-                if is_key_pressed(KeyCode::Up)    { self.context.arrow_focus(engine::ArrowDirection::Up); }
-                if is_key_pressed(KeyCode::Down)  { self.context.arrow_focus(engine::ArrowDirection::Down); }
+                let time = self.context.current_time;
+                const NAV_INITIAL_DELAY: f64 = 0.35;
+                const NAV_REPEAT_INTERVAL: f64 = 0.040;
+
+                macro_rules! nav_key_fires {
+                    ($key:expr, $id:expr) => {{
+                        if is_key_pressed($key) {
+                            self.nav_repeat_key = $id;
+                            self.nav_repeat_first = time;
+                            self.nav_repeat_last = time;
+                            true
+                        } else if is_key_down($key) && self.nav_repeat_key == $id {
+                            let since_first = time - self.nav_repeat_first;
+                            let since_last = time - self.nav_repeat_last;
+                            if since_first > NAV_INITIAL_DELAY && since_last > NAV_REPEAT_INTERVAL {
+                                self.nav_repeat_last = time;
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }};
+                }
+
+                if self.nav_repeat_key != 0 {
+                    let still_down = match self.nav_repeat_key {
+                        1 => is_key_down(KeyCode::Right),
+                        2 => is_key_down(KeyCode::Left),
+                        3 => is_key_down(KeyCode::Up),
+                        4 => is_key_down(KeyCode::Down),
+                        5 => is_key_down(KeyCode::PageUp),
+                        6 => is_key_down(KeyCode::PageDown),
+                        7 => is_key_down(KeyCode::Home),
+                        8 => is_key_down(KeyCode::End),
+                        _ => false,
+                    };
+                    if !still_down {
+                        self.nav_repeat_key = 0;
+                    }
+                }
+
+                let mut kb_scroll = Vector2::default();
+                let mut page_scroll_y: Option<f32> = None;
+                let mut scroll_to_end_y: Option<f32> = None;
+
+                if nav_key_fires!(KeyCode::Right, 1) && !self.context.arrow_focus(engine::ArrowDirection::Right) {
+                    kb_scroll.x -= SCROLL_LINE_HEIGHT;
+                }
+                if nav_key_fires!(KeyCode::Left, 2) && !self.context.arrow_focus(engine::ArrowDirection::Left) {
+                    kb_scroll.x += SCROLL_LINE_HEIGHT;
+                }
+                if nav_key_fires!(KeyCode::Up, 3) && !self.context.arrow_focus(engine::ArrowDirection::Up) {
+                    kb_scroll.y += SCROLL_LINE_HEIGHT;
+                }
+                if nav_key_fires!(KeyCode::Down, 4) && !self.context.arrow_focus(engine::ArrowDirection::Down) {
+                    kb_scroll.y -= SCROLL_LINE_HEIGHT;
+                }
+
+                if nav_key_fires!(KeyCode::PageUp, 5) {
+                    page_scroll_y = Some(1.0);
+                }
+                if nav_key_fires!(KeyCode::PageDown, 6) {
+                    page_scroll_y = Some(-1.0);
+                }
+                if nav_key_fires!(KeyCode::Home, 7) {
+                    scroll_to_end_y = Some(0.0);
+                }
+                if nav_key_fires!(KeyCode::End, 8) {
+                    scroll_to_end_y = Some(-1.0);
+                }
+
+                if kb_scroll.x != 0.0 || kb_scroll.y != 0.0 || page_scroll_y.is_some() || scroll_to_end_y.is_some() {
+                    self.context.apply_keyboard_scroll(kb_scroll, page_scroll_y, scroll_to_end_y);
+                }
 
                 let activate_pressed = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space);
                 let activate_released = is_key_released(KeyCode::Enter) || is_key_released(KeyCode::Space);
@@ -1587,6 +1662,9 @@ impl Ply {
             text_input_repeat_key: 0,
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
+            nav_repeat_key: 0,
+            nav_repeat_first: 0.0,
+            nav_repeat_last: 0.0,
             text_input_repeat_focus_id: 0,
             text_input_backspace_consumed: false,
             last_ime_preedit_snapshot: String::new(),
@@ -1618,6 +1696,9 @@ impl Ply {
             text_input_repeat_key: 0,
             text_input_repeat_first: 0.0,
             text_input_repeat_last: 0.0,
+            nav_repeat_key: 0,
+            nav_repeat_first: 0.0,
+            nav_repeat_last: 0.0,
             text_input_repeat_focus_id: 0,
             text_input_backspace_consumed: false,
             last_ime_preedit_snapshot: String::new(),

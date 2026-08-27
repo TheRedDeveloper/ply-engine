@@ -65,6 +65,21 @@ pub struct TextEditState {
     pub composing_start: Option<usize>,
     /// End index of current composing range (mobile IME composition).
     pub composing_end: Option<usize>,
+    /// Target horizontal scroll offset for smooth wheel/keyboard scrolling.
+    pub target_scroll_offset: f32,
+    /// Target vertical scroll offset for smooth wheel/keyboard scrolling.
+    pub target_scroll_offset_y: f32,
+    /// Starting horizontal scroll offset at the beginning of an animation.
+    pub anim_start_offset: f32,
+    /// Starting vertical scroll offset at the beginning of an animation.
+    pub anim_start_offset_y: f32,
+    /// Current animation elapsed time in seconds.
+    pub anim_time: f32,
+    /// Animation duration in seconds.
+    pub anim_duration: f32,
+    pub scroll_hysteresis_accum: f32,
+    pub scroll_hysteresis_accum_y: f32,
+    pub scroll_hysteresis_active: bool,
 }
 
 impl Default for TextEditState {
@@ -84,6 +99,15 @@ impl Default for TextEditState {
             redo_stack: Vec::new(),
             composing_start: None,
             composing_end: None,
+            target_scroll_offset: 0.0,
+            target_scroll_offset_y: 0.0,
+            anim_start_offset: 0.0,
+            anim_start_offset_y: 0.0,
+            anim_time: 0.0,
+            anim_duration: 0.0,
+            scroll_hysteresis_accum: 0.0,
+            scroll_hysteresis_accum_y: 0.0,
+            scroll_hysteresis_active: bool::default(),
         }
     }
 }
@@ -381,6 +405,8 @@ impl TextEditState {
         if self.scroll_offset < 0.0 {
             self.scroll_offset = 0.0;
         }
+        self.target_scroll_offset = self.scroll_offset;
+        self.anim_time = self.anim_duration;
     }
 
     /// Update vertical scroll offset to keep cursor visible in multiline mode.
@@ -398,6 +424,8 @@ impl TextEditState {
         if self.scroll_offset_y < 0.0 {
             self.scroll_offset_y = 0.0;
         }
+        self.target_scroll_offset_y = self.scroll_offset_y;
+        self.anim_time = self.anim_duration;
     }
 
     /// Push the current state onto the undo stack before an edit.

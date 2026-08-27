@@ -137,3 +137,35 @@ pub fn compute_rotated_aabb(
         }
     }
 }
+
+/// Evaluates Chromium's smooth scroll cubic bezier curve `(0.25, 0.1, 0.25, 1.0)`.
+pub fn cubic_bezier_ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if t <= 0.0 {
+        return 0.0;
+    }
+    if t >= 1.0 {
+        return 1.0;
+    }
+
+    let mut u = t;
+    for _ in 0..5 {
+        let one_minus_u = 1.0 - u;
+        let current_x = 3.0 * one_minus_u * one_minus_u * u * 0.25
+            + 3.0 * one_minus_u * u * u * 0.25
+            + u * u * u;
+        let dx_du = 3.0 * one_minus_u * one_minus_u * 0.25
+            + 6.0 * one_minus_u * u * (0.25 - 0.25)
+            + 3.0 * u * u * (1.0 - 0.25);
+        if dx_du.abs() < 1e-5 {
+            break;
+        }
+        u -= (current_x - t) / dx_du;
+        u = u.clamp(0.0, 1.0);
+    }
+
+    let one_minus_u = 1.0 - u;
+    let y1 = 0.1;
+    let y2 = 1.0;
+    3.0 * one_minus_u * one_minus_u * u * y1 + 3.0 * one_minus_u * u * u * y2 + u * u * u
+}
