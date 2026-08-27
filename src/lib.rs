@@ -4824,5 +4824,155 @@ mod tests {
         assert_eq!(outer_scroll_pos, Vector2::new(0.0, 0.0), "outer scroll container should not drag");
         assert_eq!(inner_scroll_pos, Vector2::new(0.0, -30.0), "inner scroll container should drag");
     }
+
+    #[test]
+    fn test_scroll_consumption_and_chaining_without_overflow() {
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        ply.set_measure_text_function(|text, cfg| {
+            let font_size = cfg.font_size as f32;
+            let width = text.chars().count() as f32 * font_size * 0.6;
+            let height = font_size;
+            Dimensions::new(width, height)
+        });
+
+        // Part 1: Single-line text input without overflow allows wheel scroll to reach outer container
+        {
+            let mut ui = ply.begin();
+            ui.element().id("outer_scroll").overflow(|o| o.scroll_y())
+                .width(fixed!(500.0)).height(fixed!(400.0))
+                .children(|ui| {
+                    ui.element().id("input_elem")
+                        .width(fixed!(300.0)).height(fixed!(40.0))
+                        .text_input(|t| t.placeholder("type here..."));
+                    ui.element().id("large_content").width(fixed!(500.0)).height(fixed!(1200.0)).empty();
+                });
+            ui.eval();
+        }
+
+        ply.context.set_pointer_state(Vector2::new(50.0, 20.0), false);
+        let text_consumed = ply.context.update_text_input_pointer_scroll(Vector2::new(0.0, -50.0), 0.016, false);
+        assert!(!text_consumed, "non-overflowing single-line text input must NOT consume vertical scroll");
+
+        let container_scroll = if text_consumed { Vector2::default() } else { Vector2::new(0.0, -50.0) };
+        ply.context.update_scroll_containers(true, container_scroll, 0.2, false);
+
+        let outer_scroll_pos = ply.context.get_scroll_position(Id::new("outer_scroll"));
+        assert_eq!(outer_scroll_pos.y, -50.0, "outer scroll container should receive wheel scroll over non-overflowing text input");
+
+        // Pointer click on text input still captures pointer and focuses it
+        ply.context.set_pointer_state(Vector2::new(50.0, 20.0), true);
+        {
+            let mut ui = ply.begin();
+            ui.element().id("outer_scroll").overflow(|o| o.scroll_y())
+                .width(fixed!(500.0)).height(fixed!(400.0))
+                .children(|ui| {
+                    ui.element().id("input_elem")
+                        .width(fixed!(300.0)).height(fixed!(40.0))
+                        .text_input(|t| t.placeholder("type here..."));
+                    ui.element().id("large_content").width(fixed!(500.0)).height(fixed!(1200.0)).empty();
+                });
+            ui.eval();
+        }
+        assert_eq!(ply.context.focused_element_id, Id::new("input_elem").id, "clicking text input still focuses it");
+
+        // Part 2: Non-overflowing inner scroll container bubbles wheel scroll to outer container
+        let mut ply2 = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        let mut inner_clicked = 0u32;
+        let mut outer_clicked = 0u32;
+
+        {
+            let mut ui = ply2.begin();
+            ui.element().id("outer_page").overflow(|o| o.scroll_y())
+                .width(fixed!(600.0)).height(fixed!(500.0))
+                .children(|ui| {
+                    ui.element().id("inner_box").overflow(|o| o.scroll_y())
+                        .width(fixed!(300.0)).height(fixed!(200.0))
+                        .children(|ui| {
+                            ui.element().id("small_content").width(fixed!(300.0)).height(fixed!(50.0)).empty();
+                        });
+                    ui.element().id("page_content").width(fixed!(600.0)).height(fixed!(1500.0)).empty();
+                });
+            ui.eval();
+        }
+
+        // Clicking inner_box captures pointer, does not fire on_press on outer_page
+        ply2.context.set_pointer_state(Vector2::new(50.0, 50.0), true);
+        {
+            let mut ui = ply2.begin();
+            ui.element().id("outer_page").overflow(|o| o.scroll_y())
+                .width(fixed!(600.0)).height(fixed!(500.0))
+                .on_press(|_, _| { outer_clicked += 1; })
+                .children(|ui| {
+                    ui.element().id("inner_box").overflow(|o| o.scroll_y())
+                        .width(fixed!(300.0)).height(fixed!(200.0))
+                        .on_press(|_, _| { inner_clicked += 1; })
+                        .children(|ui| {
+                            ui.element().id("small_content").width(fixed!(300.0)).height(fixed!(50.0)).empty();
+                        });
+                    ui.element().id("page_content").width(fixed!(600.0)).height(fixed!(1500.0)).empty();
+                });
+            ui.eval();
+        }
+        assert_eq!(inner_clicked, 1, "inner box should receive click");
+        assert_eq!(outer_clicked, 0, "outer page should not receive click when inner box captures pointer");
+
+        // Mouse wheel scroll over inner_box bubbles to outer_page
+        ply2.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
+        ply2.context.update_scroll_containers(true, Vector2::new(0.0, -60.0), 0.2, false);
+        let outer_page_pos = ply2.context.get_scroll_position(Id::new("outer_page"));
+        let inner_box_pos = ply2.context.get_scroll_position(Id::new("inner_box"));
+        assert_eq!(inner_box_pos.y, 0.0, "inner box has no overflow and should stay at 0");
+        assert_eq!(outer_page_pos.y, -60.0, "outer page should receive scroll when inner container has no overflow");
+
+        // Part 3: Overflowing inner scroll container consumes wheel scroll
+        let mut ply3 = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        {
+            let mut ui = ply3.begin();
+            ui.element().id("outer_container").overflow(|o| o.scroll_y())
+                .width(fixed!(600.0)).height(fixed!(500.0))
+                .children(|ui| {
+                    ui.element().id("inner_overflowing").overflow(|o| o.scroll_y())
+                        .width(fixed!(300.0)).height(fixed!(200.0))
+                        .children(|ui| {
+                            ui.element().id("big_content").width(fixed!(300.0)).height(fixed!(800.0)).empty();
+                        });
+                    ui.element().id("outer_content").width(fixed!(600.0)).height(fixed!(1500.0)).empty();
+                });
+            ui.eval();
+        }
+
+        ply3.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
+        ply3.context.update_scroll_containers(true, Vector2::new(0.0, -40.0), 0.2, false);
+        let inner_overflow_pos = ply3.context.get_scroll_position(Id::new("inner_overflowing"));
+        let outer_container_pos = ply3.context.get_scroll_position(Id::new("outer_container"));
+        assert_eq!(inner_overflow_pos.y, -40.0, "overflowing inner container should consume scroll");
+        assert_eq!(outer_container_pos.y, 0.0, "outer container should not scroll when inner container consumes delta");
+
+        // Part 4: Explicit .passthrough() on an overflowing inner container lets scroll pass through to parent
+        let mut ply4 = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        {
+            let mut ui = ply4.begin();
+            ui.element().id("outer_passthrough_test").overflow(|o| o.scroll_y())
+                .width(fixed!(600.0)).height(fixed!(500.0))
+                .children(|ui| {
+                    ui.element().id("inner_passthrough").overflow(|o| o.scroll_y())
+                        .passthrough()
+                        .width(fixed!(300.0)).height(fixed!(200.0))
+                        .children(|ui| {
+                            // Content is 800px in 200px box (has overflow), but container explicitly called .passthrough()
+                            ui.element().id("inner_content").width(fixed!(300.0)).height(fixed!(800.0)).empty();
+                        });
+                    ui.element().id("outer_content").width(fixed!(600.0)).height(fixed!(1500.0)).empty();
+                });
+            ui.eval();
+        }
+
+        ply4.context.set_pointer_state(Vector2::new(50.0, 50.0), false);
+        ply4.context.update_scroll_containers(true, Vector2::new(0.0, -45.0), 0.2, false);
+        let inner_pass_pos = ply4.context.get_scroll_position(Id::new("inner_passthrough"));
+        let outer_pass_pos = ply4.context.get_scroll_position(Id::new("outer_passthrough_test"));
+        assert_eq!(inner_pass_pos.y, 0.0, "inner container with .passthrough() must not consume scroll");
+        assert_eq!(outer_pass_pos.y, -45.0, "outer container should receive scroll when inner container explicitly calls .passthrough()");
+    }
 }
 

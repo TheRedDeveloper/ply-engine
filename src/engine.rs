@@ -518,6 +518,22 @@ struct ScrollContainerDataInternal {
     open_this_frame: bool,
 }
 
+impl ScrollContainerDataInternal {
+    #[inline]
+    pub fn has_overflow_y(&self) -> bool {
+        self.scroll_y_enabled
+            && self.bounding_box.height > 0.0
+            && self.content_size.height > self.bounding_box.height
+    }
+
+    #[inline]
+    pub fn has_overflow_x(&self) -> bool {
+        self.scroll_x_enabled
+            && self.bounding_box.width > 0.0
+            && self.content_size.width > self.bounding_box.width
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct LayoutElementTreeNode {
     layout_element_index: i32,
@@ -5766,6 +5782,76 @@ impl PlyContext {
         (hits, is_self_capturing)
     }
 
+    fn find_scroll_containers_under_pointer(&self, position: Vector2) -> Vec<u32> {
+        let mut containers = Vec::new();
+        for root_index in (0..self.layout_element_tree_roots.len()).rev() {
+            let root = self.layout_element_tree_roots[root_index];
+            let root_elem_idx = root.layout_element_index as usize;
+            self.collect_scroll_containers_in_node(root_elem_idx, root.pointer_offset, position, &mut containers);
+        }
+        containers
+    }
+
+    fn collect_scroll_containers_in_node(
+        &self,
+        elem_idx: usize,
+        pointer_offset: Vector2,
+        position: Vector2,
+        out: &mut Vec<u32>,
+    ) {
+        if elem_idx >= self.layout_elements.len() {
+            return;
+        }
+        let elem_id = self.layout_elements[elem_idx].id;
+        let map_item = self.layout_element_map.get(&elem_id);
+
+        let mut is_hit = false;
+        let mut is_passthrough = false;
+
+        if let Some(item) = map_item {
+            let mut elem_box = item.bounding_box;
+            elem_box.x -= pointer_offset.x;
+            elem_box.y -= pointer_offset.y;
+
+            let clip_id = self.layout_element_clip_element_ids[elem_idx] as u32;
+            let clip_ok = clip_id == 0
+                || self
+                    .layout_element_map
+                    .get(&clip_id)
+                    .map(|ci| point_is_inside_rect(position, ci.bounding_box))
+                    .unwrap_or(false);
+
+            if point_is_inside_rect(position, elem_box) && clip_ok {
+                is_hit = true;
+                if item.pointer_capture_mode == PointerCaptureMode::Passthrough {
+                    is_passthrough = true;
+                }
+            }
+        }
+
+        if !is_hit {
+            return;
+        }
+
+        if !self.element_has_config(elem_idx, ElementConfigType::Text) {
+            let children_start = self.layout_elements[elem_idx].children_start;
+            let children_length = self.layout_elements[elem_idx].children_length as usize;
+
+            for ci in (0..children_length).rev() {
+                if children_start + ci < self.layout_element_children.len() {
+                    let child_idx = self.layout_element_children[children_start + ci] as usize;
+                    self.collect_scroll_containers_in_node(child_idx, pointer_offset, position, out);
+                }
+            }
+        }
+
+        if !is_passthrough && self.scroll_container_datas.iter().any(|scd| scd.element_id == elem_id) {
+            if !out.contains(&elem_id) {
+                out.push(elem_id);
+            }
+        }
+    }
+
     pub fn set_layout_dimensions(&mut self, dimensions: Dimensions) {
         self.layout_dimensions = dimensions;
     }
@@ -6002,8 +6088,13 @@ impl PlyContext {
                         self.change_focus(0);
                     }
 
-                    let scroll_target = self.pointer_over_ids.iter().rev().find_map(|eid| {
-                        self.scroll_container_datas.iter().find(|scd| scd.element_id == eid.id)
+                    let candidate_scroll_ids = self.find_scroll_containers_under_pointer(position);
+                    let scroll_target = candidate_scroll_ids.iter().find_map(|&id| {
+                        self.scroll_container_datas.iter().find(|scd| {
+                            scd.element_id == id
+                                && !scd.no_drag_scroll
+                                && (scd.has_overflow_y() || scd.has_overflow_x())
+                        })
                     });
 
                     if let Some(scd) = scroll_target {
@@ -6216,11 +6307,25 @@ impl PlyContext {
                 && (scroll_delta.y.abs() < 40.0 || (scroll_delta.y.abs() % 48.0 > 2.0 && scroll_delta.y.abs() % 48.0 < 46.0));
             let is_continuous = is_continuous_x || is_continuous_y;
 
-            // Find the deepest scroll container from pointer_over_ids
-            let target_elem_id = self.pointer_over_ids.iter().rev().find_map(|eid| {
-                self.scroll_container_datas.iter().find(|scd| scd.element_id == eid.id).map(|s| s.element_id)
-            });
-            if let Some(eid) = target_elem_id {
+            let candidate_ids = self.find_scroll_containers_under_pointer(pointer);
+
+            let target_y_id = if scroll_delta.y != 0.0 {
+                candidate_ids.iter().find(|&&id| {
+                    self.scroll_container_datas.iter().find(|s| s.element_id == id).map(|s| s.has_overflow_y()).unwrap_or(false)
+                }).copied()
+            } else {
+                None
+            };
+
+            let target_x_id = if scroll_delta.x != 0.0 {
+                candidate_ids.iter().find(|&&id| {
+                    self.scroll_container_datas.iter().find(|s| s.element_id == id).map(|s| s.has_overflow_x()).unwrap_or(false)
+                }).copied()
+            } else {
+                None
+            };
+
+            let mut apply_scroll = |eid: u32, delta_x: f32, delta_y: f32| {
                 if let Some(scd) = self.scroll_container_datas.iter_mut().find(|scd| scd.element_id == eid) {
                     let max_scroll_y = -(scd.content_size.height - scd.bounding_box.height).max(0.0);
                     let max_scroll_x = -(scd.content_size.width - scd.bounding_box.width).max(0.0);
@@ -6228,10 +6333,10 @@ impl PlyContext {
                     if is_continuous {
                         // Apply 4px hysteresis deadzone when starting continuous scroll from rest
                         let effective_delta = if scd.scroll_hysteresis_active {
-                            scroll_delta
+                            Vector2::new(delta_x, delta_y)
                         } else {
-                            scd.scroll_hysteresis_accum.x += scroll_delta.x;
-                            scd.scroll_hysteresis_accum.y += scroll_delta.y;
+                            scd.scroll_hysteresis_accum.x += delta_x;
+                            scd.scroll_hysteresis_accum.y += delta_y;
                             let dist = (scd.scroll_hysteresis_accum.x * scd.scroll_hysteresis_accum.x
                                 + scd.scroll_hysteresis_accum.y * scd.scroll_hysteresis_accum.y).sqrt();
                             if dist >= 4.0 {
@@ -6245,10 +6350,16 @@ impl PlyContext {
                         };
 
                         if effective_delta.x != 0.0 || effective_delta.y != 0.0 {
-                            scd.scroll_position.y = (scd.scroll_position.y + effective_delta.y).clamp(max_scroll_y, 0.0);
-                            scd.scroll_position.x = (scd.scroll_position.x + effective_delta.x).clamp(max_scroll_x, 0.0);
-                            scd.target_scroll_position = scd.scroll_position;
-                            scd.anim_start_position = scd.scroll_position;
+                            if scd.has_overflow_y() && effective_delta.y != 0.0 {
+                                scd.scroll_position.y = (scd.scroll_position.y + effective_delta.y).clamp(max_scroll_y, 0.0);
+                                scd.target_scroll_position.y = scd.scroll_position.y;
+                                scd.anim_start_position.y = scd.scroll_position.y;
+                            }
+                            if scd.has_overflow_x() && effective_delta.x != 0.0 {
+                                scd.scroll_position.x = (scd.scroll_position.x + effective_delta.x).clamp(max_scroll_x, 0.0);
+                                scd.target_scroll_position.x = scd.scroll_position.x;
+                                scd.anim_start_position.x = scd.scroll_position.x;
+                            }
                             scd.anim_time = scd.anim_duration;
                             scd.scrollbar_activity_this_frame = true;
                             scd.scrollbar_idle_frames = 0;
@@ -6260,15 +6371,34 @@ impl PlyContext {
 
                         let base_y = if scd.anim_time < scd.anim_duration { scd.target_scroll_position.y } else { scd.scroll_position.y };
                         let base_x = if scd.anim_time < scd.anim_duration { scd.target_scroll_position.x } else { scd.scroll_position.x };
-                        scd.target_scroll_position.y = (base_y + scroll_delta.y).clamp(max_scroll_y, 0.0);
-                        scd.target_scroll_position.x = (base_x + scroll_delta.x).clamp(max_scroll_x, 0.0);
-                        scd.anim_start_position = scd.scroll_position;
+
+                        if scd.has_overflow_y() && delta_y != 0.0 {
+                            scd.target_scroll_position.y = (base_y + delta_y).clamp(max_scroll_y, 0.0);
+                            scd.anim_start_position.y = scd.scroll_position.y;
+                        }
+                        if scd.has_overflow_x() && delta_x != 0.0 {
+                            scd.target_scroll_position.x = (base_x + delta_x).clamp(max_scroll_x, 0.0);
+                            scd.anim_start_position.x = scd.scroll_position.x;
+                        }
                         scd.anim_time = 0.0;
                         scd.anim_duration = 0.15;
                         scd.scrollbar_activity_this_frame = true;
                         scd.scrollbar_idle_frames = 0;
                     }
                     scd.scroll_momentum = Vector2::default();
+                }
+            };
+
+            if target_y_id == target_x_id {
+                if let Some(eid) = target_y_id {
+                    apply_scroll(eid, scroll_delta.x, scroll_delta.y);
+                }
+            } else {
+                if let Some(y_id) = target_y_id {
+                    apply_scroll(y_id, 0.0, scroll_delta.y);
+                }
+                if let Some(x_id) = target_x_id {
+                    apply_scroll(x_id, scroll_delta.x, 0.0);
                 }
             }
         }
@@ -7315,6 +7445,82 @@ impl PlyContext {
         }
     }
 
+    pub(crate) fn text_input_has_overflow_x(&mut self, elem_id: u32) -> bool {
+        let Some(idx) = self.text_input_element_ids.iter().position(|&id| id == elem_id) else {
+            return false;
+        };
+        let Some(config) = self.text_input_configs.get(idx).cloned() else {
+            return false;
+        };
+        let Some(state) = self.text_edit_states.get(&elem_id).cloned() else {
+            return false;
+        };
+        let (pad_left, _pad_top, pad_right, _pad_bottom) = if let Some(item) = self.layout_element_map.get(&elem_id) {
+            if item.layout_element_index >= 0 && (item.layout_element_index as usize) < self.layout_elements.len() {
+                let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                let pad = self.layout_configs[layout_idx].padding;
+                (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            }
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+
+        let (raw_w, _) = self
+            .layout_element_map
+            .get(&elem_id)
+            .map(|item| (item.bounding_box.width, item.bounding_box.height))
+            .unwrap_or((0.0, 0.0));
+        let visible_width = (raw_w - pad_left - pad_right).max(0.0);
+        if visible_width <= 0.0 {
+            return false;
+        }
+
+        let (content_width, _) = self.text_input_content_size(&state, &config, visible_width);
+        content_width > visible_width
+    }
+
+    pub(crate) fn text_input_has_overflow_y(&mut self, elem_id: u32) -> bool {
+        let Some(idx) = self.text_input_element_ids.iter().position(|&id| id == elem_id) else {
+            return false;
+        };
+        let Some(config) = self.text_input_configs.get(idx).cloned() else {
+            return false;
+        };
+        if !config.is_multiline {
+            return false;
+        }
+        let Some(state) = self.text_edit_states.get(&elem_id).cloned() else {
+            return false;
+        };
+        let (pad_left, pad_top, pad_right, pad_bottom) = if let Some(item) = self.layout_element_map.get(&elem_id) {
+            if item.layout_element_index >= 0 && (item.layout_element_index as usize) < self.layout_elements.len() {
+                let layout_idx = self.layout_elements[item.layout_element_index as usize].layout_config_index;
+                let pad = self.layout_configs[layout_idx].padding;
+                (pad.left as f32, pad.top as f32, pad.right as f32, pad.bottom as f32)
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            }
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+
+        let (raw_w, raw_h) = self
+            .layout_element_map
+            .get(&elem_id)
+            .map(|item| (item.bounding_box.width, item.bounding_box.height))
+            .unwrap_or((0.0, 0.0));
+        let visible_width = (raw_w - pad_left - pad_right).max(0.0);
+        let visible_height = (raw_h - pad_top - pad_bottom).max(0.0);
+        if visible_height <= 0.0 {
+            return false;
+        }
+
+        let (_, content_height) = self.text_input_content_size(&state, &config, visible_width);
+        content_height > visible_height
+    }
+
     /// Handle pointer-based scrolling for text inputs: scroll wheel and drag-to-scroll.
     /// Mobile-first: dragging scrolls the content rather than selecting text.
     /// `scroll_delta` contains (x, y) scroll wheel deltas. For single-line, both axes
@@ -7350,6 +7556,9 @@ impl PlyContext {
                 let is_multiline = self.text_input_configs.get(idx)
                     .map(|cfg| cfg.is_multiline)
                     .unwrap_or(false);
+                let has_overflow_y = self.text_input_has_overflow_y(elem_id);
+                let has_overflow_x = self.text_input_has_overflow_x(elem_id);
+
                 if let Some(state) = self.text_edit_states.get_mut(&elem_id) {
                     let is_continuous_x = scroll_delta.x != 0.0
                         && (scroll_delta.x.abs() < 40.0 || (scroll_delta.x.abs() % 48.0 > 2.0 && scroll_delta.x.abs() % 48.0 < 46.0));
@@ -7358,7 +7567,7 @@ impl PlyContext {
                     let is_continuous = is_continuous_x || is_continuous_y;
 
                     if is_multiline {
-                        if scroll_delta.y.abs() > 0.01 {
+                        if scroll_delta.y.abs() > 0.01 && has_overflow_y {
                             if is_continuous {
                                 let effective_y = if state.scroll_hysteresis_active {
                                     scroll_delta.y
@@ -7387,19 +7596,15 @@ impl PlyContext {
                                 state.anim_time = 0.0;
                                 state.anim_duration = 0.15;
                             }
+                            consumed_scroll = true;
+                            self.text_input_scrollbar_idle_frames.insert(elem_id, 0);
                         }
-                    } else {
-                        let h_delta = if scroll_delta.x.abs() > scroll_delta.y.abs() {
-                            scroll_delta.x
-                        } else {
-                            scroll_delta.y
-                        };
-                        if h_delta.abs() > 0.01 {
+                        if scroll_delta.x.abs() > 0.01 && has_overflow_x {
                             if is_continuous {
                                 let effective_x = if state.scroll_hysteresis_active {
-                                    h_delta
+                                    scroll_delta.x
                                 } else {
-                                    state.scroll_hysteresis_accum += h_delta;
+                                    state.scroll_hysteresis_accum += scroll_delta.x;
                                     if state.scroll_hysteresis_accum.abs() >= 4.0 {
                                         state.scroll_hysteresis_active = true;
                                         let flushed = state.scroll_hysteresis_accum;
@@ -7418,15 +7623,48 @@ impl PlyContext {
                                 state.scroll_hysteresis_active = false;
                                 state.scroll_hysteresis_accum = 0.0;
                                 let base_x = if state.anim_time < state.anim_duration { state.target_scroll_offset } else { state.scroll_offset };
-                                state.target_scroll_offset = (base_x - h_delta).max(0.0);
+                                state.target_scroll_offset = (base_x - scroll_delta.x).max(0.0);
                                 state.anim_start_offset = state.scroll_offset;
                                 state.anim_time = 0.0;
                                 state.anim_duration = 0.15;
                             }
+                            consumed_scroll = true;
+                            self.text_input_scrollbar_idle_frames.insert(elem_id, 0);
+                        }
+                    } else {
+                        if scroll_delta.x.abs() > 0.01 && has_overflow_x {
+                            if is_continuous {
+                                let effective_x = if state.scroll_hysteresis_active {
+                                    scroll_delta.x
+                                } else {
+                                    state.scroll_hysteresis_accum += scroll_delta.x;
+                                    if state.scroll_hysteresis_accum.abs() >= 4.0 {
+                                        state.scroll_hysteresis_active = true;
+                                        let flushed = state.scroll_hysteresis_accum;
+                                        state.scroll_hysteresis_accum = 0.0;
+                                        flushed
+                                    } else {
+                                        0.0
+                                    }
+                                };
+                                if effective_x.abs() > 0.01 {
+                                    state.scroll_offset = (state.scroll_offset - effective_x).max(0.0);
+                                    state.target_scroll_offset = state.scroll_offset;
+                                    state.anim_time = state.anim_duration;
+                                }
+                            } else {
+                                state.scroll_hysteresis_active = false;
+                                state.scroll_hysteresis_accum = 0.0;
+                                let base_x = if state.anim_time < state.anim_duration { state.target_scroll_offset } else { state.scroll_offset };
+                                state.target_scroll_offset = (base_x - scroll_delta.x).max(0.0);
+                                state.anim_start_offset = state.scroll_offset;
+                                state.anim_time = 0.0;
+                                state.anim_duration = 0.15;
+                            }
+                            consumed_scroll = true;
+                            self.text_input_scrollbar_idle_frames.insert(elem_id, 0);
                         }
                     }
-                    consumed_scroll = true;
-                    self.text_input_scrollbar_idle_frames.insert(elem_id, 0);
                 }
             }
         }
