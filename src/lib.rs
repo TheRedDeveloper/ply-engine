@@ -4974,5 +4974,134 @@ mod tests {
         assert_eq!(inner_pass_pos.y, 0.0, "inner container with .passthrough() must not consume scroll");
         assert_eq!(outer_pass_pos.y, -45.0, "outer container should receive scroll when inner container explicitly calls .passthrough()");
     }
+
+    #[test]
+    fn test_text_input_ancestor_scroll_cursor_visibility() {
+        let mut ply = Ply::new_headless(Dimensions::new(800.0, 600.0));
+        ply.set_measure_text_function(|text, cfg| {
+            let font_size = cfg.font_size as f32;
+            let width = text.chars().count() as f32 * font_size * 0.6;
+            let height = font_size;
+            Dimensions::new(width, height)
+        });
+
+        let render_ui = |ply: &mut Ply| {
+            let mut ui = ply.begin();
+            ui.element().id("outer_scroll").overflow(|o| o.scroll_y())
+                .layout(|l| l.direction(crate::layout::LayoutDirection::TopToBottom))
+                .width(fixed!(500.0)).height(fixed!(300.0))
+                .children(|ui| {
+                    ui.element().id("inner_scroll").overflow(|o| o.scroll_y())
+                        .layout(|l| l.direction(crate::layout::LayoutDirection::TopToBottom))
+                        .width(fixed!(400.0)).height(fixed!(200.0))
+                        .children(|ui| {
+                            // Top spacer inside inner container
+                            ui.element().id("top_spacer").width(fixed!(400.0)).height(fixed!(300.0)).empty();
+                            // Text input located at y=300 inside inner container
+                            ui.element().id("target_input")
+                                .width(fixed!(300.0)).height(fixed!(40.0))
+                                .text_input(|t| t.font_size(16).placeholder("Type..."));
+                            // Bottom spacer inside inner container
+                            ui.element().id("bottom_spacer").width(fixed!(400.0)).height(fixed!(200.0)).empty();
+                        });
+                    // Extra content in outer container
+                    ui.element().id("outer_extra").width(fixed!(500.0)).height(fixed!(600.0)).empty();
+                });
+            ui.eval();
+        };
+
+        // Frame 1: Build initial layout (registers text input and scroll containers)
+        render_ui(&mut ply);
+
+        let initial_inner = ply.context.get_scroll_position(Id::new("inner_scroll"));
+        let initial_outer = ply.context.get_scroll_position(Id::new("outer_scroll"));
+        assert_eq!(initial_inner.y, 0.0);
+        assert_eq!(initial_outer.y, 0.0);
+
+        // Focus the text input and type a character (triggers smooth scroll)
+        ply.set_focus(Id::new("target_input"));
+        ply.context.process_text_input_char('H');
+        ply.context.update_text_input_scroll();
+
+        // Advance smooth scroll animation to completion (0.2s > 0.15s anim duration)
+        ply.context.update_scroll_containers(true, Vector2::default(), 0.2, false);
+
+        // Frame 2: Re-evaluate layout with completed scroll positions
+        render_ui(&mut ply);
+
+        let final_inner_pos = ply.context.get_scroll_position(Id::new("inner_scroll"));
+
+        // Verify that after scroll animation, inner container scrolled as needed
+        assert!(final_inner_pos.y < 0.0, "inner container must have scrolled to bring text input into view");
+
+        // Verify that the cursor rectangle is within the inner container and outer container viewports
+        let input_bbox = ply.bounding_box(Id::new("target_input")).expect("target_input bbox");
+        let inner_bbox = ply.bounding_box(Id::new("inner_scroll")).expect("inner_scroll bbox");
+        let outer_bbox = ply.bounding_box(Id::new("outer_scroll")).expect("outer_scroll bbox");
+
+        let font_height = 16.0;
+        let cursor_top = input_bbox.y + (input_bbox.height - font_height) / 2.0;
+        let cursor_bottom = cursor_top + font_height;
+
+        assert!(cursor_top >= inner_bbox.y, "cursor top should be within inner container viewport");
+        assert!(cursor_bottom <= inner_bbox.y + inner_bbox.height + 0.5, "cursor bottom should be within inner container viewport");
+        assert!(cursor_top >= outer_bbox.y, "cursor top should be within outer container viewport");
+        assert!(cursor_bottom <= outer_bbox.y + outer_bbox.height + 0.5, "cursor bottom should be within outer container viewport");
+
+        // Part 2: Verify typing again while cursor is already visible does NOT overscroll or drift
+        let pos_before_typing = ply.context.get_scroll_position(Id::new("inner_scroll"));
+        ply.context.process_text_input_char('e');
+        ply.context.update_text_input_scroll();
+        let pos_after_typing_target = ply.scroll_container_data(Id::new("inner_scroll")).unwrap().scroll_position;
+        assert_eq!(pos_before_typing.y, pos_after_typing_target.y, "typing when cursor is visible must not overscroll or drift");
+
+        // Part 3: Verify screen resize (e.g. keyboard opening on Android shrinking container height)
+        // automatically scrolls the container to keep cursor visible immediately on render without typing
+        ply.set_layout_dimensions(Dimensions::new(800.0, 150.0));
+        let render_resized_ui = |ply: &mut Ply| {
+            let mut ui = ply.begin();
+            // Outer scroll now fits to smaller screen height
+            ui.element().id("outer_scroll").overflow(|o| o.scroll_y())
+                .layout(|l| l.direction(crate::layout::LayoutDirection::TopToBottom))
+                .width(fixed!(500.0)).height(fixed!(150.0))
+                .children(|ui| {
+                    ui.element().id("inner_scroll").overflow(|o| o.scroll_y())
+                        .layout(|l| l.direction(crate::layout::LayoutDirection::TopToBottom))
+                        .width(fixed!(400.0)).height(fixed!(120.0))
+                        .children(|ui| {
+                            ui.element().id("top_spacer").width(fixed!(400.0)).height(fixed!(300.0)).empty();
+                            ui.element().id("target_input")
+                                .width(fixed!(300.0)).height(fixed!(40.0))
+                                .text_input(|t| t.font_size(16).placeholder("Type..."));
+                            ui.element().id("bottom_spacer").width(fixed!(400.0)).height(fixed!(200.0)).empty();
+                        });
+                    ui.element().id("outer_extra").width(fixed!(500.0)).height(fixed!(600.0)).empty();
+                });
+            ui.eval();
+        };
+
+        // Render resized layout — end_layout immediately detects cursor is outside the new 120px viewport
+        render_resized_ui(&mut ply);
+
+        // Advance animation to completion
+        ply.context.update_scroll_containers(true, Vector2::default(), 0.2, false);
+        render_resized_ui(&mut ply);
+
+        let resized_input_bbox = ply.bounding_box(Id::new("target_input")).expect("resized target_input bbox");
+        let resized_inner_bbox = ply.bounding_box(Id::new("inner_scroll")).expect("resized inner_scroll bbox");
+        let resized_cursor_top = resized_input_bbox.y + (resized_input_bbox.height - font_height) / 2.0;
+        let resized_cursor_bottom = resized_cursor_top + font_height;
+
+        assert!(resized_cursor_top >= resized_inner_bbox.y, "cursor top must be visible in resized viewport");
+        assert!(resized_cursor_bottom <= resized_inner_bbox.y + resized_inner_bbox.height + 0.5, "cursor bottom must be visible in resized viewport");
+
+        // Part 4: Verify user can scroll away freely without being forced back to cursor
+        ply.context.update_scroll_containers(false, Vector2::new(0.0, 100.0), 0.016, false);
+        let scrolled_away_pos = ply.context.get_scroll_position(Id::new("inner_scroll"));
+        // Render a normal frame with no resize and no typing
+        render_resized_ui(&mut ply);
+        let pos_after_render = ply.context.get_scroll_position(Id::new("inner_scroll"));
+        assert_eq!(scrolled_away_pos.y, pos_after_render.y, "scrolling away when not typing or resizing must not be re-ensured");
+    }
 }
 

@@ -793,7 +793,7 @@ pub struct PlyContext {
     // The key of the default font (set by Ply::new, used in debug view)
     pub(crate) default_font_key: &'static str,
 
-    // Debug view: heap-allocated strings that survive the frame
+    screen_resized_ensure_cursor: bool,
 }
 
 fn hash_data_scalar(data: &[u8]) -> u64 {
@@ -1128,6 +1128,7 @@ impl PlyContext {
             dynamic_string_data: Vec::new(),
             font_height_cache: FxHashMap::default(),
             default_font_key: "",
+            screen_resized_ensure_cursor: false,
         };
         ctx
     }
@@ -2384,6 +2385,10 @@ impl PlyContext {
         }
 
         self.calculate_final_layout();
+        if self.screen_resized_ensure_cursor {
+            self.screen_resized_ensure_cursor = false;
+            self.ensure_cursor_visible_in_scroll_containers();
+        }
         &self.render_commands
     }
 
@@ -4666,16 +4671,18 @@ impl PlyContext {
                                             let cursor_x_pos = cursor_positions.get(cursor_col).copied().unwrap_or(0.0);
                                             let cursor_y = current_bbox.y + pad_top + cursor_line as f32 * line_step - scroll_offset_y;
                                             let cursor_x = current_bbox.x + pad_left - scroll_offset_x + cursor_x_pos;
-                                            let dpi_scale =
-                                                macroquad::miniquad::window::dpi_scale();
-                                            let ime_x = (cursor_x * dpi_scale).round() as i32;
-                                            let ime_y = ((cursor_y + natural_font_height)
-                                                * dpi_scale)
-                                                .round()
-                                                as i32;
-                                            macroquad::miniquad::window::set_ime_position(
-                                                ime_x, ime_y,
-                                            );
+                                            if !self.headless {
+                                                let dpi_scale =
+                                                    macroquad::miniquad::window::dpi_scale();
+                                                let ime_x = (cursor_x * dpi_scale).round() as i32;
+                                                let ime_y = ((cursor_y + natural_font_height)
+                                                    * dpi_scale)
+                                                    .round()
+                                                    as i32;
+                                                macroquad::miniquad::window::set_ime_position(
+                                                    ime_x, ime_y,
+                                                );
+                                            }
 
                                             if state.cursor_visible() {
                                                 self.add_render_command(InternalRenderCommand {
@@ -4860,15 +4867,17 @@ impl PlyContext {
                                                 .copied()
                                                 .unwrap_or(0.0);
                                             let cursor_x = text_x + cursor_x_pos;
-                                            let dpi_scale =
-                                                macroquad::miniquad::window::dpi_scale();
-                                            let ime_x = (cursor_x * dpi_scale).round() as i32;
-                                            let ime_y = ((text_y + font_height) * dpi_scale)
-                                                .round()
-                                                as i32;
-                                            macroquad::miniquad::window::set_ime_position(
-                                                ime_x, ime_y,
-                                            );
+                                            if !self.headless {
+                                                let dpi_scale =
+                                                    macroquad::miniquad::window::dpi_scale();
+                                                let ime_x = (cursor_x * dpi_scale).round() as i32;
+                                                let ime_y = ((text_y + font_height) * dpi_scale)
+                                                    .round()
+                                                    as i32;
+                                                macroquad::miniquad::window::set_ime_position(
+                                                    ime_x, ime_y,
+                                                );
+                                            }
 
                                             if state.cursor_visible() {
                                                 self.add_render_command(InternalRenderCommand {
@@ -5852,8 +5861,391 @@ impl PlyContext {
         }
     }
 
+    fn ensure_cursor_visible_in_scroll_containers(&mut self) {
+        let focused = self.focused_element_id;
+        if focused == 0 || !self.is_text_input_focused() {
+            return;
+        }
+
+        let Some(cursor_rect) = self.get_text_input_cursor_rect(focused) else {
+            return;
+        };
+
+        let Some(target_item) = self.layout_element_map.get(&focused) else {
+            return;
+        };
+        let target_elem_idx = target_item.layout_element_index as usize;
+
+        let mut cumulative_delta = Vector2::default();
+
+        for root_idx in 0..self.layout_element_tree_roots.len() {
+            let root = self.layout_element_tree_roots[root_idx];
+            let root_elem_idx = root.layout_element_index as usize;
+            if self.adjust_ancestor_scroll_for_cursor(
+                root_elem_idx,
+                target_elem_idx,
+                cursor_rect,
+                &mut cumulative_delta,
+            ) {
+                if root.parent_id != 0 {
+                    if let Some(parent_item) = self.layout_element_map.get(&root.parent_id) {
+                        let parent_elem_idx = parent_item.layout_element_index as usize;
+                        for outer_idx in 0..self.layout_element_tree_roots.len() {
+                            let outer_root_idx =
+                                self.layout_element_tree_roots[outer_idx].layout_element_index as usize;
+                            if self.adjust_ancestor_scroll_for_cursor(
+                                outer_root_idx,
+                                parent_elem_idx,
+                                cursor_rect,
+                                &mut cumulative_delta,
+                            ) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    fn adjust_ancestor_scroll_for_cursor(
+        &mut self,
+        elem_idx: usize,
+        target_elem_idx: usize,
+        cursor_rect: BoundingBox,
+        cumulative_target_shift: &mut Vector2,
+    ) -> bool {
+        if elem_idx >= self.layout_elements.len() {
+            return false;
+        }
+
+        if elem_idx == target_elem_idx {
+            return true;
+        }
+
+        if !self.element_has_config(elem_idx, ElementConfigType::Text) {
+            let children_start = self.layout_elements[elem_idx].children_start;
+            let children_length = self.layout_elements[elem_idx].children_length as usize;
+
+            for ci in 0..children_length {
+                if children_start + ci < self.layout_element_children.len() {
+                    let child_idx = self.layout_element_children[children_start + ci] as usize;
+                    if self.adjust_ancestor_scroll_for_cursor(
+                        child_idx,
+                        target_elem_idx,
+                        cursor_rect,
+                        cumulative_target_shift,
+                    ) {
+                        let elem_id = self.layout_elements[elem_idx].id;
+                        if let Some(scd_idx) = self
+                            .scroll_container_datas
+                            .iter()
+                            .position(|scd| scd.element_id == elem_id)
+                        {
+                            let scd = &self.scroll_container_datas[scd_idx];
+                            if scd.scroll_x_enabled || scd.scroll_y_enabled {
+                                let viewport = scd.bounding_box;
+                                if viewport.width > 0.0 && viewport.height > 0.0 {
+                                    let this_target_shift_x =
+                                        scd.target_scroll_position.x - scd.scroll_position.x;
+                                    let this_target_shift_y =
+                                        scd.target_scroll_position.y - scd.scroll_position.y;
+
+                                    let proj_x = cursor_rect.x
+                                        + cumulative_target_shift.x
+                                        + this_target_shift_x;
+                                    let proj_y = cursor_rect.y
+                                        + cumulative_target_shift.y
+                                        + this_target_shift_y;
+                                    let proj_right = proj_x + cursor_rect.width;
+                                    let proj_bottom = proj_y + cursor_rect.height;
+
+                                    let mut delta_x = 0.0;
+                                    let mut delta_y = 0.0;
+
+                                    if scd.has_overflow_y() {
+                                        let vp_bottom = viewport.y + viewport.height;
+                                        let vp_top = viewport.y;
+                                        if proj_bottom > vp_bottom {
+                                            delta_y = vp_bottom - proj_bottom;
+                                        } else if proj_y < vp_top {
+                                            delta_y = vp_top - proj_y;
+                                        }
+                                    }
+
+                                    if scd.has_overflow_x() {
+                                        let vp_right = viewport.x + viewport.width;
+                                        let vp_left = viewport.x;
+                                        if proj_right > vp_right {
+                                            delta_x = vp_right - proj_right;
+                                        } else if proj_x < vp_left {
+                                            delta_x = vp_left - proj_x;
+                                        }
+                                    }
+
+                                    if delta_x.abs() > 0.01 || delta_y.abs() > 0.01 {
+                                        let scd_mut = &mut self.scroll_container_datas[scd_idx];
+                                        let max_scroll_y = -(scd_mut.content_size.height
+                                            - scd_mut.bounding_box.height)
+                                            .max(0.0);
+                                        let max_scroll_x = -(scd_mut.content_size.width
+                                            - scd_mut.bounding_box.width)
+                                            .max(0.0);
+
+                                        let old_target = scd_mut.target_scroll_position;
+                                        let new_target_x = if scd_mut.has_overflow_x() {
+                                            (old_target.x + delta_x).clamp(max_scroll_x, 0.0)
+                                        } else {
+                                            old_target.x
+                                        };
+                                        let new_target_y = if scd_mut.has_overflow_y() {
+                                            (old_target.y + delta_y).clamp(max_scroll_y, 0.0)
+                                        } else {
+                                            old_target.y
+                                        };
+
+                                        let actual_delta_x = new_target_x - old_target.x;
+                                        let actual_delta_y = new_target_y - old_target.y;
+
+                                        if actual_delta_x.abs() > 0.01 || actual_delta_y.abs() > 0.01 {
+                                            scd_mut.target_scroll_position =
+                                                Vector2::new(new_target_x, new_target_y);
+                                            scd_mut.anim_start_position = scd_mut.scroll_position;
+                                            scd_mut.anim_time = 0.0;
+                                            scd_mut.anim_duration = 0.15;
+                                            scd_mut.scrollbar_activity_this_frame = true;
+                                            scd_mut.scrollbar_idle_frames = 0;
+                                            scd_mut.scroll_momentum = Vector2::default();
+
+                                            cumulative_target_shift.x += actual_delta_x;
+                                            cumulative_target_shift.y += actual_delta_y;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn get_text_input_cursor_rect(&mut self, elem_id: u32) -> Option<BoundingBox> {
+        let item = self.layout_element_map.get(&elem_id)?;
+        let current_bbox = item.bounding_box;
+        let (pad_left, pad_top, pad_right, pad_bottom) = if item.layout_element_index >= 0
+            && (item.layout_element_index as usize) < self.layout_elements.len()
+        {
+            let layout_idx =
+                self.layout_elements[item.layout_element_index as usize].layout_config_index;
+            let pad = self.layout_configs[layout_idx].padding;
+            (
+                pad.left as f32,
+                pad.top as f32,
+                pad.right as f32,
+                pad.bottom as f32,
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+
+        let state = self.text_edit_states.get(&elem_id).cloned()?;
+        let config_idx = self
+            .text_input_element_ids
+            .iter()
+            .position(|&id| id == elem_id)?;
+        let cfg = self.text_input_configs.get(config_idx).cloned()?;
+        let measure_fn = self.measure_text_fn.as_ref()?;
+
+        let is_focused = self.focused_element_id == elem_id;
+        let has_preedit = is_focused && !self.text_input_preedit.is_empty();
+        let is_password = cfg.is_password && !cfg.is_multiline;
+        let placeholder_text = if has_preedit { "" } else { &cfg.placeholder };
+        let mut render_text =
+            crate::text_input::display_text(&state.text, placeholder_text, is_password);
+        let preedit_display = if has_preedit {
+            crate::text_input::display_text(&self.text_input_preedit, "", is_password)
+        } else {
+            String::new()
+        };
+        let preedit_visible_len = preedit_display.chars().count();
+
+        let mut preedit_start_raw: Option<usize> = None;
+        let mut preedit_end_raw: Option<usize> = None;
+
+        if state.composing_start.is_some() && state.composing_end.is_some() {
+            let cs = state.composing_start.unwrap();
+            let ce = state.composing_end.unwrap();
+            #[cfg(feature = "text-styling")]
+            {
+                let start_cur = crate::text_input::styling::content_to_cursor(
+                    &render_text,
+                    cs,
+                    state.no_styles_movement,
+                );
+                let end_cur = crate::text_input::styling::content_to_cursor(
+                    &render_text,
+                    ce,
+                    state.no_styles_movement,
+                );
+                let raw_start = crate::text_input::styling::cursor_to_raw_for_insertion(
+                    &render_text,
+                    start_cur,
+                );
+                let raw_end = crate::text_input::styling::cursor_to_raw_for_insertion(
+                    &render_text,
+                    end_cur,
+                );
+                preedit_start_raw = Some(raw_start);
+                preedit_end_raw = Some(raw_end);
+            }
+            #[cfg(not(feature = "text-styling"))]
+            {
+                preedit_start_raw = Some(cs);
+                preedit_end_raw = Some(ce);
+            }
+        } else if has_preedit && preedit_visible_len > 0 {
+            #[cfg(feature = "text-styling")]
+            {
+                let preedit_insert = crate::text_input::styling::escape_str(&preedit_display);
+                let insert_pos = crate::text_input::styling::cursor_to_raw_for_insertion(
+                    &render_text,
+                    state.cursor_pos,
+                );
+                let byte_pos =
+                    crate::text_input::char_index_to_byte(&render_text, insert_pos);
+                let mut combined =
+                    String::with_capacity(render_text.len() + preedit_insert.len());
+                combined.push_str(&render_text[..byte_pos]);
+                combined.push_str(&preedit_insert);
+                combined.push_str(&render_text[byte_pos..]);
+                render_text = combined;
+                let preedit_raw_len = preedit_insert.chars().count();
+                preedit_start_raw = Some(insert_pos);
+                preedit_end_raw = Some(insert_pos + preedit_raw_len);
+            }
+            #[cfg(not(feature = "text-styling"))]
+            {
+                let insert_pos = state.cursor_pos;
+                let byte_pos =
+                    crate::text_input::char_index_to_byte(&render_text, insert_pos);
+                let mut combined =
+                    String::with_capacity(render_text.len() + preedit_display.len());
+                combined.push_str(&render_text[..byte_pos]);
+                combined.push_str(&preedit_display);
+                combined.push_str(&render_text[byte_pos..]);
+                render_text = combined;
+                preedit_start_raw = Some(insert_pos);
+                preedit_end_raw = Some(insert_pos + preedit_visible_len);
+            }
+        }
+
+        let preedit_active = preedit_start_raw.is_some();
+        let is_placeholder = state.text.is_empty() && !has_preedit;
+
+        if cfg.is_multiline {
+            let visible_width = (current_bbox.width - pad_left - pad_right).max(0.0);
+            let visual_lines = crate::text_input::wrap_lines(
+                &render_text,
+                visible_width,
+                cfg.font_asset,
+                cfg.font_size,
+                measure_fn.as_ref(),
+            );
+            #[cfg(feature = "text-styling")]
+            let render_cursor_pos = if is_placeholder {
+                0
+            } else if preedit_active {
+                preedit_end_raw.unwrap_or(state.cursor_pos_raw())
+            } else {
+                state.cursor_pos_raw()
+            };
+            #[cfg(not(feature = "text-styling"))]
+            let render_cursor_pos = if is_placeholder {
+                0
+            } else if preedit_active {
+                preedit_end_raw.unwrap_or(state.cursor_pos)
+            } else {
+                state.cursor_pos
+            };
+
+            let (cursor_line, cursor_col) =
+                crate::text_input::cursor_to_visual_pos(&visual_lines, render_cursor_pos);
+            let line_positions: Vec<Vec<f32>> = visual_lines
+                .iter()
+                .map(|vl| {
+                    crate::text_input::compute_char_x_positions(
+                        &vl.text,
+                        cfg.font_asset,
+                        cfg.font_size,
+                        measure_fn.as_ref(),
+                    )
+                })
+                .collect();
+            let natural_font_height = self.font_height(cfg.font_asset, cfg.font_size);
+            let line_step = if cfg.line_height > 0 {
+                cfg.line_height as f32
+            } else {
+                natural_font_height
+            };
+            let cursor_positions =
+                line_positions.get(cursor_line.min(line_positions.len().saturating_sub(1)));
+            let cursor_x_pos = cursor_positions
+                .and_then(|p| p.get(cursor_col).copied())
+                .unwrap_or(0.0);
+            let cursor_y = current_bbox.y + pad_top + cursor_line as f32 * line_step
+                - state.scroll_offset_y;
+            let cursor_x = current_bbox.x + pad_left - state.scroll_offset + cursor_x_pos;
+            Some(BoundingBox::new(cursor_x, cursor_y, 2.0, line_step))
+        } else {
+            let char_x_positions = crate::text_input::compute_char_x_positions(
+                &render_text,
+                cfg.font_asset,
+                cfg.font_size,
+                measure_fn.as_ref(),
+            );
+            let font_height = self.font_height(cfg.font_asset, cfg.font_size);
+            let inner_height = (current_bbox.height - pad_top - pad_bottom).max(font_height);
+            let text_x = current_bbox.x + pad_left - state.scroll_offset;
+            let text_y = current_bbox.y + pad_top + (inner_height - font_height) / 2.0;
+
+            #[cfg(feature = "text-styling")]
+            let render_cursor_pos = if is_placeholder {
+                0
+            } else if preedit_active {
+                preedit_end_raw.unwrap_or(state.cursor_pos_raw())
+            } else {
+                state.cursor_pos_raw()
+            };
+            #[cfg(not(feature = "text-styling"))]
+            let render_cursor_pos = if is_placeholder {
+                0
+            } else if preedit_active {
+                preedit_end_raw.unwrap_or(state.cursor_pos)
+            } else {
+                state.cursor_pos
+            };
+
+            let cursor_x_pos = char_x_positions
+                .get(render_cursor_pos)
+                .copied()
+                .unwrap_or(0.0);
+            let cursor_x = text_x + cursor_x_pos;
+            let cursor_y = text_y;
+            Some(BoundingBox::new(cursor_x, cursor_y, 2.0, font_height))
+        }
+    }
+
     pub fn set_layout_dimensions(&mut self, dimensions: Dimensions) {
+        let changed = self.layout_dimensions != dimensions;
         self.layout_dimensions = dimensions;
+        if changed && self.focused_element_id != 0 && self.is_text_input_focused() {
+            self.screen_resized_ensure_cursor = true;
+        }
     }
 
     fn hit_test_scrollbar_thumb(&mut self, pointer: Vector2) -> Option<ActiveDrag> {
@@ -6647,6 +7039,9 @@ impl PlyContext {
                 while let Some(_) = macroquad::prelude::get_char_pressed() {
                     // do nothing
                 }
+            }
+            if self.text_edit_states.contains_key(&new_id) {
+                self.ensure_cursor_visible_in_scroll_containers();
             }
         }
     }
@@ -7443,6 +7838,7 @@ impl PlyContext {
                 }
             }
         }
+        self.ensure_cursor_visible_in_scroll_containers();
     }
 
     pub(crate) fn text_input_has_overflow_x(&mut self, elem_id: u32) -> bool {
