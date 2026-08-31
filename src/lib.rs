@@ -26,6 +26,10 @@ pub mod built_in_shaders;
 pub mod net;
 #[cfg(feature = "storage")]
 pub mod storage;
+#[cfg(feature = "locales")]
+pub use ply_locales;
+#[cfg(feature = "locales")]
+pub use fluent_bundle;
 pub mod jobs;
 pub mod prelude;
 pub mod pointer;

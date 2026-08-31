@@ -77,3 +77,9 @@ pub use macroquad::miniquad::CursorIcon;
 // Audio — feature-gated
 #[cfg(feature = "audio")]
 pub use macroquad::audio::*;
+
+// Localization — feature-gated
+#[cfg(feature = "locales")]
+pub use ply_locales::ply_locales;
+#[cfg(feature = "locales")]
+pub use fluent_bundle;

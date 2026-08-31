@@ -23,6 +23,7 @@ net = ["dep:ureq", "dep:tokio", "dep:tokio-tungstenite", "dep:rustls", "dep:futu
 net-json = ["net", "dep:serde", "dep:serde_json"]
 audio = ["macroquad/audio"]
 storage = ["dep:rfd", "dep:sapp-jsutils"]
+locales = ["dep:ply-locales", "dep:fluent-bundle"]
 
 png = ["macroquad/png"]
 tga = ["macroquad/tga"]
@@ -42,6 +43,8 @@ rustc-hash = "2"
 # JSON deserialization (optional, behind "net-json" feature)
 serde = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1", optional = true }
+ply-locales = { version = "0.1", optional = true }
+fluent-bundle = { version = "0.16", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 accesskit = { version = "0.24", optional = true }
